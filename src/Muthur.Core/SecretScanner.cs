@@ -78,6 +78,8 @@ public static partial class SecretScanner
                 var group = match.Groups["value"];
                 var value = group.Success ? CleanValue(group.Value) : null;
                 if (value is not null && IsNotACredential(value)) continue;
+                // secretName: sql-connection, PASSWORD_FILE=…, passwordMinLength: the name says the value is a label, a location or a number
+                if (value is not null && NamesSomethingElse().IsMatch(visible[match.Index..group.Index])) continue;
 
                 // "key", "token", "credentials" name plenty of things that are not secrets (S3 object keys, cache keys,
                 // idempotency keys, key file paths, key names). For that vocabulary only an opaque value counts.
@@ -85,10 +87,21 @@ public static partial class SecretScanner
                 if (weakVocabulary && value is not null)
                 {
                     // after an explicit assignment a hex or base64 run IS the value, so only structure (not shape) excuses it
-                    var structured = kind == "opaque-value-near-keyword" ? IsStructured(value) : HasWordStructure(value);
-                    if (structured || value.All(char.IsAsciiLetter)) continue;
+                    var name = visible[match.Index..group.Index];
+                    if (value.All(char.IsAsciiLetter)) continue;
                     if (kind == "opaque-value-near-keyword" && IsReference(WholeToken(visible, group))) continue; // a long URL or path segment is not a secret
-                    if (NamesSomethingElse().IsMatch(visible[match.Index..group.Index])) continue; // KEY_PATH=, key_name =, KEY_SIZE=
+                    if (NamesSomethingElse().IsMatch(name)) continue; // KEY_PATH=, key_name =, KEY_SIZE=
+
+                    var structured = kind == "opaque-value-near-keyword" ? IsStructured(value) : HasWordStructure(value);
+                    if (structured)
+                    {
+                        // A bare "key" names many harmless things (object keys, cache keys, idempotency keys): structure excuses it.
+                        // A credential-grade name (API_KEY, *_TOKEN, X-Api-Key, credentials) does not get that benefit: some services'
+                        // tokens really are UUIDs, and "staging-admin-2026" is a password. Not blocked — but the founder looks.
+                        if (kind != "opaque-value-near-keyword" && CredentialGradeName().IsMatch(name) && value.Any(char.IsAsciiDigit))
+                            findings.Add(new SecretFinding(kind, name + new string('*', 6) + $" ({group.Length} chars)", SecretSeverity.Suspect));
+                        continue;
+                    }
                 }
 
                 var suspectOnly = kind is "opaque-value-near-keyword" or "possible-passphrase";
@@ -163,7 +176,9 @@ public static partial class SecretScanner
     {
         if (FileName().IsMatch(value) || Uuid().IsMatch(value)) return true;
         var segments = value.Split(['-', '_', '.', ':', '/', '#', '\\', '+', '~', '@', '$', '{', '}'], StringSplitOptions.RemoveEmptyEntries);
-        return segments.Length >= 2 && segments.All(s => s.Length <= 4 || s.All(char.IsAsciiLetter) || s.All(char.IsAsciiDigit) || WordWithNumber().IsMatch(s));
+        // every segment must be a word, a number, or a word with a number on it (x64, v3, build01): one opaque segment
+        // ("gsk_aB3dE5…", "prod-Sup3rS3cret9", "aZ3k-Q9mX-2vB7") means the value is a token wearing a prefix or dashes
+        return segments.Length >= 2 && segments.All(s => s.All(char.IsAsciiLetter) || s.All(char.IsAsciiDigit) || WordWithNumber().IsMatch(s));
     }
 
     private static string CleanValue(string raw) => raw.Trim('"', '\'', '`').TrimStart('!', '(').TrimEnd(')', '.', ',', ';', ']', '}');
@@ -202,7 +217,13 @@ public static partial class SecretScanner
                 if (value.Contains('/') && value[..value.IndexOf('/')].All(char.IsAsciiLetterLower)) continue; // task/T-9-x, src/app/main.cs
                 // "api_token:" alone on the line above: whatever stands below it is its value, even if it looks like a hash
                 var namedAbove = i > 0 && DanglingSecretName().IsMatch(lines[i - 1]);
-                if (IsStructured(value) && !(namedAbove && value.Length >= 16)) continue;
+                // some services' API keys and tokens are UUIDs; next to such a word a UUID is worth the founder's look
+                // (a correlation id next to "password error", or an Idempotency-Key example, is not)
+                var before = lines[i][..Math.Max(0, lines[i].IndexOf(value, StringComparison.Ordinal))];
+                var near = (i > 0 ? lines[i - 1] + " " : "") + (before.Length > 45 ? before[^45..] : before);
+                var uuidAsCredential = Uuid().IsMatch(value) && CredentialGradeName().IsMatch(near)
+                    && !NamesSomethingElse().IsMatch(before); // "tenantId: <uuid>" is an id whatever else the line mentions
+                if (IsStructured(value) && !uuidAsCredential && !(namedAbove && value.Length >= 16)) continue;
                 // a digit among the letters, or a symbol in a mixed-case word: "Sup3rS3cret", "Tr0ub4dor&3", "Correct!Horse" — not "-nuget-$"
                 var mixedCase = value.Any(char.IsAsciiLetterUpper) && value.Any(char.IsAsciiLetterLower);
                 if (!value.Any(char.IsLetter) || !(value.Any(char.IsDigit) || (mixedCase && value.Any(ch => "!@#$%^&*+=~?".Contains(ch))))) continue;
@@ -235,6 +256,10 @@ public static partial class SecretScanner
     [GeneratedRegex(@"^[^\s]*[A-Za-z0-9_\-]\.[A-Za-z][A-Za-z0-9]{0,5}$")]
     private static partial Regex FileName();
 
+    // names that are credentials by themselves, unlike a bare "key"
+    [GeneratedRegex(@"token|api[ _\-]?key|access[_\-]?key|private[_\-]?key|secret|credential|(?<![A-Za-z])auth|_pat(?![A-Za-z])|license", RegexOptions.IgnoreCase)]
+    private static partial Regex CredentialGradeName();
+
     [GeneratedRegex(@"^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$")]
     private static partial Regex Uuid();
 
@@ -255,7 +280,7 @@ public static partial class SecretScanner
 
     // things that are long and mixed but are not secrets: hex ids and hashes, UUIDs, versions, numbers with units, times and dates,
     // e-mail addresses, @mentions, issue refs, key=value pairs and flags (their value part is scanned by the other rules)
-    [GeneratedRegex(@"^(?:[0-9a-fA-F]{7,}|0x[0-9a-fA-F]+|[0-9a-fA-F]{8}-[0-9a-fA-F\-]{27}|(?:Ctrl|Alt|Shift|Cmd|Win|Meta|Option|Fn)(?:\+\w+)+|SHA256:[A-Za-z0-9+/=]+|AAAA[A-Za-z0-9+/=]{20,}|[^@\s]+@[A-Za-z0-9.\-]+|v?\d+(?:\.\d+)+[\w.\-]*|\d[\d.,:/\-]*[A-Za-z%]{0,4}|[^@\s]+@[A-Za-z0-9.\-]+\.[A-Za-z]{2,}|@[\w\-]+|#\d+|[A-Za-z]+-\d+|--?[A-Za-z][\w\-]*(?:=.*)?|[A-Za-z_][\w.\-]*[=:].*|[A-Za-z]+\d{0,4}|(?:[A-Za-z]+[./\\_\-])+[A-Za-z0-9]+\d{0,4})$")]
+    [GeneratedRegex(@"^(?:[0-9a-fA-F]{7,}|0x[0-9a-fA-F]+|[0-9a-fA-F]{8}-[0-9a-fA-F\-]{27}|(?:Ctrl|Alt|Shift|Cmd|Win|Meta|Option|Fn)(?:\+\w+)+|SHA256:[A-Za-z0-9+/=]+|AAAA[A-Za-z0-9+/=]{20,}|[^@\s]+@[A-Za-z0-9.\-]+|v?\d+(?:\.\d+)+[\w.\-]*|\d[\d.,:/\-]*[A-Za-z%]{0,4}|[^@\s]+@[A-Za-z0-9.\-]+\.[A-Za-z]{2,}|@[\w\-]+|#\d+|[A-Za-z]+-\d+|--?[A-Za-z][\w\-]*(?:=.*)?|[A-Za-z_][\w.\-]*[=:].*|[A-Za-z]+\d{0,4}|(?:[A-Za-z]+[./\\_\-])+[A-Za-z]+\d{0,4})$")]
     private static partial Regex NotASecretShape();
 
     /// <summary>Zero-width and other format characters are invisible to a reviewer and break patterns; drop them.</summary>

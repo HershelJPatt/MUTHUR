@@ -88,3 +88,44 @@ JWT_KEY=s3cr3t!Jwt#Key$2024
 <add key="StorageKey" value="Sup3rS3cret9"/>
 SUPABASE_ACCESS_TOKEN\nsb~p_0123456789abcdef0123456789abcdef01234567
 api_token:\n9f86d081884c7d659a2feaa0c55ad015a3bf4f1b
+
+# --- round 7 family A: a UUID or word-structured value under a credential-grade name (the named services' tokens really are UUIDs)
+HEROKU_API_KEY=3f2a1b4c-5d6e-4f70-8a9b-0c1d2e3f4a5b
+POSTMARK_SERVER_TOKEN=3f2a1b4c-5d6e-4f70-8a9b-0c1d2e3f4a5b
+CODECOV_TOKEN=3f2a1b4c-5d6e-4f70-8a9b-0c1d2e3f4a5b
+env:\n  SNYK_TOKEN: 3f2a1b4c-5d6e-4f70-8a9b-0c1d2e3f4a5b
+X-Api-Key: 3f2a1b4c-5d6e-4f70-8a9b-0c1d2e3f4a5b
+token: 3f2a1b4c-5d6e-4f70-8a9b-0c1d2e3f4a5b
+{"apiKey":"3f2a1b4c-5d6e-4f70-8a9b-0c1d2e3f4a5b"}
+API_TOKEN=staging-admin-2026
+ADMIN_TOKEN=Winter2026-Rollout
+AUTH_TOKEN=hunter2-hunter2-hunter2
+api_key = Winter2026-Summer2025
+API_KEY=aZ3k-Q9mX-2vB7-nL5p-R8tW
+license key: aZ3k-Q9mX-2vB7-nL5p-R8tW
+- name: HEROKU_API_KEY\n  value: 3f2a1b4c-5d6e-4f70-8a9b-0c1d2e3f4a5b
+The API key for the staging tenant is 3f2a1b4c-5d6e-4f70-8a9b-0c1d2e3f4a5b
+
+# --- round 7 family B: a value with a letters prefix and a separator (modern vendor tokens, "prod-…", "acme_…") near a credential word
+- name: GROQ_API_KEY\n  value: gs~k_aB3dE5fG7hJ9kL1mN3pQ5rS7tU9vW1xY3zA5bC7d
+- name: POSTHOG_PERSONAL_API_KEY\n  value: ph~x_aB3dE5fG7hJ9kL1mN3pQ5rS7tU9vW1xY3zA5bC7d
+- name: DB_PASSWORD\n  value: acme_Sup3rS3cretValue9
+docker login -u deploy -p dc~kr_aB3dE5fG7hJ9kL1mN3pQ5r
+az pipelines variable create --name DEPLOY_TOKEN --value dpl_aB3dE5fG7hJ9kL1mN3pQ5r
+sshpass -p prod_Sup3rS3cretValue9 ssh deploy@host
+The Groq key is gs~k_aB3dE5fG7hJ9kL1mN3pQ5rS7tU9vW1xY3zA5bC7d
+setx RESEND_API_KEY re_aB3dE5fG7hJ9kL1mN3pQ5r
+gh secret set SUPABASE_ACCESS_TOKEN --body sb~p_aB3dE5fG7hJ9kL1mN3pQ5rS7tU9vW1xY3zA5bC7d
+gh secret set NETLIFY_AUTH_TOKEN --body nfp_aB3dE5fG7hJ9kL1mN3pQ5rS7tU9vW1xY3zA5bC7d
+| SONAR_TOKEN | sqp_aB3dE5fG7hJ9kL1mN3pQ5rS7tU9vW1xY3zA5bC7d |
+| API_TOKEN | live_aB3dE5fG7hJ9kL1mN3pQ5r |
+| DB_PWD | db-Sup3rS3cretValue9 |
+| Password | prod-Sup3rS3cretValue9 |
+{"name":"AccessToken","value":"sk~_prod_aB3dE5fG7hJ9kL1mN3pQ5r"}
+- name: GITHUB_TOKEN\n  value: tok-aB3dE5fG7hJ9kL1mN3pQ5r
+- name: API_KEY\n  value: acme_live_aB3dE5fG7hJ9kL1mN3pQ5r
+username,password\nadmin,acme-Sup3rS3cretValue9
+CREATE USER app IDENTIFIED BY 'acme_Sup3rS3cretValue9';
+the token is pat_aB3dE5fG7hJ9kL1mN3pQ5r
+The Render API key is rnd_aB3dE5fG7hJ9kL1mN3pQ5r
+NVIDIA key for the eval box: nvapi-aB3dE5fG7hJ9kL1mN3pQ5rS7tU9vW1xY3zA5bC7d
