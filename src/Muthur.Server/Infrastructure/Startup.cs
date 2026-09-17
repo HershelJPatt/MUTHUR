@@ -51,6 +51,7 @@ public static class Startup
         builder.Services.AddSingleton<LifecycleService>();
         builder.Services.AddSingleton<MessageService>();
         builder.Services.AddSingleton<RequestService>();
+        builder.Services.AddSingleton<HarnessService>();
         builder.Services.AddSingleton<IProcessRunner, ProcessRunner>();
         builder.Services.AddSingleton<IPullRequestOpener, GhPullRequestOpener>();
         builder.Services.AddSingleton<ITaskLander, GitLander>();
@@ -93,6 +94,8 @@ public static class Startup
             }
             instance.InstanceId = id.Value;
         }
+
+        app.Services.GetRequiredService<HarnessService>().EnsureCatalogExists();
 
         instance.StartedAt = clock.GetUtcNow();
         instance.FounderToken = LoadOrCreateFounderToken(options.DataDir);

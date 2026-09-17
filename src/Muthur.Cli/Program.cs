@@ -13,6 +13,7 @@ ProjectCommands.AddTo(root);
 TaskCommands.AddTo(root);
 RoleCommands.AddTo(root);
 MessageCommands.AddTo(root);
+WorkerCommands.AddTo(root);
 KitCommands.AddTo(root);
 
 return await root.Parse(args).InvokeAsync();
