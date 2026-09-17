@@ -20,7 +20,17 @@ public static class SystemCommands
         down.SetAction(async (parse, ct) =>
         {
             var result = await new HubClient(Globals.ReadFounderToken()).PostAsync(Routes.Shutdown, ct);
-            return result.ExitCode == ExitCodes.NotRunning ? ExitCodes.Ok : Output.Emit(parse, result);
+            if (result.ExitCode == ExitCodes.NotRunning) return ExitCodes.Ok;
+            if (!result.IsSuccess) return Output.Emit(parse, result);
+
+            // The server answers before it stops listening; "down" only returns once it is really gone.
+            var probe = new HubClient(null, TimeSpan.FromSeconds(3));
+            for (var attempt = 0; attempt < 40; attempt++)
+            {
+                if ((await probe.GetAsync(Routes.Status, ct)).ExitCode == ExitCodes.NotRunning) return ExitCodes.Ok;
+                await Task.Delay(250, ct);
+            }
+            return Output.Error("stop_timeout", "The server accepted the shutdown but is still answering after 10s.");
         });
         root.Subcommands.Add(down);
     }
