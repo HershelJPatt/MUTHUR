@@ -28,9 +28,16 @@ public static class SystemCommands
             if (!parse.GetValue(any))
             {
                 var ours = ServerProcess.Locate() is { } mine ? Path.GetDirectoryName(Path.GetFullPath(mine)) : null;
-                var theirs = running.IsSuccess
-                    ? System.Text.Json.JsonSerializer.Deserialize(running.Body, MuthurJsonContext.Default.StatusResponse)?.ServerDirectory
-                    : null;
+                string? theirs = null;
+                try
+                {
+                    if (running.IsSuccess)
+                        theirs = System.Text.Json.JsonSerializer.Deserialize(running.Body, MuthurJsonContext.Default.StatusResponse)?.ServerDirectory;
+                }
+                catch (System.Text.Json.JsonException)
+                {
+                    // Something answers on that port, but it does not speak our status format: not ours.
+                }
                 var isOurs = ours is not null && theirs is { Length: > 0 } && string.Equals(Path.GetFullPath(theirs), ours, StringComparison.OrdinalIgnoreCase);
                 if (!isOurs)
                     return Output.Error("not_my_hub",

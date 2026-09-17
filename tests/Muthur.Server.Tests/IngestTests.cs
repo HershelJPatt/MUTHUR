@@ -67,11 +67,40 @@ public sealed class IngestTests : IDisposable
     }
 
     [Fact]
-    public async Task An_unknown_scheme_is_reported_not_thrown()
+    public async Task A_source_the_hub_cannot_poll_is_refused_when_it_is_configured()
     {
-        await _hub.AddProjectAsync(ingest: ["carrier-pigeon:coop-7"]);
-        var result = await PollAsync();
-        Assert.Contains("No ingest adapter", Assert.Single(result.Errors));
+        var response = await _hub.Founder().PostAsJsonAsync(Routes.Projects,
+            new AddProjectRequest("pigeons", _hub.DataDir, IngestSources: ["carrier-pigeon:coop-7"]));
+
+        Assert.Equal(HttpStatusCode.UnprocessableEntity, response.StatusCode);
+        Assert.Equal("unknown_ingest_source", (await response.ReadErrorAsync()).Code);
+    }
+
+    [Fact]
+    public async Task With_several_projects_an_unassigned_item_is_converted_into_the_project_you_name()
+    {
+        await _hub.AddProjectAsync("alpha");
+        await _hub.AddProjectAsync("beta");
+        var agent = await _hub.RegisterAgentAsync("intake");
+        (await agent.PostAsJsonAsync(Routes.Inbound, new AddInboundRequest("email", "m-1", "Which project is this?"))).EnsureSuccessStatusCode();
+
+        var ambiguous = await agent.PostAsJsonAsync(Routes.InboundAction("I-1", "convert"), new ConvertInboundRequest());
+        Assert.Equal("project_required", (await ambiguous.ReadErrorAsync()).Code);
+
+        var converted = await agent.PostAsJsonAsync(Routes.InboundAction("I-1", "convert"), new ConvertInboundRequest(Project: "beta"));
+        var item = (await converted.Content.ReadFromJsonAsync(MuthurJsonContext.Default.InboundDto))!;
+        Assert.Equal("beta", (await agent.GetTaskAsync(item.Task!)).Task.Project);
+    }
+
+    [Fact]
+    public async Task Only_web_links_are_accepted_as_an_items_url()
+    {
+        await _hub.AddProjectAsync();
+        var agent = await _hub.RegisterAgentAsync("intake");
+
+        var hostile = await agent.PostAsJsonAsync(Routes.Inbound, new AddInboundRequest("chat", "m-9", "click me", Url: "javascript:alert(1)"));
+
+        Assert.Equal("invalid_url", (await hostile.ReadErrorAsync()).Code);
     }
 
     [Fact]

@@ -15,11 +15,14 @@ public interface IOutboundChannel
     /// <summary>Channel-specific limits (length, format), checked when drafting so problems surface before review.</summary>
     void Validate(string address, string body);
 
-    /// <summary>Throws <see cref="InvalidOperationException"/> with the reason when delivery fails.</summary>
+    /// <summary>Throws <see cref="ChannelException"/> with a reason that is safe to show to agents when delivery fails.</summary>
     Task SendAsync(string address, string body, CancellationToken ct = default);
 }
 
-public sealed partial class OutboundService(Ledger ledger, IEnumerable<IOutboundChannel> channels, MuthurOptions options)
+/// <summary>A delivery failure whose message contains nothing about the target's address (which is often a credential).</summary>
+public sealed class ChannelException(string safeReason) : Exception(safeReason);
+
+public sealed partial class OutboundService(Ledger ledger, IEnumerable<IOutboundChannel> channels, MuthurOptions options, ILogger<OutboundService> logger)
 {
     /// <summary>Agents who volunteered to review outbound traffic are told when something is waiting, if the role exists.</summary>
     public const string ReviewerRole = "outbound-reviewer";
@@ -85,6 +88,7 @@ public sealed partial class OutboundService(Ledger ledger, IEnumerable<IOutbound
                 TaskId = taskId,
                 Body = request.Body,
                 BodySha256 = OutboundGate.Hash(request.Body),
+                Flags = OutboundGate.Flags(request.Body),
                 Status = OutboundStatus.PendingReview,
                 AuthorAgentId = caller.AgentId,
                 AuthorName = caller.Name,
@@ -93,7 +97,7 @@ public sealed partial class OutboundService(Ledger ledger, IEnumerable<IOutbound
             };
             m.Db.OutboundMessages.Add(message);
             await m.Db.SaveChangesAsync(ct);
-            m.Record("outbound.drafted", taskId, new { outbound = Id(message), target = key, author = caller.Name, sha256 = message.BodySha256, chars = message.Body.Length });
+            m.Record("outbound.drafted", taskId, new { outbound = Id(message), target = key, author = caller.Name, sha256 = message.BodySha256, chars = message.Body.Length, flags = message.Flags });
 
             if (await m.Db.Roles.AnyAsync(r => r.Key == ReviewerRole, ct))
                 MessageService.PostFromHub(m, Recipient.Role, ReviewerRole, $"{Id(message)} by {caller.Name} to '{key}' is waiting for review: muthur out show {Id(message)}", taskId);
@@ -115,7 +119,7 @@ public sealed partial class OutboundService(Ledger ledger, IEnumerable<IOutbound
             message.ReviewNote = request.Note?.Trim();
             message.ReviewedAt = m.Now;
             message.Status = !request.Approve ? OutboundStatus.Rejected
-                : message.Target!.RequiresFounderApproval ? OutboundStatus.AwaitingFounder
+                : OutboundGate.NeedsFounder(message) ? OutboundStatus.AwaitingFounder
                 : OutboundStatus.Approved;
             m.Record(request.Approve ? "outbound.approved" : "outbound.rejected", message.TaskId,
                 new { outbound = Id(message), reviewer = caller.Name, sha256 = message.BodySha256, note = message.ReviewNote });
@@ -141,7 +145,7 @@ public sealed partial class OutboundService(Ledger ledger, IEnumerable<IOutbound
             message.Status = approve ? OutboundStatus.Approved : OutboundStatus.Rejected;
             message.FounderApprovedAt = approve ? m.Now : null;
             if (!approve) message.ReviewNote = $"Founder: {note ?? "declined"}";
-            m.Record(approve ? "outbound.founder_approved" : "outbound.founder_declined", message.TaskId, new { outbound = Id(message), note });
+            m.Record(approve ? "outbound.founder_approved" : "outbound.founder_declined", message.TaskId, new { outbound = Id(message), sha256 = message.BodySha256, note });
 
             if (message.AuthorAgentId is not null)
                 MessageService.Post(m, null, caller.Name, Recipient.Agent, message.AuthorName,
@@ -167,9 +171,13 @@ public sealed partial class OutboundService(Ledger ledger, IEnumerable<IOutbound
             {
                 await FindChannel(message.Target!.Channel).SendAsync(message.Target.Address, message.Body, ct);
             }
-            catch (Exception ex) when (ex is InvalidOperationException or HttpRequestException or IOException)
+            catch (Exception ex) when (ex is not OperationCanceledException || !ct.IsCancellationRequested)
             {
-                error = ex.Message;
+                // Whatever went wrong out there, the message is "failed", never stuck in "approved". Agents get a fixed
+                // reason by kind of failure; an OS or HTTP error message can name the address or part of it, so the
+                // detail goes to the hub log only.
+                error = SafeReason(ex);
+                logger.LogWarning(ex, "Delivery of {Outbound} to target {Target} failed.", Id(message), message.Target!.Key);
             }
 
             var dto = await ledger.MutateAsync(caller, async m =>
@@ -182,7 +190,7 @@ public sealed partial class OutboundService(Ledger ledger, IEnumerable<IOutbound
                     new { outbound = Id(current), target = current.Target!.Key, sha256 = current.BodySha256, error });
                 return ToDto(current);
             }, ct);
-            return error is null ? dto : throw Fail.Conflict("delivery_failed", $"{Id(message)} could not be delivered: {error}. It stays approved-but-failed; retry with: muthur out retry {Id(message)}");
+            return error is null ? dto : throw Fail.Conflict("delivery_failed", $"{Id(message)} could not be delivered: {error}. It is marked failed; retry with: muthur out retry {Id(message)}");
         }
         finally
         {
@@ -197,6 +205,8 @@ public sealed partial class OutboundService(Ledger ledger, IEnumerable<IOutbound
         await ledger.MutateAsync(caller, async m =>
         {
             var message = await LoadAsync(m.Db, id, ct);
+            if (!caller.IsFounder && caller.AgentId != message.AuthorAgentId)
+                throw Fail.Rule("not_author", $"{Id(message)} was written by '{message.AuthorName}'; only they or the founder retry it.");
             if (message.Status != OutboundStatus.Failed)
                 throw Fail.Rule("not_failed", $"{Id(message)} is {message.Status}; only a failed delivery can be retried.");
             message.Status = OutboundStatus.Approved;
@@ -238,12 +248,24 @@ public sealed partial class OutboundService(Ledger ledger, IEnumerable<IOutbound
 
     private static string Id(OutboundMessage message) => "O-" + message.Id;
 
+    private static string SafeReason(Exception ex) => ex switch
+    {
+        ChannelException => ex.Message,
+        UnauthorizedAccessException => "access to the target was denied",
+        DirectoryNotFoundException or FileNotFoundException or PathTooLongException => "the target path is unavailable",
+        IOException => "the target could not be written",
+        HttpRequestException { StatusCode: { } status } => $"the target answered HTTP {(int)status}",
+        HttpRequestException => "the target could not be reached",
+        TaskCanceledException or TimeoutException or OperationCanceledException => "the target timed out",
+        _ => "delivery failed unexpectedly (details are in the hub log)",
+    };
+
     private static TargetDto ToDto(OutboundTarget t) => new(t.Key, t.Channel, t.RequiresFounderApproval, t.CreatedAt);
 
     private static OutboundDto ToDto(OutboundMessage o) =>
         new(Id(o), o.Target?.Key ?? "", o.Target?.Channel ?? "", Status(o.Status), o.Body, o.BodySha256, o.AuthorName, o.AuthorModel,
-            o.ReviewerName, o.ReviewerModel, o.ReviewNote, o.Target?.RequiresFounderApproval ?? false, o.FounderApprovedAt,
-            o.TaskId is { } t ? Wire.TaskId(t) : null, o.CreatedAt, o.SentAt, o.Error);
+            o.ReviewerName, o.ReviewerModel, o.ReviewNote, OutboundGate.NeedsFounder(o), o.FounderApprovedAt,
+            o.TaskId is { } t ? Wire.TaskId(t) : null, o.CreatedAt, o.SentAt, o.Error, o.Flags);
 
     private static string Status(OutboundStatus status) => status switch
     {

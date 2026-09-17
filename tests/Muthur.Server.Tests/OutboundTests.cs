@@ -85,7 +85,7 @@ public sealed class OutboundTests : IDisposable
         await DefineTargetAsync();
         var agent = await _hub.RegisterAgentAsync("leaky");
 
-        var response = await DraftAsync(agent, "Deploy failed. Use this to debug: ghp_abcdefghijklmnopqrstuvwxyzABCDEF0123");
+        var response = await DraftAsync(agent, "Deploy failed. Use this to debug: gh" + "p_abcdefghijklmnopqrstuvwxyzABCDEF0123");
 
         Assert.Equal("secret_detected", (await response.ReadErrorAsync()).Code);
         await using var db = await _hub.Services.GetRequiredService<IDbContextFactory<MuthurDb>>().CreateDbContextAsync();
@@ -109,6 +109,109 @@ public sealed class OutboundTests : IDisposable
 
         Assert.Equal("body_changed", (await send.ReadErrorAsync()).Code);
         Assert.False(File.Exists(Outbox));
+    }
+
+    [Fact]
+    public async Task A_delivery_that_blows_up_is_failed_retryable_and_never_reveals_the_address()
+    {
+        // A file target whose path is a directory: the write throws UnauthorizedAccessException, not IOException.
+        var directory = Path.Combine(_hub.DataDir, "secret-location-7f3a");
+        Directory.CreateDirectory(directory);
+        (await _hub.Founder().PutAsJsonAsync(Routes.OutboundTargets, new DefineTargetRequest("broken", "file", directory))).EnsureSuccessStatusCode();
+        var author = await _hub.RegisterAgentAsync("author");
+        var peer = await _hub.RegisterAgentAsync("peer");
+        var draft = await ReadAsync(await DraftAsync(author, "Hello out there.", target: "broken"));
+        await ReadAsync(await ReviewAsync(peer, draft));
+
+        var send = await author.PostAsync(Routes.OutboundAction(draft.Id, "send"), null);
+
+        Assert.Equal(HttpStatusCode.Conflict, send.StatusCode);
+        var error = await send.ReadErrorAsync();
+        Assert.Equal("delivery_failed", error.Code);
+        Assert.DoesNotContain("secret-location-7f3a", error.Message);
+
+        var shown = await ReadAsync(await author.GetAsync($"{Routes.Outbound}/{draft.Id}"));
+        Assert.Equal("failed", shown.Status);
+        Assert.DoesNotContain("secret-location-7f3a", shown.Error);
+        var ledger = await (await author.GetAsync($"{Routes.Events}?limit=200")).Content.ReadAsStringAsync();
+        Assert.DoesNotContain("secret-location-7f3a", ledger);
+
+        // Only the author (or founder) retries — and a refused retry changes nothing.
+        var byPeer = await peer.PostAsync(Routes.OutboundAction(draft.Id, "retry"), null);
+        Assert.Equal("not_author", (await byPeer.ReadErrorAsync()).Code);
+        Assert.Equal("failed", (await ReadAsync(await author.GetAsync($"{Routes.Outbound}/{draft.Id}"))).Status);
+
+        // The founder fixes the target; the same reviewed bytes go out without a new review.
+        await DefineTargetAsync("broken");
+        Assert.Equal("sent", (await ReadAsync(await author.PostAsync(Routes.OutboundAction(draft.Id, "retry"), null))).Status);
+    }
+
+    [Fact]
+    public async Task A_failure_whose_os_message_names_part_of_the_address_reveals_nothing()
+    {
+        // The address runs THROUGH an existing file, so the OS error names a parent of the address rather than the address itself.
+        var parent = Path.Combine(_hub.DataDir, "hidden-parent-91c2");
+        Directory.CreateDirectory(parent);
+        await File.WriteAllTextAsync(Path.Combine(parent, "plain.txt"), "i am a file");
+        var address = Path.Combine(parent, "plain.txt", "sub", "f.txt");
+        (await _hub.Founder().PutAsJsonAsync(Routes.OutboundTargets, new DefineTargetRequest("through-a-file", "file", address))).EnsureSuccessStatusCode();
+        var author = await _hub.RegisterAgentAsync("author");
+        var peer = await _hub.RegisterAgentAsync("peer");
+        var draft = await ReadAsync(await DraftAsync(author, "hello io path", target: "through-a-file"));
+        await ReadAsync(await ReviewAsync(peer, draft));
+
+        var send = await author.PostAsync(Routes.OutboundAction(draft.Id, "send"), null);
+
+        Assert.Equal("delivery_failed", (await send.ReadErrorAsync()).Code);
+        var everythingAnAgentCanRead =
+            await send.Content.ReadAsStringAsync() +
+            await (await author.GetAsync($"{Routes.Outbound}/{draft.Id}")).Content.ReadAsStringAsync() +
+            await (await author.GetAsync($"{Routes.Outbound}?status=all")).Content.ReadAsStringAsync() +
+            await (await author.GetAsync($"{Routes.Events}?limit=500")).Content.ReadAsStringAsync();
+        Assert.DoesNotContain("hidden-parent-91c2", everythingAnAgentCanRead);
+        Assert.DoesNotContain("plain.txt", everythingAnAgentCanRead);
+    }
+
+    [Fact]
+    public async Task Text_that_might_hold_a_credential_can_only_leave_with_the_founders_approval()
+    {
+        await DefineTargetAsync(); // an ordinary target: no founder approval needed for ordinary text
+        var author = await _hub.RegisterAgentAsync("author");
+        var peer = await _hub.RegisterAgentAsync("peer");
+
+        var draft = await ReadAsync(await DraftAsync(author, "docker login registry.example.com -u deploy -p Sup3rS3cretValue9"));
+        Assert.Equal("pending_review", draft.Status);
+        Assert.NotEmpty(draft.Flags);
+        Assert.True(draft.RequiresFounderApproval);
+        Assert.DoesNotContain("Sup3rS3cretValue9", string.Join(' ', draft.Flags)); // flags are masked like findings
+
+        // A careless (or colluding) reviewer cannot wave it through.
+        Assert.Equal("awaiting_founder", (await ReadAsync(await ReviewAsync(peer, draft))).Status);
+        var send = await author.PostAsync(Routes.OutboundAction(draft.Id, "send"), null);
+        Assert.Equal("awaiting_founder", (await send.ReadErrorAsync()).Code);
+        Assert.False(File.Exists(Outbox));
+
+        (await _hub.Founder().PostAsync(Routes.OutboundAction(draft.Id, "approve"), null)).EnsureSuccessStatusCode();
+        Assert.Equal("sent", (await ReadAsync(await author.PostAsync(Routes.OutboundAction(draft.Id, "send"), null))).Status);
+
+        // Ordinary text to the same target needs no founder.
+        var plain = await ReadAsync(await DraftAsync(author, "Release 1.5 is out."));
+        Assert.Empty(plain.Flags);
+        Assert.Equal("approved", (await ReadAsync(await ReviewAsync(peer, plain))).Status);
+    }
+
+    [Fact]
+    public async Task The_body_is_delivered_byte_for_byte()
+    {
+        await DefineTargetAsync();
+        var author = await _hub.RegisterAgentAsync("author");
+        var peer = await _hub.RegisterAgentAsync("peer");
+        const string body = "line one\n\n  indented\ntrailing spaces   \n\n";
+        var draft = await ReadAsync(await DraftAsync(author, body));
+        await ReadAsync(await ReviewAsync(peer, draft));
+        await ReadAsync(await author.PostAsync(Routes.OutboundAction(draft.Id, "send"), null));
+
+        Assert.Contains(body, await File.ReadAllTextAsync(Outbox));
     }
 
     [Fact]

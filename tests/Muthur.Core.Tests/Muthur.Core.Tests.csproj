@@ -12,5 +12,6 @@
   </ItemGroup>
   <ItemGroup>
     <Using Include="Xunit" />
+    <None Update="SecretCorpus\*.txt" CopyToOutputDirectory="PreserveNewest" />
   </ItemGroup>
 </Project>

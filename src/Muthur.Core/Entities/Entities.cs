@@ -211,6 +211,8 @@ public sealed class OutboundMessage
     public int? TaskId { get; set; }
     public required string Body { get; set; }
     public required string BodySha256 { get; set; }
+    /// <summary>Masked excerpts that might be credentials. A flagged message needs the founder's approval whatever its target.</summary>
+    public List<string> Flags { get; set; } = [];
     public OutboundStatus Status { get; set; }
     public Guid? AuthorAgentId { get; set; }
     public required string AuthorName { get; set; }

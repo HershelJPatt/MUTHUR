@@ -138,6 +138,7 @@ public sealed class MuthurDb(DbContextOptions<MuthurDb> options) : DbContext(opt
         modelBuilder.Entity<OutboundMessage>(e =>
         {
             e.ToTable("outbound");
+            e.Property(x => x.Flags).HasConversion(StringListConverter.Instance, StringListConverter.Comparer);
             e.HasIndex(x => x.Status);
             e.HasOne(x => x.Target).WithMany().HasForeignKey(x => x.TargetId).OnDelete(DeleteBehavior.Restrict);
         });

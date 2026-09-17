@@ -1,0 +1,22 @@
+# Every line is an ordinary text the outbound gate must NOT refuse. Same escapes as block.txt.
+# The gate is biased toward refusing; this file keeps it usable.
+
+Release 1.4 is out. Thanks to everyone who reported the login bug!
+We rotated the password last week; no action needed on your side.
+See https://github.com/acme/widgets/issues/42 and commit 9f86d081884c7d659a2feaa0c55ad015a3bf4f1b.
+The token bucket algorithm limits requests; the secret is good caching.
+Docs: https://example.com/guide and mailto:team@example.com. Token: see the vault.
+Fixed in 2.3.1:\n- login loop\n- export timing\n\nThanks @alice and @bob for the reports.
+Meeting at 10:30 with user:admin role review; ratio 3:2@scale is fine.
+To configure it: export API_KEY=$YOUR_KEY and restart.
+Set password: <your password> in the settings page, then sign in again.
+In CI use token={{ secrets.DEPLOY_TOKEN }} rather than a literal value.
+A password is required for every account, and the password was reset for inactive users.
+All 214 tests passed: 0 failed. Passing builds are promoted automatically.
+The compass widget and the bypass switch were removed; passenger counts are unchanged.
+Artifact sha256 e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855 is published with the release.
+Request id 3f2504e0-4f89-11d3-9a0c-0305e82c3301 failed with HTTP 502; retried after 30s and succeeded.
+Maintenance tonight 22:00-23:00 UTC. The API key rotation guide is at https://example.com/docs/keys.
+Status: investigating elevated error rates on the EU cluster since 14:05 UTC. Next update in 30 minutes.
+Bug: clicking Export twice creates two files. Expected: one file. Version 2.3.0, Windows 11, Chrome 128.
+Author: alice-smith-and-friends; reviewers: bob, carol. Keywords: caching, invalidation, naming.

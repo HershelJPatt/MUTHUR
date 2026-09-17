@@ -29,4 +29,6 @@ public sealed record OutboundDto(
     string? Task,
     DateTimeOffset CreatedAt,
     DateTimeOffset? SentAt,
-    string? Error);
+    string? Error,
+    /// <summary>Masked excerpts that might be credentials. Non-empty means the founder must approve, whatever the target.</summary>
+    IReadOnlyList<string> Flags);

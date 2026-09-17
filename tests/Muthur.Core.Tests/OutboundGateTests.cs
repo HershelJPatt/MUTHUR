@@ -3,44 +3,6 @@ using Muthur.Core.Entities;
 
 namespace Muthur.Core.Tests;
 
-public sealed class SecretScannerTests
-{
-    [Theory]
-    [InlineData("aws AKIAIOSFODNN7EXAMPLE here", "aws-access-key")]
-    [InlineData("token ghp_abcdefghijklmnopqrstuvwxyzABCDEF0123 ok", "github-token")]
-    [InlineData("github_pat_11ABCDEFG0abcdefghijklmnopqrstuvwxyz0123456789", "github-token")]
-    [InlineData("key: sk-ant-api03-abcdefghijklmnopqrstuvwxyz0123456789", "api-key")]
-    [InlineData("OPENAI sk-proj-abcdefghijklmnopqrstuvwxyz012345", "api-key")]
-    [InlineData("xoxb-" + "1234567890-abcdefghijklmnop", "slack-token")]
-    [InlineData("-----BEGIN OPENSSH PRIVATE KEY-----\nb3BlbnNzaC1rZXk", "private-key")]
-    [InlineData("eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxMjM0NTY3ODkwIn0.dozjgNryP4J3jVmNHl0w5N_XgL0n3I9PlFUP0THsR8U", "jwt")]
-    [InlineData("Authorization: Bearer abcdefghijklmnopqrstuvwxyz012345", "bearer-token")]
-    [InlineData("Server=db;User Id=sa;Password=Sup3rS3cret!;", "connection-string-secret")]
-    [InlineData("DefaultEndpointsProtocol=https;AccountName=x;AccountKey=abcd1234abcd1234abcd==", "connection-string-secret")]
-    [InlineData("https://x.blob.core.windows.net/c/f?sv=2022&sig=abcdefghijklmnopqrstuvwxyz%2B0123", "sas-signature")]
-    [InlineData("api_key = \"zzzzzzzzzzzzzzzz\"", "credential-assignment")]
-    [InlineData("the password: hunter2hunter2", "credential-assignment")]
-    [InlineData("https://discord.com/api/webhooks/123456789012345678/abcdefghijklmnopqrstuvwxyz", "webhook-url")]
-    public void Credentials_are_found(string text, string expectedKind) =>
-        Assert.Contains(SecretScanner.Scan(text), f => f.Kind == expectedKind);
-
-    [Theory]
-    [InlineData("Release 1.4 is out. Thanks to everyone who reported the login bug!")]
-    [InlineData("We rotated the password last week; no action needed on your side.")]
-    [InlineData("See https://github.com/acme/widgets/issues/42 and commit 9f86d081884c7d659a2feaa0c55ad015a3bf4f1b.")]
-    [InlineData("The token bucket algorithm limits requests; the secret is good caching.")]
-    public void Ordinary_text_passes(string text) => Assert.Empty(SecretScanner.Scan(text));
-
-    [Fact]
-    public void Findings_never_repeat_the_secret()
-    {
-        const string secret = "ghp_abcdefghijklmnopqrstuvwxyzABCDEF0123";
-        var finding = Assert.Single(SecretScanner.Scan($"use {secret} please"));
-        Assert.DoesNotContain(secret, finding.Excerpt);
-        Assert.StartsWith("ghp_ab", finding.Excerpt);
-    }
-}
-
 public sealed class OutboundGateTests
 {
     private static readonly Guid Author = Guid.NewGuid();

@@ -1,0 +1,131 @@
+# Every line is a text the outbound gate MUST refuse. One case per line.
+# Escapes: \n newline, \t tab, ​ zero-width space. The character ~ is removed before scanning: it splits
+# token-shaped strings so that this file itself never contains a literal credential pattern (repository secret
+# scanners would otherwise reject the push). All values are made up.
+#
+# A shape that slips past the gate is added here first, then the scanner is changed until this file passes.
+
+# --- vendor token shapes
+aws AK~IAIOSFODNN7EXAMPLE here
+token gh~p_abcdefghijklmnopqrstuvwxyzABCDEF0123 ok
+github~_pat_11ABCDEFG0abcdefghijklmnopqrstuvwxyz0123456789
+key: sk~-ant-api03-abcdefghijklmnopqrstuvwxyz0123456789
+OPENAI sk~-proj-abcdefghijklmnopqrstuvwxyz012345
+xo~xb-1234567890-abcdefghijklmnop
+xa~pp-1-A0123456789-1234567890123-abcdefabcdef
+stripe sk~_live_4eC39HqLyjWDarjtT1zdp7dc
+wh~sec_abcdefghijklmnopqrstuvwxyz012345
+np~m_abcdefghijklmnopqrstuvwxyz0123456789
+gl~pat-abcdefghij0123456789
+S~G.abcdefghijklmnopqrstuv.abcdefghijklmnopqrstuvwxyz0123456789abcdefg
+ya~29.a0AfH6SMBabcdefghijklmnopqrstuvwxyz0123456789
+GOC~SPX-abcdefghijklmnopqrstuvwxyz01
+hv~s.CAESIabcdefghijklmnopqrstuvwxyz0123456789
+lin~_api_abcdefghijklmnopqrstuvwxyz0123456789abcd
+sq0~atp-abcdefghijklmnopqrstuv
+NR~AK-ABCDEFGHIJKLMNOPQRSTUVWXYZ0
+mailgun ke~y-0123456789abcdef0123456789abcdef
+twilio A~C0123456789abcdef0123456789abcdef
+twilio S~K0123456789abcdef0123456789abcdef
+telegram 123456789~:AAEabcdefghijklmnopqrstuvwxyz0123456
+discord bot MTIzNDU2Nzg5MDEyMzQ1Njc4~.GaBcDe.abcdefghijklmnopqrstuvwxyz0123456789ab
+AGE-SECRET-~KEY-1QQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQ
+eyJhbGciOiJIUzI1NiJ9~.eyJzdWIiOiIxMjM0NTY3ODkwIn0.dozjgNryP4J3jVmNHl0w5N_XgL0n3I9PlFUP0THsR8U
+
+# --- key material
+-----BEGIN OPENSSH PRIVATE~ KEY-----\nb3BlbnNzaC1rZXk
+-----BEGIN RSA PRIVATE~ KEY-----
+b3BlbnNzaC1rZXkt~djEAAAAABG5vbmUAAAAEbm9uZQAAAAAAAAABAAAAMwAAAAtzc2gtZWQyNTUxOQ
+PuTTY-User-Key-~File-3: ssh-ed25519\nEncryption: none
+Private-~Lines: 1\nAAAAIabcdefghijklmnop
+admin:$apr~1$abcdefgh$abcdefghijklmnopqrstuv
+root:$~6$rounds=5000$saltsalt$abcdefghijklmnopqrstuvwxyz0123456789abcdefghij:19000:0:99999:7:::
+user:$2~y$10$abcdefghijklmnopqrstuuabcdefghijklmnopqrstuvwxyz01234
+
+# --- URLs that are credentials
+https://discord.com/api/web~hooks/123456789012345678/abcdefghijklmnopqrstuvwxyz
+https://hooks.slack.com/ser~vices/T00000000/B00000000/abcdefghijklmnopqrstuvwx
+https://acme.webhook.office.com/web~hookb2/0123abcd-0123-abcd-0123-0123456789ab@0123abcd/IncomingWebhook/abcdef0123456789/0123abcd
+https://api.telegram.org/bot~123456789:AAEabcdefghijklmnopqrstuvwxyz0123456/sendMessage
+https://x.blob.core.windows.net/c/f?sv=2022&si~g=abcdefghijklmnopqrstuvwxyz%2B0123
+DATABASE_URL=postgres://app:s3cretpw@db.internal:5432/prod
+mongodb+srv://admin:hunter2@cluster0.example.mongodb.net/test
+redis://:hunter2hunter2@cache:6379/0
+curl https://deploy:hunter2@ci.example.com/job
+
+# --- headers and command lines
+Authorization: Bearer abcdefghijklmnopqrstuvwxyz012345
+Authorization: Basic YWRtaW46U3VwM3JTM2NyZXRWYWx1ZTk=
+curl -u admin:Sup3rS3cretValue9 https://ci.example.com/job
+curl --user admin:Sup3rS3cretValue9 https://ci.example.com/job
+mysql -h db -u root -pSup3rS3cret prod
+//registry.npmjs.org/:_auth=YWRtaW46U3VwM3JTM2NyZXQ=
+{"auths":{"registry.example.com":{"auth":"YWRtaW46U3VwM3JTM2NyZXQ="}}}
+
+# --- assignments
+Server=db;User Id=sa;Password=Sup3rS3cret!;
+DefaultEndpointsProtocol=https;AccountName=x;AccountKey=abcd1234abcd1234abcd==
+the password: hunter2hunter2
+password: hunter2
+{"password": "hunter2hunter2"}
+"password":"hunter2hunter2"
+{"password": "hunter2"}
+{"credentials":"abcdef0123456789abcdef"}
+"secretKey": "abcdef0123456789abcdef"
+"secret_key": "abcdef0123456789abcdef"
+aws_secret_access_key = wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY
+aws_secret_access_key_prod = wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY
+AWS_SESSION_TOKEN=IQoJb3JpZ2luX2VjEJr0123456789abcdefghijklmnopqrstuvwxyz
+SECRET_KEY=0123456789abcdef0123456789abcdef
+SECRET_KEY = 'django-insecure-abc123def456ghi789'
+SECRET_KEY_BASE=0123456789abcdef0123456789abcdef0123456789abcdef
+STRIPE_SECRET_KEY=abcdef0123456789abcdef
+DB_PASS=Sup3rS3cret
+PASS=Sup3rS3cret
+PASSWORD_PROD=Sup3rS3cret
+PRIVATE_KEY_PEM=MIIEvQIBADANBgkqhkiG9w0BAQEFAASC
+ENCRYPTION_KEY=0123456789abcdef0123456789abcdef
+signingKey: 0123456789abcdef0123456789abcdef
+token: 9f86d081884c7d659a2feaa0c55ad015
+pw: Sup3rS3cret
+password\tSup3rS3cret
+password => 'Sup3rS3cret'
+password： Sup3rS3cret
+Passwort: Sup3rS3cret
+password: |\n  Sup3rS3cret
+<password>Sup3rS3cret</password>
+<add key="SmtpPassword" value="Sup3rS3cret"/>
+
+# --- prose and netrc
+the password is hunter2hunter2
+machine ci.example.com login deploy password hunter2x
+
+# --- split or decorated tokens
+gh~p_abcdefghijklmnop\nqrstuvwxyzABCDEF0123
+gh~p_abcdefghijklmnop qrstuvwxyzABCDEF0123
+gh~p_abcdefghijklmnop​qrstuvwxyzabcdef0123
+gh~p_abcdefghij<b></b>klmnopqrstuvwxyzABCDEF0123
+gh~p_abcdefghij**klmnopqrst**uvwxyzABCDEF0123
+gh~p_abcdefghijklmnop\\\nqrstuvwxyzABCDEF0123
+"gh~p_abcdefghijklmnop" + "qrstuvwxyzABCDEF0123"
+AK~IAIOSF\nODNN7EXAMPLE
+-----BEGIN RSA\nPRIVATE~ KEY-----
+https://discord.com/api/web~hooks/123456789012345678/abcdefghij\nklmnopqrstuvwxyz
+
+# --- round 3: vendor tokens with a fixed prefix
+dc~kr_pat_abcdefghijklmnopqrstuvwxyz0
+ATA~TT3xFfGF0abcdefghijklmnopqrstuvwxyz0123456789
+da~pi0123456789abcdef0123456789abcdef
+gl~rt-abcdefghijklmnopqrst
+gl~sa_abcdefghijklmnopqrstuvwxyz012345_0a1b2c3d
+PM~AK-0123456789abcdef01234567-0123456789abcdef0123456789abcdef01
+abcdefghijklmn.atl~asv1.abcdefghijklmnopqrstuvwxyz0123456789abcdefghijklmnopqrstuvwxyz0123
+dp~.pt.abcdefghijklmnopqrstuvwxyz0123456789abcdefg
+notion sec~ret_abcdefghijklmnopqrstuvwxyz0123456789ABCDEFG
+fi~gd_abcdefghijklmnopqrstuvwxyz0123456789ABCD
+pu~l-0123456789abcdef0123456789abcdef01234567
+psc~ale_pw_abcdefghijklmnopqrstuvwxyz0123456789abcdefg
+mapbox sk~.eyJ1IjoiYWNtZSIsImEiOiJjbGFiY2RlZjAxMjM0NTY3ODkifQ.abcdefghijklmnopqrstuv
+AZURE_DEVOPS_EXT_PAT=abcdefghijklmnopqrstuvwxyz0123456789abcdefghijklmnop
+- name: GITHUB_TOKEN\n  value: gh~p_abcdefghijklmnopqrstuvwxyzABCDEF0123
+notion nt~n_abcdefghijklmnopqrstuvwxyz0123456789ABCDEFGHIJ

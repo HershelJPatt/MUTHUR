@@ -87,7 +87,8 @@ public sealed class RoleTests : IDisposable
         var denied = await other.PostAsync(Routes.RoleAction("release-oncall", "release"), null);
         Assert.Equal("not_holder", (await denied.ReadErrorAsync()).Code);
 
-        (await holder.PostAsync(Routes.RoleAction("release-oncall", "release"), null)).EnsureSuccessStatusCode();
+        var released = await holder.PostAsync(Routes.RoleAction("release-oncall", "release"), null);
+        Assert.Null((await released.Content.ReadFromJsonAsync(MuthurJsonContext.Default.RoleDto))!.Holder); // an acknowledgement, like every other command
         Assert.Null((await RolesAsync()).Single().Holder);
     }
 }

@@ -20,11 +20,11 @@
                         <span class="event-actor">@message.From</span> <span class="event-detail">→ @message.To</span>
                         @if (message.Blocking)
                         {
-                            <span class="tag tag-open">blocking</span>
+                            <text>&nbsp;</text><span class="tag tag-open">blocking</span>
                         }
                         @if (message.Task is { } task)
                         {
-                            <a class="event-task" href="/tasks/@task">@task</a>
+                            <text>&nbsp;</text><a class="event-task" href="/tasks/@task">@task</a>
                         }
                     </div>
                     <div class="prose">@message.Body</div>
@@ -83,10 +83,13 @@
         _roles = await Roles.ListAsync();
     }
 
-    // Only a founder who is actually looking has read anything: prerender must not clear the badge.
+    // Only a founder who is actually looking has read anything: prerender must not clear the badge (OnAfterRender
+    // never runs there). While the page stays open, whatever arrives and is rendered counts as read too; marking it
+    // records message.read, which reloads the panel with nothing left unread, so this settles after one pass.
     protected override async Task OnAfterRenderAsync(bool firstRender)
     {
-        if (firstRender) await Messages.MarkFounderReadAsync(Caller.Founder);
+        if (_thread.Any(m => m.To == "founder" && m.ReadAt is null))
+            await Messages.MarkFounderReadAsync(Caller.Founder);
     }
 
     private async Task SendAsync()
