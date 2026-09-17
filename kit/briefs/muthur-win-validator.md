@@ -15,11 +15,11 @@ tells you how to run *this* product.
 Prefix every command against the build under test instead:
 
 ```bash
-T="MUTHUR_HOME=$SCRATCH MUTHUR_URL=http://127.0.0.1:7431"     # SCRATCH=$(mktemp -d), once
+T="MUTHUR_HOME=$SCRATCH MUTHUR_URL=http://127.0.0.1:7431"     # SCRATCH = a per-run subdirectory of your scratchpad
 env $T ./artifacts/validate/muthur.exe status
 ```
 
-**Always pass `-Destination` to `scripts/install.ps1`.** Its default destination is the live hub's directory.
+**Always pass `-Destination` to `scripts/install.ps1`, and never `-RestartRunning`.** Its default destination is the live hub's directory.
 
 **Only ever run an installed CLI (`./artifacts/<name>/muthur.exe`).** `dotnet build` also leaves a `muthur.exe` under
 `src/Muthur.Cli/bin/`; it is a build output, not an installation — never run it, and never run anything without the `env $T` prefix.
@@ -33,6 +33,8 @@ Compare again when you finish; if they changed, say so in your evidence (someone
 Keep your files in a per-run subdirectory of the scratchpad, throwaway git repositories **outside** `C:\src\Experiment`,
 and run the installed CLI by absolute path when a check must happen outside any repository (the CLI infers the project from the
 nearest `muthur.project.json`). Create a second project in scratch whenever a task touches projects, inbound or tasks.
+Write test-case files with a tool that keeps backslashes intact (not a bash heredoc) and feed them with `--file`; do not pipe a long
+driver script into `head` (a broken pipe loses its transcript); pass `--limit` to `log`.
 Tools: `tasklist //FI "PID eq <pid>"` (no `pgrep`), `date +%s%3N` for timing (no `bc`), `PYTHONIOENCODING=utf-8` when piping
 non-ASCII through Python; browser scripts run in the browser daemon and do not see your shell's environment.
 

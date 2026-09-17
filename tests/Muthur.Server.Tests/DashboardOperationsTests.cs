@@ -76,4 +76,22 @@ public sealed class DashboardOperationsTests : IDisposable
 
         Assert.Contains("limited in", await _hub.CreateClient().GetStringAsync("/operations"));
     }
+
+    [Fact]
+    public async Task A_flagged_message_tells_the_founder_why_it_needs_them()
+    {
+        (await _hub.Founder().PutAsJsonAsync(Routes.OutboundTargets, new DefineTargetRequest("news", "file", Path.Combine(_hub.DataDir, "o.txt")))).EnsureSuccessStatusCode();
+        var author = await _hub.RegisterAgentAsync("author");
+        var peer = await _hub.RegisterAgentAsync("peer");
+        var drafted = await author.PostAsJsonAsync(Routes.Outbound, new DraftOutboundRequest("news", "docker login registry.example.com -u deploy -p Sup3rS3cretValue9"));
+        var draft = (await drafted.Content.ReadFromJsonAsync(MuthurJsonContext.Default.OutboundDto))!;
+        (await peer.PostAsJsonAsync(Routes.OutboundAction(draft.Id, "review"), new ReviewOutboundRequest(true, draft.Sha256))).EnsureSuccessStatusCode();
+
+        var page = await _hub.CreateClient().GetStringAsync("/operations");
+
+        Assert.Contains(">flagged<", page);
+        Assert.Contains("possible-credential-near-password-word", page);
+        Assert.Contains(">Approve<", page);
+        Assert.Contains("1 need you", page);
+    }
 }

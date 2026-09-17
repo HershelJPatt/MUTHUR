@@ -25,6 +25,17 @@
                     }
                     <span class="card-age">@Format.Age(message.CreatedAt, _now)</span>
                 </div>
+                @if (message.Flags.Count > 0)
+                {
+                    <div class="request-head">
+                        <span class="tag tag-open">flagged</span>
+                        <span class="event-detail">might hold a credential, so only you can let it leave:</span>
+                    </div>
+                    @foreach (var flag in message.Flags)
+                    {
+                        <div class="error-text">@flag</div>
+                    }
+                }
                 <div class="code">@message.Body</div>
                 <div class="request-head">
                     <span class="event-actor">@message.Author</span><span class="agent-model">@message.AuthorModel</span>
@@ -89,7 +100,8 @@
         var newestFirst = (await Outbound.ListAsync("all", 200)).Reverse().ToList();
         _messages =
         [
-            .. newestFirst.Where(m => InTheGate.Contains(m.Status)),
+            .. newestFirst.Where(m => m.Status == AwaitingFounder), // what needs the founder is never below the fold
+            .. newestFirst.Where(m => InTheGate.Contains(m.Status) && m.Status != AwaitingFounder),
             .. newestFirst.Where(m => !InTheGate.Contains(m.Status)).Take(Settled),
         ];
         _awaiting = _messages.Count(m => m.Status == AwaitingFounder);
