@@ -14,6 +14,7 @@ public static class MuthurEnvironment
     public const string PidFile = "muthur.pid";
     public const string DatabaseFile = "muthur.db";
     public const string LogFile = "muthur.log";
+    public const string HarnessFile = "harnesses.json";
 
     public static string Url =>
         Environment.GetEnvironmentVariable(UrlVariable) is { Length: > 0 } url ? url.TrimEnd('/') : DefaultUrl;

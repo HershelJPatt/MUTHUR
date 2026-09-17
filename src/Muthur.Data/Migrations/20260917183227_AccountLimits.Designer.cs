@@ -2,6 +2,7 @@
 using System;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Infrastructure;
+using Microsoft.EntityFrameworkCore.Migrations;
 using Microsoft.EntityFrameworkCore.Storage.ValueConversion;
 using Muthur.Data;
 
@@ -10,9 +11,11 @@ using Muthur.Data;
 namespace Muthur.Data.Migrations
 {
     [DbContext(typeof(MuthurDb))]
-    partial class MuthurDbModelSnapshot : ModelSnapshot
+    [Migration("20260917183227_AccountLimits")]
+    partial class AccountLimits
     {
-        protected override void BuildModel(ModelBuilder modelBuilder)
+        /// <inheritdoc />
+        protected override void BuildTargetModel(ModelBuilder modelBuilder)
         {
 #pragma warning disable 612, 618
             modelBuilder.HasAnnotation("ProductVersion", "10.0.12");
@@ -157,107 +160,6 @@ namespace Muthur.Data.Migrations
                     b.ToTable("founder_requests", (string)null);
                 });
 
-            modelBuilder.Entity("Muthur.Core.Entities.InboundItem", b =>
-                {
-                    b.Property<int>("Id")
-                        .ValueGeneratedOnAdd()
-                        .HasColumnType("INTEGER")
-                        .HasColumnName("id");
-
-                    b.Property<string>("Author")
-                        .HasColumnType("TEXT")
-                        .HasColumnName("author");
-
-                    b.Property<string>("Body")
-                        .IsRequired()
-                        .HasColumnType("TEXT")
-                        .HasColumnName("body");
-
-                    b.Property<Guid?>("ClaimedByAgentId")
-                        .HasColumnType("TEXT")
-                        .HasColumnName("claimed_by_agent_id");
-
-                    b.Property<string>("ExternalId")
-                        .IsRequired()
-                        .HasColumnType("TEXT")
-                        .HasColumnName("external_id");
-
-                    b.Property<Guid?>("ProjectId")
-                        .HasColumnType("TEXT")
-                        .HasColumnName("project_id");
-
-                    b.Property<long>("ReceivedAt")
-                        .HasColumnType("INTEGER")
-                        .HasColumnName("received_at");
-
-                    b.Property<string>("Resolution")
-                        .HasColumnType("TEXT")
-                        .HasColumnName("resolution");
-
-                    b.Property<string>("Source")
-                        .IsRequired()
-                        .HasColumnType("TEXT")
-                        .HasColumnName("source");
-
-                    b.Property<string>("Status")
-                        .IsRequired()
-                        .HasColumnType("TEXT")
-                        .HasColumnName("status");
-
-                    b.Property<int?>("TaskId")
-                        .HasColumnType("INTEGER")
-                        .HasColumnName("task_id");
-
-                    b.Property<string>("Title")
-                        .IsRequired()
-                        .HasColumnType("TEXT")
-                        .HasColumnName("title");
-
-                    b.Property<long>("UpdatedAt")
-                        .HasColumnType("INTEGER")
-                        .HasColumnName("updated_at");
-
-                    b.Property<string>("Url")
-                        .HasColumnType("TEXT")
-                        .HasColumnName("url");
-
-                    b.HasKey("Id");
-
-                    b.HasIndex("ClaimedByAgentId");
-
-                    b.HasIndex("ProjectId");
-
-                    b.HasIndex("Status");
-
-                    b.HasIndex("Source", "ExternalId")
-                        .IsUnique();
-
-                    b.ToTable("inbound", (string)null);
-                });
-
-            modelBuilder.Entity("Muthur.Core.Entities.IngestCursor", b =>
-                {
-                    b.Property<string>("Source")
-                        .HasColumnType("TEXT")
-                        .HasColumnName("source");
-
-                    b.Property<string>("Cursor")
-                        .HasColumnType("TEXT")
-                        .HasColumnName("cursor");
-
-                    b.Property<string>("LastError")
-                        .HasColumnType("TEXT")
-                        .HasColumnName("last_error");
-
-                    b.Property<long>("UpdatedAt")
-                        .HasColumnType("INTEGER")
-                        .HasColumnName("updated_at");
-
-                    b.HasKey("Source");
-
-                    b.ToTable("ingest_cursors", (string)null);
-                });
-
             modelBuilder.Entity("Muthur.Core.Entities.LedgerEvent", b =>
                 {
                     b.Property<long>("Seq")
@@ -391,11 +293,6 @@ namespace Muthur.Data.Migrations
                         .IsRequired()
                         .HasColumnType("TEXT")
                         .HasColumnName("default_branch");
-
-                    b.Property<string>("IngestSources")
-                        .IsRequired()
-                        .HasColumnType("TEXT")
-                        .HasColumnName("ingest_sources");
 
                     b.Property<string>("Key")
                         .IsRequired()
@@ -597,23 +494,6 @@ namespace Muthur.Data.Migrations
                     b.HasIndex("State");
 
                     b.ToTable("tasks", (string)null);
-                });
-
-            modelBuilder.Entity("Muthur.Core.Entities.InboundItem", b =>
-                {
-                    b.HasOne("Muthur.Core.Entities.Agent", "ClaimedBy")
-                        .WithMany()
-                        .HasForeignKey("ClaimedByAgentId")
-                        .OnDelete(DeleteBehavior.SetNull);
-
-                    b.HasOne("Muthur.Core.Entities.Project", "Project")
-                        .WithMany()
-                        .HasForeignKey("ProjectId")
-                        .OnDelete(DeleteBehavior.SetNull);
-
-                    b.Navigation("ClaimedBy");
-
-                    b.Navigation("Project");
                 });
 
             modelBuilder.Entity("Muthur.Core.Entities.RoleHold", b =>

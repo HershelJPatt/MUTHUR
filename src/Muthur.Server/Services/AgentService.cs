@@ -97,6 +97,8 @@ public sealed partial class AgentService(Ledger ledger, LeasePolicy leases, Time
             var agent = await m.Db.Agents.SingleAsync(a => a.Id == agentId, ct);
             agent.LimitedUntil = request.Until;
             m.Record(request.Until is null ? "agent.limit_cleared" : "agent.limited", payload: new { agent = agent.Name, until = request.Until, account = agent.Account });
+            if (agent.Account is { Length: > 0 } account)
+                await HarnessService.ApplyAsync(m, account, request.Until, ct); // the quota belongs to the account, not the session
         }, ct);
     }
 

@@ -88,4 +88,13 @@ public static class Wire
     }
 
     public static string TaskId(int id) => "T-" + id;
+
+    public static string InboundId(int id) => "I-" + id;
+
+    /// <summary>"I-7", "i-7" or "7" → 7.</summary>
+    public static bool TryParseInboundId(string text, out int id)
+    {
+        var digits = text.StartsWith("I-", StringComparison.OrdinalIgnoreCase) ? text[2..] : text;
+        return int.TryParse(digits, out id) && id > 0;
+    }
 }

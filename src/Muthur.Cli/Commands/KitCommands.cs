@@ -38,7 +38,7 @@ public static partial class KitCommands
         kit.Subcommands.Add(list);
     }
 
-    private static string? LocateKit()
+    internal static string? LocateKit()
     {
         if (Environment.GetEnvironmentVariable(KitVariable) is { Length: > 0 } configured)
             return Directory.Exists(configured) ? configured : null;
@@ -46,7 +46,7 @@ public static partial class KitCommands
         return Directory.Exists(bundled) ? bundled : null;
     }
 
-    private static int KitMissing() =>
+    internal static int KitMissing() =>
         Output.Error("kit_not_found", $"The kit directory was not found next to the CLI (kit/) and ${KitVariable} is not set.");
 
     private static int Install(ParseResult parse, string harness, string repo, string? projectKey)
@@ -77,6 +77,18 @@ public static partial class KitCommands
                 json.WriteStartObject();
                 json.WriteString("path", to);
                 json.WriteString("status", status);
+                json.WriteEndObject();
+            }
+
+            // Worker and validator worktrees live under .worktrees/ and must never show up as untracked files.
+            var ignore = Path.Combine(repo, ".gitignore");
+            var ignored = File.Exists(ignore) ? File.ReadAllText(ignore) : "";
+            if (!ignored.Split('\n').Any(line => line.Trim() is ".worktrees/" or ".worktrees"))
+            {
+                File.WriteAllText(ignore, (ignored.Length > 0 ? ignored.TrimEnd() + "\n" : "") + ".worktrees/\n");
+                json.WriteStartObject();
+                json.WriteString("path", ".gitignore");
+                json.WriteString("status", "updated");
                 json.WriteEndObject();
             }
 
