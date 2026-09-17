@@ -106,6 +106,9 @@ public static class WorkerCommands
         var id = Guid.NewGuid().ToString("n")[..6];
         var branchName = o.Branch ?? $"worker/{Slug(o.Task ?? Path.GetFileNameWithoutExtension(o.Spec))}-{Slug(o.Unit ?? "all")}-{id}";
         var worktree = Path.Combine(repo, ".worktrees", branchName.Replace('/', '-'));
+        // Check the spec on the base ref before creating anything, so a refused run leaves no worktree or branch behind.
+        if (await Git(repo, "cat-file", "-e", $"{baseRef}:{o.Spec.Replace('\\', '/')}") is null)
+            return Output.Error("spec_not_committed", $"'{o.Spec}' does not exist on '{baseRef}'. Commit the frozen spec before delegating.", ExitCodes.RuleViolation);
         var added = await processes.RunAsync("git", ["worktree", "add", "-b", branchName, worktree, baseRef], repo, timeout: TimeSpan.FromMinutes(2), ct: ct);
         if (!added.Ok) return Output.Error("worktree_failed", added.Message);
         if (!File.Exists(Path.Combine(worktree, o.Spec)))
@@ -140,7 +143,7 @@ public static class WorkerCommands
         {
             await Git(worktree, "add", "-A");
             var subject = $"{o.Task ?? Path.GetFileNameWithoutExtension(o.Spec)}{(o.Unit is null ? "" : " " + o.Unit)}";
-            committedByLauncher = await Git(worktree, "commit", "-q", "-m", $"{subject}: worker output ({final.Candidate.Harness}/{final.Candidate.Model})") is not null;
+            committedByLauncher = await Git(worktree, "commit", "-q", "-m", $"{subject}: worker output ({final.Candidate.Harness}/{(final.Candidate.Model.Length > 0 ? final.Candidate.Model : "default")})") is not null;
         }
 
         // A harness that exits cleanly has not necessarily done the work: the report's own STATUS line decides.

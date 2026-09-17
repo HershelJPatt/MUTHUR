@@ -8,7 +8,7 @@ using Muthur.Server.Auth;
 
 namespace Muthur.Server.Services;
 
-public sealed partial class ProjectService(Ledger ledger)
+public sealed partial class ProjectService(Ledger ledger, IEnumerable<IInboundSource> sources)
 {
     [GeneratedRegex("^[a-z0-9][a-z0-9-]{0,31}$")]
     private static partial Regex KeyPattern();
@@ -35,7 +35,7 @@ public sealed partial class ProjectService(Ledger ledger)
                 DefaultBranch = string.IsNullOrWhiteSpace(request.DefaultBranch) ? "main" : request.DefaultBranch.Trim(),
                 LandMode = request.LandMode ?? LandMode.Merge,
                 RequiredValidators = Normalize(request.RequiredValidators),
-                IngestSources = Normalize(request.IngestSources),
+                IngestSources = ValidSources(request.IngestSources),
                 CreatedAt = m.Now,
             };
             m.Db.Projects.Add(project);
@@ -55,7 +55,7 @@ public sealed partial class ProjectService(Ledger ledger)
             if (!string.IsNullOrWhiteSpace(request.DefaultBranch)) project.DefaultBranch = request.DefaultBranch.Trim();
             if (request.LandMode is { } mode) project.LandMode = mode;
             if (request.RequiredValidators is not null) project.RequiredValidators = Normalize(request.RequiredValidators);
-            if (request.IngestSources is not null) project.IngestSources = Normalize(request.IngestSources);
+            if (request.IngestSources is not null) project.IngestSources = ValidSources(request.IngestSources);
             m.Record("project.updated", payload: new { project = project.Key, project.RepoPath, landMode = project.LandMode.ToWire(), project.RequiredValidators, project.IngestSources });
             return project.ToDto();
         }, ct);
@@ -83,6 +83,19 @@ public sealed partial class ProjectService(Ledger ledger)
             0 => throw Fail.Rule("no_projects", "No project exists yet. Create one with: muthur project add <key> --repo <path> --founder"),
             _ => throw Fail.Rule("project_required", "More than one project exists; pass --project <key>."),
         };
+    }
+
+    /// <summary>A source the hub has no adapter for would fail on every poll forever; refuse it when it is configured.</summary>
+    private List<string> ValidSources(IReadOnlyList<string>? requested)
+    {
+        var normalized = Normalize(requested);
+        foreach (var source in normalized)
+        {
+            var colon = source.IndexOf(':');
+            if (colon <= 0 || colon == source.Length - 1 || !sources.Any(s => s.Scheme == source[..colon]))
+                throw Fail.Rule("unknown_ingest_source", $"'{source}' is not a source this hub can poll. Expected scheme:location with scheme one of: {string.Join(", ", sources.Select(s => s.Scheme))}.");
+        }
+        return normalized;
     }
 
     private static List<string> Normalize(IReadOnlyList<string>? validators) =>
