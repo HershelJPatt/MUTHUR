@@ -129,3 +129,25 @@ CREATE USER app IDENTIFIED BY 'acme_Sup3rS3cretValue9';
 the token is pat_aB3dE5fG7hJ9kL1mN3pQ5r
 The Render API key is rnd_aB3dE5fG7hJ9kL1mN3pQ5r
 NVIDIA key for the eval box: nvapi-aB3dE5fG7hJ9kL1mN3pQ5rS7tU9vW1xY3zA5bC7d
+
+# --- round 8, verbatim: human passwords made of words and numbers joined by _ or . (Season_Year, Company.Year, First.Last1984) and "stg." prefixes
+password: Welcome.2026
+password: Winter_2026
+Server=db01;Database=orders;User Id=sa;Password=Winter_2026;
+postgres://app:Winter_2026@db01:5432/orders
+curl -u admin:Winter_2026 https://build01/api
+mysql -u root -pWelcome.2026 orders
+API_TOKEN=stg.Qw7Lp2Rm9Xt4Zk8Nb6Ja
+docker login -u deploy -p stg.Qw7Lp2Rm9Xt4Zk8Nb6Ja registry.example.com
+- name: DB_PASSWORD\n  value: acme.Sup3rS3cretValue9
+DB_PASSWORD=Acme.Prod.2026
+password = "John.Smith1984"
+"password": "Welcome_2026"
+MYSQL_ROOT_PASSWORD: Root_2026
+the admin password is Summer_2025
+| Setting | Value |\n|---|---|\n| Password | Welcome_2026 |
+sshpass -p Winter_2026 ssh deploy@host
+sqlcmd -S db01 -U sa -P Acme.Sql2026 -Q "select 1"
+net use \\server\share Welcome.2026 /user:CORP\svc
+{"name":"PAYMENTS_TOKEN","value":"stg.Qw7Lp2Rm9Xt4Zk8Nb6Ja"}
+@secure()\nparam adminPass string = 'Tr0ub4dor&3x'

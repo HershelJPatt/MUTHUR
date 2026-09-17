@@ -81,3 +81,12 @@ The password reset email now links to https://app.example.com/reset?t=<token> an
 OAuth: authorization code flow with PKCE; access token lifetime 60m, refresh token lifetime 14d, rotation enabled.
 Registry key HKLM\SOFTWARE\Acme\Agent\InstallPath is read at startup; the i18n key checkout.button.pay was missing in de-DE.
 Partition key: /tenantId, unique key: /email; RU cost dropped from 12.4 to 3.1 per read.
+
+# --- round 8
+arn:aws:secretsmanager:eu-west-1:123456789012:secret:prod/orders/db-AbCdEf is referenced by the task definition.
+Password hashing moved to the new column in migration 20240917_AddPasswordHashColumn; settings.Password_Policy_V2 is unchanged.
+Password reset emails were delayed by 12m on smtp02; fixed in release-2026.09 (commit 9f86d08).
+The password field now uses the PasswordPolicyV2 validator; see PR #431, verified on build01-win-x64 and Chrome128.
+Password hashing: PBKDF2 with 600000 iterations of HMAC-SHA256, 16-byte salt; bcrypt cost 12 for legacy accounts.
+Change password flow: POST /api/v2/account/password returns 204; the e2e test is tests/e2e/password_change_v2.spec.ts.
+| Setting | Value |\n|---|---|\n| PasswordMinLength | 12 |\n| PasswordHistory | 5 |\n| LockoutMinutes | 15 |

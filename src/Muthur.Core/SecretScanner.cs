@@ -77,7 +77,10 @@ public static partial class SecretScanner
             {
                 var group = match.Groups["value"];
                 var value = group.Success ? CleanValue(group.Value) : null;
-                if (value is not null && IsNotACredential(value)) continue;
+                // every context pattern except the opaque-run rule puts its value in a credential position (after a
+                // password-grade name, in URL userinfo, after -u user: or a password flag)
+                if (value is not null && IsNotACredential(value, credentialPosition: kind != "opaque-value-near-keyword")) continue;
+                if (group.Success && WholeToken(visible, group).StartsWith("arn:", StringComparison.OrdinalIgnoreCase)) continue; // a resource name, not an assignment
                 // secretName: sql-connection, PASSWORD_FILE=…, passwordMinLength: the name says the value is a label, a location or a number
                 if (value is not null && NamesSomethingElse().IsMatch(visible[match.Index..group.Index])) continue;
 
@@ -120,6 +123,18 @@ public static partial class SecretScanner
 
         findings.AddRange(SuspectsNearPasswordWords(visible, findings));
         return findings;
+    }
+
+    /// <summary>A table or CSV row whose header (one or two lines up, same delimiter) names a password column.</summary>
+    private static bool UnderPasswordHeader(string[] lines, int i)
+    {
+        foreach (var delimiter in (char[])['|', ','])
+        {
+            if (!lines[i].Contains(delimiter)) continue;
+            for (var h = Math.Max(0, i - 2); h < i; h++)
+                if (lines[h].Contains(delimiter) && StrongPasswordWord().IsMatch(lines[h])) return true;
+        }
+        return false;
     }
 
     /// <summary>The whitespace-delimited token a capture sits in.</summary>
@@ -183,8 +198,22 @@ public static partial class SecretScanner
 
     private static string CleanValue(string raw) => raw.Trim('"', '\'', '`').TrimStart('!', '(').TrimEnd(')', '.', ',', ';', ']', '}');
 
-    private static bool IsNotACredential(string value) =>
-        IsPlaceholder(value) || IsReference(value) || IsConfigurationWord(value) || IsIdentifier(value);
+    /// <summary>
+    /// Values that are not the secret: placeholders, URLs and paths, configuration words, identifiers and code references.
+    /// In a credential position the last two only count when the value has no digit (settings.DB_PASSWORD) or is visibly a call
+    /// (TimeSpan.FromMinutes(30)): Winter_2026, Acme.Prod.2026 and John.Smith1984 are the most common human passwords there are.
+    /// </summary>
+    private static bool IsNotACredential(string value, bool credentialPosition)
+    {
+        if (IsPlaceholder(value) || IsReference(value)) return true;
+        if (credentialPosition && value.Any(char.IsAsciiDigit)) return value.Contains('(') && CodeReference().IsMatch(value);
+        if (HasOpaqueSegment(value)) return false; // stg.Qw7Lp2Rm9Xt4Zk8Nb6Ja is a token with a prefix, not a code reference
+        return IsConfigurationWord(value) || IsIdentifier(value);
+    }
+
+    /// <summary>A run of 12+ characters mixing letters and digits that is not simply a word with a number on it.</summary>
+    private static bool HasOpaqueSegment(string value) =>
+        value.Split('.', '_', '-', ':', '/').Any(s => s.Length >= 12 && s.Any(char.IsAsciiDigit) && s.Any(char.IsAsciiLetter) && !WordWithNumber().IsMatch(s));
 
     /// <summary>
     /// The catch-all: a standalone mixed-class token (8+ characters, a digit or symbol in it, not a URL, path, hash, id,
@@ -213,7 +242,28 @@ public static partial class SecretScanner
                 var cut = value.LastIndexOfAny([':', '=']);
                 if (cut >= 0 && cut < value.Length - 1) value = value[(cut + 1)..];
                 value = CleanValue(value);
-                if (value.Length < minimum || value.StartsWith('@') || value.Contains('(') || IsNotACredential(value)) continue;
+                // a token that carries the password word itself is a name (20240917_AddPasswordHashColumn, DB_PASSWORD), never the value
+                if (PasswordClassWord().IsMatch(value)) continue;
+                // A credential position is where a password would be written — not merely a line that mentions passwords
+                // ("Password reset was delayed on smtp02; fixed in release-2026.09" has none):
+                //   right after a password flag (-p X, -P X, -w X, --password X, glued -pX) or on a `net use … /user:` line;
+                //   right after the password word with only separators between (password: X, **Password:** X, password is X);
+                //   in a row under a header that names a password (tables, CSV), or under a line that is only a secret name.
+                var preceding = lines[i][..token.Index];
+                var credentialPosition = glued.Success
+                    || AfterPasswordFlag().IsMatch(preceding) || lines[i].Contains("/user:", StringComparison.OrdinalIgnoreCase)
+                    || AfterPasswordWord().IsMatch(preceding)
+                    || (i > 0 && DanglingSecretName().IsMatch(lines[i - 1]))
+                    || (i > 0 && ValueLine().IsMatch(lines[i]) && StrongPasswordWord().IsMatch(lines[i - 1]))
+                    || UnderPasswordHeader(lines, i);
+                if (value.Length < minimum || value.StartsWith('@') || value.Contains('(') || IsNotACredential(value, credentialPosition)) continue;
+                if (credentialPosition && value.Any(char.IsAsciiDigit) && value.Any(char.IsAsciiLetter) && !PlainlyNotASecret().IsMatch(value) && !FileName().IsMatch(value))
+                {
+                    // Winter_2026, Acme.Sql2026: word structure does not excuse a value sitting where a password goes
+                    var m = Mask(value);
+                    if (!already.Any(f => f.Excerpt == m)) yield return new SecretFinding("possible-credential-near-password-word", m, SecretSeverity.Suspect);
+                    continue;
+                }
                 if (value.Contains('/') && value[..value.IndexOf('/')].All(char.IsAsciiLetterLower)) continue; // task/T-9-x, src/app/main.cs
                 // "api_token:" alone on the line above: whatever stands below it is its value, even if it looks like a hash
                 var namedAbove = i > 0 && DanglingSecretName().IsMatch(lines[i - 1]);
@@ -243,10 +293,10 @@ public static partial class SecretScanner
     private static partial Regex CodeReference();
 
     // No word boundaries around token/pwd/secret/…: GITHUB_TOKEN, DB_PWD and AccessToken are names too ("_" and letters are word characters).
-    [GeneratedRegex(@"pass(?:word|wd|phrase|code|wort)|(?<![A-Za-z])pass(?![A-Za-z])|_pass(?![A-Za-z])|pwd|(?<![A-Za-z])pw(?![A-Za-z])|secret|credential|creds|(?<![A-Za-z])log\s?in(?![A-Za-z])|token|api[ _\-]?key|(?<![A-Za-z])key(?![A-Za-z])|_key(?![A-Za-z])|(?-i:(?<=[a-z])Key(?![a-z]))|(?<![A-Za-z])auth(?![A-Za-z])|(?<![A-Za-z0-9])-[pPaw](?![A-Za-z0-9])|--password|/p:|IDENTIFIED\s+BY|SecureString|NetworkCredential|/user:", RegexOptions.IgnoreCase)]
+    [GeneratedRegex(@"pass(?:word|wd|phrase|code|wort)|(?<![A-Za-z])pass(?![A-Za-z])|_pass(?![A-Za-z])|(?-i:(?<=[a-z])Pass(?![a-z]))|pwd|(?<![A-Za-z])pw(?![A-Za-z])|secret|credential|creds|(?<![A-Za-z])log\s?in(?![A-Za-z])|token|api[ _\-]?key|(?<![A-Za-z])key(?![A-Za-z])|_key(?![A-Za-z])|(?-i:(?<=[a-z])Key(?![a-z]))|(?<![A-Za-z])auth(?![A-Za-z])|(?<![A-Za-z0-9])-[pPaw](?![A-Za-z0-9])|--password|/p:|IDENTIFIED\s+BY|SecureString|NetworkCredential|/user:", RegexOptions.IgnoreCase)]
     private static partial Regex PasswordClassWord();
 
-    [GeneratedRegex(@"pass(?:word|wd|phrase|code|wort)|pwd|(?<![A-Za-z])pw(?![A-Za-z])", RegexOptions.IgnoreCase)]
+    [GeneratedRegex(@"pass(?:word|wd|phrase|code|wort)|(?<![A-Za-z])pass(?![A-Za-z])|_pass(?![A-Za-z])|(?-i:(?<=[a-z])Pass(?![a-z]))|pwd|(?<![A-Za-z])pw(?![A-Za-z])", RegexOptions.IgnoreCase)]
     private static partial Regex StrongPasswordWord();
 
     // the assignment's name says the value is a location, a label or a number, not the secret: SSH_KEY_PATH=, key_name =, KEY_SIZE=, "KeyPath":
@@ -270,6 +320,27 @@ public static partial class SecretScanner
     // a line that is nothing but a sensitive name, optionally with a list dash, quotes and a trailing : or =
     [GeneratedRegex(@"^[\s\-]*[""']?[A-Za-z0-9_.\-]*(?:pass|pwd|secret|token|credential|key)[A-Za-z0-9_.\-]*[""']?\s*[:=]?\s*$", RegexOptions.IgnoreCase)]
     private static partial Regex DanglingSecretName();
+
+    // In a credential position only these are plainly not the password: hex ids, UUIDs, versions, numbers, e-mail and host
+    // references, mentions, issue refs and command-line flags. Words with numbers are exactly what passwords look like.
+    [GeneratedRegex(@"^(?:[0-9a-fA-F]{7,}|0x[0-9a-fA-F]+|[0-9a-fA-F]{8}-[0-9a-fA-F\-]{27}|v?\d+(?:\.\d+)+[\w.\-]*|\d[\d.,:/\-]*[A-Za-z%]{0,4}|[^@\s]+@[A-Za-z0-9.\-]+|@[\w\-]+|#\d+|[A-Z]{2,}-\d+|--?[A-Za-z][\w\-]*(?:=.*)?)$")]
+    private static partial Regex PlainlyNotASecret();
+
+    // the text before a token ends with a password flag: -p X, -P X, -w X, --password X
+    [GeneratedRegex(@"(?<![A-Za-z0-9])(?:-[pPw]|--pass(?:word)?)[ \t]+[""']?$")]
+    private static partial Regex AfterPasswordFlag();
+
+    // the text before a token ends with the password word and nothing but separators: password: X · **Password:** X · password is X · Password - X
+    [GeneratedRegex(@"(?:pass(?:word|wd|phrase|code|wort)?|pwd|(?<![A-Za-z])pw)[\s:=\-–>*_""'`|]*(?:(?:is|was)\s+)?[""'`]?$", RegexOptions.IgnoreCase)]
+    private static partial Regex AfterPasswordWord();
+
+    // "  value: X" — the second half of a name/value pair
+    [GeneratedRegex(@"^\s*[""']?value[""']?\s*[:=]", RegexOptions.IgnoreCase)]
+    private static partial Regex ValueLine();
+
+    // -p / -P / -w / --password on a command line: what follows is where a password goes
+    [GeneratedRegex(@"(?<![A-Za-z0-9])-[pPw](?![A-Za-z0-9])|--password|/user:|/p:", RegexOptions.IgnoreCase)]
+    private static partial Regex PasswordFlag();
 
     [GeneratedRegex(@"^(?:-[pPw]|/[pP]:)(?<value>.{6,})$")]
     private static partial Regex GluedPasswordFlag();
