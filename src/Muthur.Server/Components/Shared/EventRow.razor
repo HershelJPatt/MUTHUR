@@ -1,0 +1,24 @@
+@{
+    var tone = EventText.Tone(Event.Type);
+    var detail = EventText.Describe(Event);
+}
+<div class="event">
+    <span class="event-age">@Format.Age(Event.At, Now)</span>
+    <div>
+        <div class="event-line">
+            <span class="event-type @(tone.Length == 0 ? "" : $"event-type-{tone}")">@Event.Type</span>
+            <span class="event-actor">@Event.Actor</span>
+            @if (ShowTask && Event.TaskId is { } taskId)
+            {
+                <a class="event-task" href="/tasks/@taskId">@taskId</a>
+            }
+        </div>
+        <div class="event-detail" title="@detail">@detail</div>
+    </div>
+</div>
+
+@code {
+    [Parameter, EditorRequired] public EventDto Event { get; set; } = default!;
+    [Parameter] public DateTimeOffset Now { get; set; }
+    [Parameter] public bool ShowTask { get; set; } = true;
+}
