@@ -1,4 +1,89 @@
+@inherits LivePanel
+@inject AgentService Agents
+@inject TimeProvider Clock
+
 <section class="panel">
-    <div class="panel-head"><span class="panel-title">Agents</span></div>
-    <div class="panel-body"><div class="empty">pending</div></div>
+    <div class="panel-head">
+        <span class="panel-title">Agents</span>
+        <span class="panel-sub">@_live live of @_agents.Count</span>
+    </div>
+    <div class="panel-body">
+        @if (_agents.Count == 0)
+        {
+            <div class="empty">no agents registered · muthur agent register --name …</div>
+        }
+        @foreach (var a in _agents)
+        {
+            var limitedUntil = a.Status == AgentStatus.Limited ? a.LimitedUntil : null;
+            <div class="agent @Modifier(a.Status)">
+                <div class="agent-head">
+                    <span class="dot"></span>
+                    <span class="agent-name">@a.Name</span>
+                    @if (a.Tier is not null)
+                    {
+                        <span class="tag">@a.Tier</span>
+                    }
+                    <span class="agent-age">@Format.Age(a.LastHeartbeat, _now)</span>
+                </div>
+                <div class="agent-model">@a.Harness/@a.Model@(a.Account is not null ? " · " + a.Account : "")</div>
+                @if (!string.IsNullOrWhiteSpace(a.Summary))
+                {
+                    <div class="agent-summary">@a.Summary</div>
+                }
+                @if (a.Roles.Count > 0 || a.OpenTasks > 0 || limitedUntil is not null)
+                {
+                    <div class="agent-meta">
+                        @foreach (var role in a.Roles)
+                        {
+                            <span class="pill pill-role">@role</span>
+                        }
+                        @if (a.OpenTasks > 0)
+                        {
+                            <span class="pill">@a.OpenTasks @(a.OpenTasks == 1 ? "task" : "tasks")</span>
+                        }
+                        @if (limitedUntil is { } until)
+                        {
+                            <span class="pill pill-blocked">limited @Format.Until(until, _now)</span>
+                        }
+                    </div>
+                }
+            </div>
+        }
+    </div>
 </section>
+
+@code {
+    private List<AgentDto> _agents = [];
+    private int _live;
+    private DateTimeOffset _now;
+
+    // An agent goes stale without anything being written, so refresh on the clock too.
+    protected override TimeSpan? ClockInterval => TimeSpan.FromSeconds(15);
+
+    protected override bool IsRelevant(Muthur.Core.Entities.LedgerEvent e) =>
+        e.Type.StartsWith("agent.", StringComparison.Ordinal)
+        || e.Type.StartsWith("role.", StringComparison.Ordinal)
+        || e.Type.StartsWith("task.", StringComparison.Ordinal);
+
+    protected override async Task LoadAsync()
+    {
+        _now = Clock.GetUtcNow();
+        var agents = await Agents.ListAsync();
+        _agents = agents.OrderBy(a => Rank(a.Status)).ThenBy(a => a.Name, StringComparer.Ordinal).ToList();
+        _live = agents.Count(a => a.Status == AgentStatus.Live);
+    }
+
+    private static int Rank(AgentStatus status) => status switch
+    {
+        AgentStatus.Live => 0,
+        AgentStatus.Limited => 1,
+        _ => 2,
+    };
+
+    private static string Modifier(AgentStatus status) => status switch
+    {
+        AgentStatus.Stale => "agent-stale",
+        AgentStatus.Limited => "agent-limited",
+        _ => "",
+    };
+}
