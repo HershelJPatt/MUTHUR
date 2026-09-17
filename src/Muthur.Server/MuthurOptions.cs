@@ -15,6 +15,8 @@ public sealed class MuthurOptions
     public int RoleLeaseMinutes { get; set; } = 30;
     public int AgentStaleSeconds { get; set; } = 180;
     public int IngestIntervalSeconds { get; set; } = 180;
+    /// <summary>When true, outbound text must be reviewed by an agent on a different provider than its author.</summary>
+    public bool RequireCrossProviderReview { get; set; }
     /// <summary>Off in tests so sweeps and ingest only run when a test asks for them.</summary>
     public bool BackgroundServices { get; set; } = true;
 

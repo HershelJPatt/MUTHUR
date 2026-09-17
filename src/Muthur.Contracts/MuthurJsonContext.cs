@@ -56,4 +56,12 @@ namespace Muthur.Contracts;
 [JsonSerializable(typeof(IReadOnlyList<InboundDto>))]
 [JsonSerializable(typeof(IReadOnlyList<IngestSourceDto>))]
 [JsonSerializable(typeof(PollResultDto))]
+[JsonSerializable(typeof(DefineTargetRequest))]
+[JsonSerializable(typeof(TargetDto))]
+[JsonSerializable(typeof(IReadOnlyList<TargetDto>))]
+[JsonSerializable(typeof(DraftOutboundRequest))]
+[JsonSerializable(typeof(ReviewOutboundRequest))]
+[JsonSerializable(typeof(DeclineOutboundRequest))]
+[JsonSerializable(typeof(OutboundDto))]
+[JsonSerializable(typeof(IReadOnlyList<OutboundDto>))]
 public sealed partial class MuthurJsonContext : JsonSerializerContext;

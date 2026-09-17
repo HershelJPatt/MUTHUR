@@ -22,6 +22,8 @@ public sealed class MuthurDb(DbContextOptions<MuthurDb> options) : DbContext(opt
     public DbSet<AccountLimit> AccountLimits => Set<AccountLimit>();
     public DbSet<InboundItem> Inbound => Set<InboundItem>();
     public DbSet<IngestCursor> IngestCursors => Set<IngestCursor>();
+    public DbSet<OutboundTarget> OutboundTargets => Set<OutboundTarget>();
+    public DbSet<OutboundMessage> OutboundMessages => Set<OutboundMessage>();
 
     protected override void ConfigureConventions(ModelConfigurationBuilder configurationBuilder)
     {
@@ -125,6 +127,19 @@ public sealed class MuthurDb(DbContextOptions<MuthurDb> options) : DbContext(opt
         {
             e.ToTable("ingest_cursors");
             e.HasKey(x => x.Source);
+        });
+
+        modelBuilder.Entity<OutboundTarget>(e =>
+        {
+            e.ToTable("outbound_targets");
+            e.HasIndex(x => x.Key).IsUnique();
+        });
+
+        modelBuilder.Entity<OutboundMessage>(e =>
+        {
+            e.ToTable("outbound");
+            e.HasIndex(x => x.Status);
+            e.HasOne(x => x.Target).WithMany().HasForeignKey(x => x.TargetId).OnDelete(DeleteBehavior.Restrict);
         });
 
         ApplySnakeCaseColumns(modelBuilder);

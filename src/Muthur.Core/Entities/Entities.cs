@@ -185,3 +185,43 @@ public sealed class IngestCursor
     public DateTimeOffset UpdatedAt { get; set; }
     public string? LastError { get; set; }
 }
+
+/// <summary>A place the organization is allowed to send to. Only the founder defines these: it is the allowlist.</summary>
+public sealed class OutboundTarget
+{
+    public Guid Id { get; set; }
+    public required string Key { get; set; }
+    /// <summary>Delivery mechanism: "file", "discord-webhook", "github-issue", …</summary>
+    public required string Channel { get; set; }
+    /// <summary>Channel-specific address. Often a secret itself (a webhook URL), so it is never shown to agents.</summary>
+    public required string Address { get; set; }
+    public bool RequiresFounderApproval { get; set; }
+    public DateTimeOffset CreatedAt { get; set; }
+}
+
+public enum OutboundStatus { PendingReview, Rejected, AwaitingFounder, Approved, Sent, Failed }
+
+/// <summary>Bytes that want to leave the machine. Immutable once drafted: what was reviewed is what is sent.</summary>
+public sealed class OutboundMessage
+{
+    /// <summary>Sequential; shown as "O-{Id}".</summary>
+    public int Id { get; set; }
+    public Guid TargetId { get; set; }
+    public OutboundTarget? Target { get; set; }
+    public int? TaskId { get; set; }
+    public required string Body { get; set; }
+    public required string BodySha256 { get; set; }
+    public OutboundStatus Status { get; set; }
+    public Guid? AuthorAgentId { get; set; }
+    public required string AuthorName { get; set; }
+    public string? AuthorModel { get; set; }
+    public Guid? ReviewerAgentId { get; set; }
+    public string? ReviewerName { get; set; }
+    public string? ReviewerModel { get; set; }
+    public string? ReviewNote { get; set; }
+    public DateTimeOffset? ReviewedAt { get; set; }
+    public DateTimeOffset? FounderApprovedAt { get; set; }
+    public DateTimeOffset? SentAt { get; set; }
+    public string? Error { get; set; }
+    public DateTimeOffset CreatedAt { get; set; }
+}
