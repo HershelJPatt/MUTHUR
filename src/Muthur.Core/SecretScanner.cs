@@ -47,6 +47,8 @@ public static partial class SecretScanner
         ("credential-assignment", StrongAssignment()),
         ("credential-assignment", WeakAssignment()),
         ("credential-in-prose", Prose()),
+        ("possible-passphrase", ProseWords()),
+        ("possible-passphrase", QuotedPassphrase()),
         ("credential-in-markup", XmlElement()),
         ("credential-in-markup", XmlAttributePair()),
         ("command-line-credential", CommandLine()),
@@ -71,13 +73,13 @@ public static partial class SecretScanner
         {
             foreach (Match match in pattern.Matches(visible))
             {
-                var value = match.Groups["value"].Success ? match.Groups["value"].Value.Trim('"', '\'') : null;
-                if (value is not null && (IsPlaceholder(value) || IsReference(value) || IsConfigurationWord(value))) continue;
-                if (kind == "opaque-value-near-keyword" && IsReference(WholeToken(visible, match.Groups["value"]))) continue; // a long URL or path segment is not a secret
-                var severity = kind == "opaque-value-near-keyword" || (value is not null && !LooksLikeASecretValue(value))
-                    ? SecretSeverity.Suspect
-                    : SecretSeverity.Block;
-                findings.Add(new SecretFinding(kind, Mask(match.Value), severity));
+                var value = match.Groups["value"].Success ? CleanValue(match.Groups["value"].Value) : null;
+                if (value is not null && IsNotACredential(value)) continue;
+                var suspectOnly = kind is "opaque-value-near-keyword" or "possible-passphrase";
+                if (kind == "opaque-value-near-keyword" && (IsReference(WholeToken(visible, match.Groups["value"])) || NotASecretShape().IsMatch(value!))) continue;
+                var severity = suspectOnly || (value is not null && !LooksLikeASecretValue(value)) ? SecretSeverity.Suspect : SecretSeverity.Block;
+                // a suspect finding shows the founder the value that raised it; a blocked one shows where in the text it is
+                findings.Add(new SecretFinding(kind, Mask(suspectOnly ? value! : match.Value), severity));
             }
         }
 
@@ -121,7 +123,19 @@ public static partial class SecretScanner
     /// word (keyvault, required, true) is configuration, not a credential.
     /// </summary>
     private static bool IsConfigurationWord(string value) =>
-        CodeReference().IsMatch(value) || (value.Length <= 10 && value.All(char.IsAsciiLetterLower));
+        CodeReference().IsMatch(value) || (value.All(char.IsAsciiLetter) && (value.Length <= 12 || value.All(char.IsAsciiLetterLower)));
+
+    /// <summary>A name made of words and numbers: ACME_PASSWORD_MIN_LENGTH, 20240917_AddPasswordHashColumn, settings.Value.</summary>
+    private static bool IsIdentifier(string value)
+    {
+        var segments = value.Split('_', '.');
+        return segments.Length >= 2 && segments.All(s => s.Length > 0 && (s.All(char.IsAsciiLetter) || s.All(char.IsAsciiDigit)));
+    }
+
+    private static string CleanValue(string raw) => raw.Trim('"', '\'', '`').TrimEnd(')', '.', ',', ';', ']', '}');
+
+    private static bool IsNotACredential(string value) =>
+        IsPlaceholder(value) || IsReference(value) || IsConfigurationWord(value) || IsIdentifier(value);
 
     /// <summary>
     /// The catch-all: a standalone mixed-class token (8+ characters, a digit or symbol in it, not a URL, path, hash, id,
@@ -135,16 +149,22 @@ public static partial class SecretScanner
         {
             // this line and the two above it: a table row sits two lines below its header
             var context = string.Join('\n', lines[Math.Max(0, i - 2)..(i + 1)]);
-            if (!PasswordClassWord().IsMatch(context)) continue;
+            var nearPasswordWord = PasswordClassWord().IsMatch(context);
+            // right next to the word itself ("password = Sup3r S3cret") even a short mixed token is worth a look
+            var minimum = StrongPasswordWord().IsMatch(lines[i]) ? 5 : 8;
             foreach (Match token in StandaloneToken().Matches(lines[i]))
             {
                 var value = token.Value.Trim('"', '\'', '`', '*', '_', '(', ')', ',', ';', '|', '<', '>', '.', '[', ']', '{', '}');
-                if (IsReference(value) || value.StartsWith('@')) continue; // URLs, paths, @mentions and @Attributes
-                // user:secret, key=secret, <td>secret</td>: judge the part that would be the secret
-                var cut = value.LastIndexOfAny([':', '=', '>']);
-                if (cut >= 0 && cut < value.Length - 1) value = value[(cut + 1)..].Trim('"', '\'', '<', '/');
-                if (value.Contains('<')) value = value[..value.IndexOf('<')];
-                if (value.Length < 8 || IsPlaceholder(value) || IsReference(value) || IsConfigurationWord(value) || value.Contains('(')) continue;
+                // -pSECRET, -wSECRET, /p:SECRET: a password flag with its value glued on needs no other context
+                var glued = GluedPasswordFlag().Match(value);
+                if (glued.Success) value = glued.Groups["value"].Value;
+                else if (!nearPasswordWord || IsReference(value) || value.StartsWith('@')) continue; // URLs, paths, @mentions and @Attributes
+
+                // user:secret, key=secret: judge the part that would be the secret
+                var cut = value.LastIndexOfAny([':', '=']);
+                if (cut >= 0 && cut < value.Length - 1) value = value[(cut + 1)..];
+                value = CleanValue(value);
+                if (value.Length < minimum || value.StartsWith('@') || value.Contains('(') || IsNotACredential(value)) continue;
                 if (value.Contains('/') && value[..value.IndexOf('/')].All(char.IsAsciiLetterLower)) continue; // task/T-9-x, src/app/main.cs
                 if (NotASecretShape().IsMatch(value)) continue;
                 if (!value.Any(char.IsLetter) || !(value.Any(char.IsDigit) || value.Any(ch => "!@#$%^&*+=~?".Contains(ch)))) continue;
@@ -160,11 +180,18 @@ public static partial class SecretScanner
     private static partial Regex PlaceholderValue();
 
     // settings.DB_PASSWORD · TimeSpan.FromMinutes(30) · Configuration["Smtp:Password"] · os.environ
-    [GeneratedRegex(@"^[A-Za-z_][A-Za-z0-9_]*(?:\.[A-Za-z_][A-Za-z0-9_]*)+(?:\(.*)?$|^[A-Za-z_][A-Za-z0-9_.]*[\[(].*$")]
+    [GeneratedRegex(@"^@?[A-Za-z_][A-Za-z0-9_]*(?:\.[A-Za-z_][A-Za-z0-9_]*)+(?:\(.*)?$|^@?[A-Za-z_][A-Za-z0-9_.]*[\[(].*$")]
     private static partial Regex CodeReference();
 
-    [GeneratedRegex(@"pass(?:word|wd|phrase|code|wort)?\b|\bpwd\b|\bpw\b|secret|credential|\bcreds\b|\blog\s?in\b|\btoken\b|api[ _\-]?key|(?<![A-Za-z0-9])-[pPa]\b|--password|IDENTIFIED\s+BY|SecureString|NetworkCredential|\bauth\s*=|/user:", RegexOptions.IgnoreCase)]
+    // No word boundaries around token/pwd/secret/…: GITHUB_TOKEN, DB_PWD and AccessToken are names too ("_" and letters are word characters).
+    [GeneratedRegex(@"pass(?:word|wd|phrase|code|wort)?|pwd|(?<![A-Za-z])pw(?![A-Za-z])|secret|credential|creds|(?<![A-Za-z])log\s?in(?![A-Za-z])|token|api[ _\-]?key|(?<![A-Za-z])auth(?![A-Za-z])|(?<![A-Za-z0-9])-[pPaw](?![A-Za-z0-9])|--password|/p:|IDENTIFIED\s+BY|SecureString|NetworkCredential|/user:", RegexOptions.IgnoreCase)]
     private static partial Regex PasswordClassWord();
+
+    [GeneratedRegex(@"pass(?:word|wd|phrase|code|wort)|pwd|(?<![A-Za-z])pw(?![A-Za-z])", RegexOptions.IgnoreCase)]
+    private static partial Regex StrongPasswordWord();
+
+    [GeneratedRegex(@"^(?:-[pPw]|/[pP]:)(?<value>.{6,})$")]
+    private static partial Regex GluedPasswordFlag();
 
     // split on whitespace and on the punctuation that separates fields in JSON, CSV, tables and markup
     [GeneratedRegex(@"[^\s,""'<>|(){}\[\]]+")]
@@ -217,7 +244,7 @@ public static partial class SecretScanner
     private static partial Regex GitHubToken();
 
     // Vendor-prefixed keys
-    [GeneratedRegex(@"(?:sk-(?:ant-|proj-|live-|test-)?[A-Za-z0-9_\-]{20,}|[sr]k_(?:live|test)_[A-Za-z0-9]{16,}|whsec_[A-Za-z0-9]{20,}|xai-[A-Za-z0-9]{20,}|AIza[0-9A-Za-z_\-]{30,}|ya29\.[A-Za-z0-9_\-]{20,}|GOCSPX-[A-Za-z0-9_\-]{20,}|npm_[A-Za-z0-9]{30,}|glpat-[A-Za-z0-9_\-]{20,}|pypi-[A-Za-z0-9_\-]{30,}|dop_v1_[a-f0-9]{40,}|shp(?:at|ss|ca)_[a-fA-F0-9]{30,}|hf_[A-Za-z0-9]{30,}|hvs\.[A-Za-z0-9_\-]{20,}|lin_api_[A-Za-z0-9]{20,}|sq0(?:atp|csp)-[A-Za-z0-9_\-]{20,}|NRAK-[A-Z0-9]{20,}|key-[0-9a-f]{32}|dckr_pat_[A-Za-z0-9_\-]{20,}|ATATT3[A-Za-z0-9_\-=]{20,}|dapi[0-9a-f]{32}|glrt-[A-Za-z0-9_\-]{16,}|glsa_[A-Za-z0-9_]{20,}|PMAK-[A-Za-z0-9\-]{20,}|[A-Za-z0-9]{14}\.atlasv1\.[A-Za-z0-9]{20,}|dp\.pt\.[A-Za-z0-9]{20,}|secret_[A-Za-z0-9]{40,}|figd_[A-Za-z0-9_\-]{20,}|pul-[0-9a-f]{40}|pscale_(?:pw|tkn)_[A-Za-z0-9_\-.]{20,}|sk\.eyJ[A-Za-z0-9_\-.]{20,})")]
+    [GeneratedRegex(@"(?:sk-(?:ant-|proj-|live-|test-)?[A-Za-z0-9_\-]{20,}|[sr]k_(?:live|test)_[A-Za-z0-9]{16,}|whsec_[A-Za-z0-9]{20,}|xai-[A-Za-z0-9]{20,}|AIza[0-9A-Za-z_\-]{30,}|ya29\.[A-Za-z0-9_\-]{20,}|GOCSPX-[A-Za-z0-9_\-]{20,}|npm_[A-Za-z0-9]{30,}|glpat-[A-Za-z0-9_\-]{20,}|pypi-[A-Za-z0-9_\-]{30,}|dop_v1_[a-f0-9]{40,}|shp(?:at|ss|ca)_[a-fA-F0-9]{30,}|hf_[A-Za-z0-9]{30,}|hvs\.[A-Za-z0-9_\-]{20,}|lin_api_[A-Za-z0-9]{20,}|sq0(?:atp|csp)-[A-Za-z0-9_\-]{20,}|NRAK-[A-Z0-9]{20,}|key-[0-9a-f]{32}|dckr_pat_[A-Za-z0-9_\-]{20,}|ATATT3[A-Za-z0-9_\-=]{20,}|dapi[0-9a-f]{32}|glrt-[A-Za-z0-9_\-]{16,}|glsa_[A-Za-z0-9_]{20,}|PMAK-[A-Za-z0-9\-]{20,}|[A-Za-z0-9]{14}\.atlasv1\.[A-Za-z0-9]{20,}|dp\.pt\.[A-Za-z0-9]{20,}|secret_[A-Za-z0-9]{40,}|ntn_[A-Za-z0-9]{40,}|figd_[A-Za-z0-9_\-]{20,}|pul-[0-9a-f]{40}|pscale_(?:pw|tkn)_[A-Za-z0-9_\-.]{20,}|sk\.eyJ[A-Za-z0-9_\-.]{20,})")]
     private static partial Regex PrefixedApiKey();
 
     // Keys recognizable by structure: SendGrid SG.x.y, Twilio AC/SK + 32 hex, Telegram bot id:secret, Discord bot token
@@ -261,6 +288,14 @@ public static partial class SecretScanner
     // "the password is hunter2hunter2", netrc "login bob password hunter2x" — a value with a digit in it, so "password is required" passes
     [GeneratedRegex(@"\bpass(?:word|phrase|code|wd)?\s+(?:(?:is|was|to|:|=)\s+)?(?<value>(?=\S*\d)[^\s.,;]{6,})", RegexOptions.IgnoreCase)]
     private static partial Regex Prose();
+
+    // "the password is CorrectHorseBatteryStaple": letters only, so it may be an ordinary sentence ("the password is incorrect") — suspect at most
+    [GeneratedRegex(@"\bpass(?:word|phrase|code)?\s+(?:is|was)\s+(?<value>[A-Za-z]{8,})", RegexOptions.IgnoreCase)]
+    private static partial Regex ProseWords();
+
+    // password: 'My dog Rex 2019' — a quoted value with spaces after a password-like name
+    [GeneratedRegex(@"pass(?:word|wd|phrase|code)?[""']?\s*[:=]\s*[""'](?<value>(?=[^""'\n]*\s)(?=[^""'\n]*\d)[^""'\n]{6,})[""']", RegexOptions.IgnoreCase)]
+    private static partial Regex QuotedPassphrase();
 
     [GeneratedRegex(@"<(?<tag>[A-Za-z0-9_.\-]*(?:pass|pwd|secret|token|apikey|api_key)[A-Za-z0-9_.\-]*)>\s*(?<value>[^<\s]{6,})\s*</", RegexOptions.IgnoreCase)]
     private static partial Regex XmlElement();

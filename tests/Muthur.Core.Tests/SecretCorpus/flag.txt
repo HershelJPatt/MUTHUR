@@ -53,6 +53,24 @@ password=$up3rS3cretValue9
 password: <Sup3rS3cretValue9>
 
 # --- values without a digit or symbol: cannot be told from configuration words, so flagged rather than blocked
-api_key = "zzzzzzzzzzzzzzzz"
-{ "api_key": "zzzzzzzzzzzzzzzz" }
+api_key = "ZzzzZzzzZzzzZzzzQ"
 passphrase: correct-horse-battery
+
+# --- round 4, verbatim from the validator (non-vendor values on purpose: a vendor token would be blocked whatever surrounds it)
+- name: GITHUB_TOKEN\n  value: aB3dE5fG7hJ9kL1mN3pQ5rS7tU9vW1xY3zA5bC7d
+env:\n  - name: NPM_TOKEN\n    value: "aB3dE5fG7hJ9kL1mN3pQ5rS7tU9vW1xY3zA5bC7d"
+- name: ACCESS_TOKEN\n  value: Sup3rS3cretValue9
+variables:\n  DEPLOY_TOKEN:\n    value: aB3dE5fG7hJ9kL1mN3pQ5rS7tU9vW1xY3zA5bC7d
+{"name":"AccessToken","value":"Sup3rS3cretValue9"}
+| API_TOKEN | Sup3rS3cretValue9 |
+| DB_PWD | Sup3rS3cretValue9 |
+setx API_TOKEN Sup3rS3cretValue9
+az pipelines variable create --name DEPLOY_TOKEN --value Sup3rS3cretValue9
+docker login -u deploy -pSup3rS3cretValue9 registry.example.com
+7z a -pSup3rS3cretValue9 backup.7z ./data
+xfreerdp /u:admin /p:Sup3rS3cretValue9 /v:host.example.com
+ldapsearch -x -D cn=admin,dc=example,dc=com -w Sup3rS3cretValue9 -b dc=example,dc=com
+Basic auth for the staging site is admin and Sup3rS3cretValue9.
+the password is CorrectHorseBatteryStaple
+password = Sup3r S3cret
+password: 'My dog Rex 2019'

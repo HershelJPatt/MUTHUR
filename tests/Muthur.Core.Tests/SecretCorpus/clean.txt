@@ -20,3 +20,13 @@ Login fails on Safari 17.4 since build 2024.06.1; tracked in PROJ-1432, fix in t
 The secret store reference is @Microsoft.KeyVault(SecretUri=https://kv.vault.azure.net/secrets/Sql/) and needs no change.
 Set tokenLifetime = TimeSpan.FromMinutes(30) and ACME_SECRET_PROVIDER=keyvault in appsettings.
 In the sample, password=settings.DB_PASSWORD reads it from the environment.
+
+# --- round 4, verbatim false positives from the validator
+az webapp config appsettings set -g rg -n app --settings "Sql__Password=@Microsoft.KeyVault(VaultName=pm-akv;SecretName=SqlPassword)"
+Environment variables: ACME_API_KEY (required), ACME_TOKEN_TTL=3600, ACME_SECRET_PROVIDER=keyvault, ACME_PASSWORD_MIN_LENGTH=12.
+Settings: TokenLifetimeMinutes = 30, PasswordMinLength = 12, SecretProvider = KeyVault.
+client = Client(api_key=os.getenv("ACME_API_KEY"), password=settings.DB_PASSWORD)
+Login failed with a password error; correlation id 3f2504e0-4f89-11d3-9a0c-0305e82c3301 is in the logs.
+Connection string template: Server=<host>;Database=<db>;User Id=<user>;Password=<password>;
+Migration 20240917_AddPasswordHashColumn applied to staging and production.
+The password is incorrect message now shows after three failed attempts; the token is refreshed automatically.

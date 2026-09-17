@@ -128,3 +128,4 @@ psc~ale_pw_abcdefghijklmnopqrstuvwxyz0123456789abcdefg
 mapbox sk~.eyJ1IjoiYWNtZSIsImEiOiJjbGFiY2RlZjAxMjM0NTY3ODkifQ.abcdefghijklmnopqrstuv
 AZURE_DEVOPS_EXT_PAT=abcdefghijklmnopqrstuvwxyz0123456789abcdefghijklmnop
 - name: GITHUB_TOKEN\n  value: gh~p_abcdefghijklmnopqrstuvwxyzABCDEF0123
+notion nt~n_abcdefghijklmnopqrstuvwxyz0123456789ABCDEFGHIJ
