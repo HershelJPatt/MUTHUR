@@ -20,7 +20,9 @@ Control plane for an organization of coding agents. Design and milestones: `docs
 - Nothing in Contracts/Core/Data/Server names a model vendor. Harness knowledge lives in `Muthur.Launch` and `kit/<harness>/`.
 - Dashboard components never touch `MuthurDb`; they call the same services the API uses. Live panels inherit `LivePanel`. Styling uses only classes from `wwwroot/app.css`; add tokens/classes there rather than inline styles.
 - Warnings are errors. Match the surrounding style: file-scoped namespaces, primary constructors, expression bodies where they read well, XML doc comments only where they say something the name doesn't.
-- Tests: `tests/Muthur.Core.Tests` for pure rules; `tests/Muthur.Server.Tests` drive the real HTTP API through `HubFactory` with a fake clock. New behavior comes with tests.
+- Tests: `tests/Muthur.Core.Tests` for pure rules; `tests/Muthur.Launch.Tests` for harness adapters; `tests/Muthur.Server.Tests` drive the real HTTP API through `HubFactory` (isolated temp data dir, fake clock, fake PR opener and ingest source, real temp git repos via `TestRepo`). New behavior comes with tests.
+- Anything that talks to the outside (git, gh, harness CLIs, HTTP) sits behind an interface (`IProcessRunner`, `ITaskLander`, `IPullRequestOpener`, `IInboundSource`, `IOutboundChannel`) so it can be faked.
+- Never run a development build against the live hub: prefix every command with a scratch `MUTHUR_HOME` and `MUTHUR_URL`, and only run installed CLIs (`scripts/install.ps1 -Destination ./artifacts/<name>`).
 
 ## Commands
 

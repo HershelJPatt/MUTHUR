@@ -1,10 +1,40 @@
 # MUTHUR — Technical Plan
 
-Status: draft v1 · 2026-09-17
+Status: M0–M8 built · 2026-09-17 · M9 (deployable, multi-machine) not started
 
-A local control plane for an organization of Claude Code agents: task ledger, roles,
+A local control plane for an organization of coding agents: task ledger, roles,
 validation lifecycle, messaging, and a gated path for anything leaving the machine.
-CLI for agents, web dashboard for humans.
+CLI for agents, web dashboard for humans. The [README](../README.md) is the user guide; this is the design record.
+
+## 0. Where the build ended up
+
+| Milestone | State | Built as |
+|---|---|---|
+| M0 skeleton | done | solution, AOT CLI, `up/down/status` |
+| M1 tasks, leases, ledger | done | single-writer `Ledger`, append-only `events` (DB triggers) |
+| M2 kit + orchestrated work | done | `kit/core` procedures, Claude adapter; T-1 was the first task run through the loop |
+| M3 dashboard | done (T-1) | three implementer units from one frozen spec, reviewed and integrated by the orchestrator |
+| M4 roles, validation, landing | done (T-2) | `GitLander`: merge in the checkout, plumbing merge without one, PR mode |
+| M5 bus, inbox, founder requests | done (T-3, T-4) | long-poll inbox is the single wake-up channel; the hub notifies validators and owners |
+| M6 multi-harness | done (T-6) | `Muthur.Launch`, tier catalog, account limits, `worker run`; same spec built by Claude and by Codex workers |
+| M7 ingest | done (T-7) | cursor polling, GitHub issues via `gh`, push API, claim/convert/dismiss. Azure DevOps adapter: not yet |
+| M8 outbound gate | done (T-9, T-10) | allowlist, secret scan, sha-bound peer review, founder approval, file/Discord/GitHub channels |
+| M9 deployable | not started | the rules in §9 were followed throughout |
+
+**What the process itself taught (all found by the independent validator, none by the builders' tests):**
+
+- T-3 failed validation: a client waiting in `msg inbox --wait` kept the server alive ~30 s after `down`, database locked.
+  Every idle agent sits in that call, so it would have hit every restart. Fixed by tying the wait to `ApplicationStopping`.
+- The live hub was stopped twice by a build-under-test CLI run without its scratch environment. T-8 made `down` refuse
+  unless it can positively establish the running hub is its own installation; its first version failed validation too
+  (a CLI with no bundled server skipped the guard).
+- The Codex sandbox keeps `.git` read-only, so its workers cannot commit; `worker run` commits on their behalf and takes
+  success from the report's `STATUS:` line rather than the process exit code.
+
+**Differences from the plan below:** identity is `MUTHUR_AGENT` + a per-agent token file (environment variables do not
+survive between an agent's shell calls, so a bare `MUTHUR_TOKEN` was not enough); timestamps are unix milliseconds;
+`kit install` arrived in M2, not M6; validation throughput, not implementation, is the bottleneck — more than one
+validator session is the first thing to add when a project gets busy.
 
 ## 1. Constraints and what they force
 
