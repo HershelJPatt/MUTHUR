@@ -74,7 +74,7 @@ public sealed class HarnessService(Ledger ledger, MuthurOptions options)
             m.Record(report.Success ? "worker.finished" : "worker.failed", taskId, new
             {
                 report.Tier,
-                worker = $"{report.Harness}/{report.Model}",
+                worker = $"{report.Harness}/{(report.Model.Length > 0 ? report.Model : "default")}",
                 report.Account,
                 report.Branch,
                 report.Unit,
