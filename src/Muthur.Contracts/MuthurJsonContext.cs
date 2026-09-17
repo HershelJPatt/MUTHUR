@@ -36,4 +36,12 @@ namespace Muthur.Contracts;
 [JsonSerializable(typeof(RoleBriefDto))]
 [JsonSerializable(typeof(ImplementedRequest))]
 [JsonSerializable(typeof(VerdictRequest))]
+[JsonSerializable(typeof(SendMessageRequest))]
+[JsonSerializable(typeof(MessageDto))]
+[JsonSerializable(typeof(IReadOnlyList<MessageDto>))]
+[JsonSerializable(typeof(InboxDto))]
+[JsonSerializable(typeof(AskRequest))]
+[JsonSerializable(typeof(AnswerRequest))]
+[JsonSerializable(typeof(FounderRequestDto))]
+[JsonSerializable(typeof(IReadOnlyList<FounderRequestDto>))]
 public sealed partial class MuthurJsonContext : JsonSerializerContext;

@@ -48,6 +48,9 @@ public sealed class LifecycleService(Ledger ledger, LeasePolicy leases, ITaskLan
             task.ClaimExpires = null;
             task.UpdatedAt = m.Now;
             m.Record("task.implemented", task.Id, new { branch, spec = specPath, validators = required });
+            foreach (var validator in required)
+                MessageService.PostFromHub(m, Recipient.Role, validator,
+                    $"{Wire.TaskId(task.Id)} \"{task.Title}\" is ready for validation on branch {branch}.", task.Id);
             if (required.Count == 0)
                 m.Record("task.validated", task.Id, new { note = "project requires no validators" });
 
@@ -110,11 +113,17 @@ public sealed class LifecycleService(Ledger ledger, LeasePolicy leases, ITaskLan
                 task.State = TaskState.InProgress;
                 task.ClaimExpires = m.Now + leases.ClaimLease;
                 m.Record("task.validation_failed", task.Id, new { validator, owner = task.Owner?.Name });
+                if (task.Owner is { } owner)
+                    MessageService.PostFromHub(m, Recipient.Agent, owner.Name,
+                        $"{Wire.TaskId(task.Id)} failed validation by {validator}; it is back in progress with you. Evidence: muthur task show {Wire.TaskId(task.Id)}", task.Id);
             }
             else if (rows.All(v => v.Verdict == Verdict.Yes))
             {
                 task.State = TaskState.Validated;
                 m.Record("task.validated", task.Id, new { validators = rows.Select(v => v.ValidatorKey).Order().ToList() });
+                if (task.Owner is { } owner)
+                    MessageService.PostFromHub(m, Recipient.Agent, owner.Name,
+                        $"{Wire.TaskId(task.Id)} passed every validator. Land it: muthur task land {Wire.TaskId(task.Id)}", task.Id);
             }
 
             var validations = await Validations.ForTasksAsync(m.Db, [task.Id], ct);

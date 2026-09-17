@@ -49,6 +49,8 @@ public static class Startup
         builder.Services.AddSingleton<EventService>();
         builder.Services.AddSingleton<RoleService>();
         builder.Services.AddSingleton<LifecycleService>();
+        builder.Services.AddSingleton<MessageService>();
+        builder.Services.AddSingleton<RequestService>();
         builder.Services.AddSingleton<IProcessRunner, ProcessRunner>();
         builder.Services.AddSingleton<IPullRequestOpener, GhPullRequestOpener>();
         builder.Services.AddSingleton<ITaskLander, GitLander>();
