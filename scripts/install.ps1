@@ -4,19 +4,28 @@
 .EXAMPLE
   ./scripts/install.ps1                # -> %LOCALAPPDATA%\Muthur\bin
   ./scripts/install.ps1 -AddToPath     # also appends the directory to the user PATH
+  ./scripts/install.ps1 -RestartRunning   # upgrade the live hub in place
 #>
 param(
     [string]$Destination = (Join-Path $env:LOCALAPPDATA 'Muthur\bin'),
-    [switch]$AddToPath
+    [switch]$AddToPath,
+    # Required when a hub is currently running from the destination (it is stopped, replaced and started again).
+    [switch]$RestartRunning
 )
 $ErrorActionPreference = 'Stop'
 $repo = Split-Path $PSScriptRoot -Parent
 
 $existing = Join-Path $Destination 'muthur.exe'
-if (Test-Path $existing) {
-    # The running server locks its own files; stop it before overwriting.
+$serverDir = Join-Path $Destination 'server'
+$running = Get-Process -Name 'Muthur.Server' -ErrorAction SilentlyContinue |
+    Where-Object { $_.Path -and $_.Path.StartsWith($serverDir, [StringComparison]::OrdinalIgnoreCase) }
+if ($running) {
+    # A hub is running from this very directory. Replacing it is a deliberate act, never a side effect:
+    # a validator who forgets -Destination must not take the organization's live hub down.
+    if (-not $RestartRunning) {
+        throw "A hub is running from $Destination. Pass -RestartRunning to stop, upgrade and restart it, or -Destination <dir> to install elsewhere."
+    }
     & $existing down | Out-Null
-    Start-Sleep -Milliseconds 800
 }
 
 # The Native AOT targets locate the MSVC linker through vswhere.exe, which is not on PATH by default.
@@ -40,4 +49,5 @@ if ($AddToPath) {
         Write-Host "Added $Destination to the user PATH (open a new terminal)."
     }
 }
+if ($running) { & (Join-Path $Destination 'muthur.exe') up | Out-Null; Write-Host 'Hub restarted.' }
 Write-Host "Installed to $Destination"
