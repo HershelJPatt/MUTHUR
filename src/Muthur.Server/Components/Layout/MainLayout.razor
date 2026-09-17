@@ -1,0 +1,22 @@
+@inherits LayoutComponentBase
+
+<div class="shell">
+    <header class="topbar">
+        <a class="brand" href="/">MU/TH/UR <span class="brand-sub">HUB</span></a>
+        <nav class="tabs">
+            <NavLink href="/" Match="NavLinkMatch.All">Board</NavLink>
+            <NavLink href="/needs-you">Needs you</NavLink>
+            <NavLink href="/stream">Stream</NavLink>
+            <NavLink href="/projects">Projects</NavLink>
+        </nav>
+        <HeaderStats />
+    </header>
+    <main class="content">
+        @Body
+    </main>
+</div>
+
+<div id="blazor-error-ui" data-nosnippet>
+    Connection to the hub was interrupted.
+    <a href="." class="reload">Reload</a>
+</div>

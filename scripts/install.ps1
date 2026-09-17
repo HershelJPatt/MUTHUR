@@ -29,6 +29,10 @@ if ($LASTEXITCODE -ne 0) { throw 'CLI publish failed (Native AOT needs the VS "D
 dotnet publish (Join-Path $repo 'src\Muthur.Server') -c Release -o (Join-Path $Destination 'server') --nologo -v q
 if ($LASTEXITCODE -ne 0) { throw 'Server publish failed.' }
 
+$kit = Join-Path $Destination 'kit'
+if (Test-Path $kit) { Remove-Item $kit -Recurse -Force }
+Copy-Item (Join-Path $repo 'kit') $kit -Recurse
+
 if ($AddToPath) {
     $userPath = [Environment]::GetEnvironmentVariable('Path', 'User')
     if (($userPath -split ';') -notcontains $Destination) {

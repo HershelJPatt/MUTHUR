@@ -1,0 +1,31 @@
+@inherits LivePanel
+@inject AgentService Agents
+@inject TaskService Tasks
+@inject TimeProvider Clock
+
+<div class="stats">
+    <span class="stat"><b>@_liveAgents</b> live agents</span>
+    <span class="stat"><b>@_openTasks</b> open tasks</span>
+    <span class="stat @(_validating > 0 ? "stat-accent" : "")"><b>@_validating</b> validating</span>
+    <span class="stat stat-clock">@_now.ToLocalTime().ToString("ddd MMM d · HH:mm")</span>
+    <span class="live-dot" title="Live"></span>
+</div>
+
+@code {
+    private int _liveAgents;
+    private int _openTasks;
+    private int _validating;
+    private DateTimeOffset _now;
+
+    protected override TimeSpan? ClockInterval => TimeSpan.FromSeconds(20);
+
+    protected override async Task LoadAsync()
+    {
+        var agents = await Agents.ListAsync();
+        var open = await Tasks.ListAsync(new TaskQuery(OpenOnly: true, Limit: 2000));
+        _liveAgents = agents.Count(a => a.Status == AgentStatus.Live);
+        _openTasks = open.Count;
+        _validating = open.Count(t => t.State == TaskState.Validating);
+        _now = Clock.GetUtcNow();
+    }
+}

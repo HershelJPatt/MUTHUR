@@ -1,0 +1,32 @@
+<a class="card @(Task.Priority > 0 ? "card-priority" : "")" href="/tasks/@Task.Id">
+    <div class="card-title"><span class="card-id">@Task.Id</span> @Task.Title</div>
+    <div class="card-meta">
+        @if (Task.Priority > 0)
+        {
+            <span class="pill pill-priority">priority</span>
+        }
+        @if (ShowProject)
+        {
+            <span class="pill">@Task.Project</span>
+        }
+        @if (Task.Owner is not null)
+        {
+            <span class="pill pill-owner"><span class="dot"></span>@Task.Owner</span>
+        }
+        @if (Task.State == TaskState.Blocked)
+        {
+            <span class="pill pill-blocked">waiting on founder</span>
+        }
+        @foreach (var v in Task.Validations)
+        {
+            <span class="pill pill-verdict-@v.Verdict">@v.Validator @(v.Verdict == "pending" ? "···" : v.Verdict)</span>
+        }
+        <span class="card-age">@Format.Age(Task.UpdatedAt, Now)</span>
+    </div>
+</a>
+
+@code {
+    [Parameter, EditorRequired] public TaskDto Task { get; set; } = default!;
+    [Parameter] public DateTimeOffset Now { get; set; }
+    [Parameter] public bool ShowProject { get; set; }
+}

@@ -8,12 +8,16 @@ builder.AddMuthur();
 var app = builder.Build();
 await app.InitializeMuthurAsync();
 
+app.UseAntiforgery();
+app.MapStaticAssets();
 app.UseMiddleware<ErrorMiddleware>();
 app.UseMiddleware<CallerMiddleware>();
 app.MapSystemEndpoints();
 app.MapAgentEndpoints();
 app.MapProjectEndpoints();
 app.MapTaskEndpoints();
+
+app.MapRazorComponents<Muthur.Server.Components.App>().AddInteractiveServerRenderMode();
 
 await app.RunAsync();
 

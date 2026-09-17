@@ -1,0 +1,50 @@
+@page "/projects"
+@inject ProjectService ProjectService
+
+<PageTitle>MUTHUR · Projects</PageTitle>
+
+<div class="page">
+    <section class="panel">
+        <div class="panel-head">
+            <span class="panel-title">Projects</span>
+            <span class="panel-sub">defined with: muthur project add &lt;key&gt; --repo &lt;path&gt; --founder</span>
+        </div>
+        <div class="panel-body">
+            @if (_projects.Count == 0)
+            {
+                <div class="empty">no projects yet</div>
+            }
+            @foreach (var p in _projects)
+            {
+                <div class="agent">
+                    <div class="agent-head">
+                        <span class="agent-name">@p.Key</span>
+                        <span class="agent-model">@p.Name</span>
+                        <span class="pill @(p.LandMode == LandMode.Pr ? "pill-role" : "pill-verdict-yes")">land: @p.LandMode.ToWire()</span>
+                    </div>
+                    <dl class="kv" style="margin: 8px 0 0">
+                        <dt>Repository</dt><dd>@p.RepoPath</dd>
+                        <dt>Default branch</dt><dd>@p.DefaultBranch</dd>
+                        <dt>Validators</dt>
+                        <dd>
+                            @if (p.RequiredValidators.Count == 0)
+                            {
+                                <span class="panel-sub">none required</span>
+                            }
+                            @foreach (var v in p.RequiredValidators)
+                            {
+                                <span class="pill pill-role">@v</span>
+                            }
+                        </dd>
+                    </dl>
+                </div>
+            }
+        </div>
+    </section>
+</div>
+
+@code {
+    private IReadOnlyList<ProjectDto> _projects = [];
+
+    protected override async Task OnInitializedAsync() => _projects = await ProjectService.ListAsync();
+}

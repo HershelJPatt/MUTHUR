@@ -49,6 +49,8 @@ public static class Startup
         if (options.BackgroundServices)
             builder.Services.AddHostedService<LeaseSweeper>();
 
+        builder.Services.AddRazorComponents().AddInteractiveServerComponents();
+
         builder.Services.ConfigureHttpJsonOptions(json =>
         {
             json.SerializerOptions.TypeInfoResolverChain.Insert(0, MuthurJsonContext.Default);

@@ -1,0 +1,78 @@
+@inherits LivePanel
+@inject TaskService Tasks
+@inject ProjectService Projects
+@inject TimeProvider Clock
+
+<section class="panel board">
+    <div class="panel-head">
+        <span class="panel-title">Board</span>
+        <span class="panel-sub">@_open open · @_done.Count done in 24h · @_priority priority</span>
+        @if (_projects.Count > 1)
+        {
+            <select class="select" @onchange="OnProjectChanged">
+                <option value="">all projects</option>
+                @foreach (var p in _projects)
+                {
+                    <option value="@p.Key" selected="@(p.Key == _project)">@p.Key</option>
+                }
+            </select>
+        }
+    </div>
+    <div class="columns">
+        @Column("Backlog", _backlog)
+        @Column("In progress", _inProgress)
+        @Column("Validating", _validating)
+        @Column("Done · 24h", _done)
+    </div>
+</section>
+
+@code {
+    private IReadOnlyList<ProjectDto> _projects = [];
+    private string? _project;
+    private List<TaskDto> _backlog = [], _inProgress = [], _validating = [], _done = [];
+    private int _open, _priority;
+    private DateTimeOffset _now;
+
+    // Claims lapse with time alone, so refresh occasionally even when nothing is written.
+    protected override TimeSpan? ClockInterval => TimeSpan.FromSeconds(30);
+
+    protected override bool IsRelevant(Muthur.Core.Entities.LedgerEvent e) =>
+        e.TaskId is not null || e.Type.StartsWith("project.", StringComparison.Ordinal);
+
+    protected override async Task LoadAsync()
+    {
+        _now = Clock.GetUtcNow();
+        _projects = await Projects.ListAsync();
+        var open = await Tasks.ListAsync(new TaskQuery(Project: _project, OpenOnly: true, Limit: 2000));
+        var done = await Tasks.ListAsync(new TaskQuery(States: [TaskState.Done], Project: _project, Limit: 2000));
+
+        _backlog = open.Where(t => t.State == TaskState.Backlog).ToList();
+        _inProgress = open.Where(t => t.State is TaskState.InProgress or TaskState.Blocked).ToList();
+        _validating = open.Where(t => t.State is TaskState.Validating or TaskState.Validated).ToList();
+        _done = done.Where(t => t.DoneAt >= _now.AddHours(-24)).OrderByDescending(t => t.DoneAt).ToList();
+        _open = open.Count;
+        _priority = open.Count(t => t.Priority > 0);
+    }
+
+    private async Task OnProjectChanged(ChangeEventArgs e)
+    {
+        _project = e.Value as string is { Length: > 0 } key ? key : null;
+        await ReloadNowAsync();
+    }
+
+    private RenderFragment Column(string title, List<TaskDto> tasks) => __builder =>
+    {
+        <div class="column">
+            <div class="column-head">@title <span class="count">@tasks.Count</span></div>
+            <div class="column-body">
+                <Virtualize Items="tasks" Context="task" ItemSize="74" OverscanCount="6">
+                    <TaskCard Task="task" Now="_now" ShowProject="@(_project is null && _projects.Count > 1)" />
+                </Virtualize>
+                @if (tasks.Count == 0)
+                {
+                    <div class="empty">nothing here</div>
+                }
+            </div>
+        </div>
+    };
+}
