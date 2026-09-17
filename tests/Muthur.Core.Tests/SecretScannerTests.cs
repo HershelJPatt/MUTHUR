@@ -90,6 +90,18 @@ public sealed class SecretScannerTests
         "Password for staging:\n> {0}",
         "Login for staging:\njdoe\n{0}",
         "what's the staging password again?\n{0}",
+        // …and not alone on that line
+        "Username and password for the staging portal:\njdoe / {0}",
+        "Staging credentials:\njdoe {0}",
+        "Staging password:\n`{0}`",
+        "Staging password:\n{0} (temporary)",
+        "The new password:\n{0}, please change it",
+        "[10:01] jane: what's the staging password?\n[10:02] sam: {0}",
+        "jane: staging password?\n<sam> {0}",
+        "USERNAME   PASSWORD\njdoe       {0}",
+        "The staging password was rotated.\nUse {0} from now on.",
+        "Staging passwords:\n<li>admin: {0}</li>",
+        "staging password\n=> {0}",
     ];
 
     /// <summary>How people build one: a word or two, a number, maybe a symbol — including the password word itself.</summary>

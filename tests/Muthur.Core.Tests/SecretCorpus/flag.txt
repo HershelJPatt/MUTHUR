@@ -232,3 +232,12 @@ the password is:\n```\nSummer2025\n```
 Login for staging:\njdoe\nWelcome.2026
 what's the staging password again?\nAcme.Prod.2026
 The new password:\nWelcome#1
+Username and password for the staging portal:\njdoe / Winter_2026
+Staging credentials:\njdoe / P@ssw0rd
+Staging password:\n`Spring@2026`
+Staging password:\nWelcome1 (temporary)
+The new password:\nWinter_2026 (change it)
+[10:01] jane: what's the staging password?\n[10:02] sam: Summer2025
+USERNAME   PASSWORD\njdoe       Welcome.2026
+Staging logins:\n- admin: Welcome#1
+The staging password was rotated.\nUse Winter_2026 from now on.

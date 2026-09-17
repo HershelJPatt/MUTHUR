@@ -181,6 +181,23 @@ public static partial class SecretScanner
         return false;
     }
 
+    /// <summary>
+    /// build01 / sql02, asmith2 / mbrown17: a neighbouring line holds another lone lowercase name with a number. That is a list of hosts,
+    /// users or builds; a password comes alone.
+    /// </summary>
+    private static bool IsListOfPlainNames(string[] lines, int i)
+    {
+        foreach (var n in (int[])[i - 1, i + 1])
+        {
+            if (n < 0 || n >= lines.Length) continue;
+            var other = AloneOnLine().Match(lines[n]);
+            if (!other.Success) continue;
+            var name = other.Groups["value"].Value;
+            if (name.Any(char.IsAsciiDigit) && name.Any(char.IsAsciiLetter) && !IsPasswordShaped(name)) return true;
+        }
+        return false;
+    }
+
     /// <summary>"Password", "Temp password", "API Key" — not a data cell that happens to carry the word (PasswordHasherV2, password_v2_enabled).</summary>
     private static bool IsCredentialColumn(string cell) =>
         cell.Length <= 40 && !cell.Any(char.IsAsciiDigit) && CredentialColumnWord().IsMatch(cell);
@@ -278,8 +295,12 @@ public static partial class SecretScanner
             // "Here is the staging password:" / blank / "Winter_2026": the value stands alone below the sentence that names it
             var alone = AloneOnLine().Match(lines[i]);
             var strongAbove = false;
-            var below = alone.Success && IsBelowCredentialLine(lines, i, out strongAbove);
-            var nearPasswordWord = below || PasswordClassWord().IsMatch(context);
+            var under = IsBelowCredentialLine(lines, i, out strongAbove);
+            var below = alone.Success && under;
+            // under "Staging password:" a password is a password with company too: "jdoe / Winter_2026", "Welcome1 (temporary)"
+            var underStrong = under && strongAbove;
+            var shortLine = StandaloneToken().Matches(lines[i]).Count <= 4;
+            var nearPasswordWord = below || underStrong || PasswordClassWord().IsMatch(context);
             // right next to the word itself ("password = Sup3r S3cret") even a short mixed token is worth a look
             var minimum = below || StrongPasswordWord().IsMatch(lines[i]) ? 5 : 8;
             foreach (Match token in StandaloneToken().Matches(lines[i]))
@@ -307,7 +328,11 @@ public static partial class SecretScanner
                     || (i > 0 && ValueLine().IsMatch(lines[i]) && StrongPasswordWord().IsMatch(lines[i - 1]))
                     || UnderPasswordHeader(lines, i);
                 var direct = rightWhereItGoes || (CredentialLine().IsMatch(lines[i]) && AfterCredentialLead().IsMatch(preceding))
-                    || (below && token.Index >= alone.Groups["value"].Index && (strongAbove || IsPasswordShaped(value)));
+                    || (below && token.Index + token.Length > alone.Groups["value"].Index && (IsPasswordShaped(value) || (strongAbove && !IsListOfPlainNames(lines, i))))
+                    // …and on a short line there (a user name, a remark, a chat prefix) even a plain one: "jdoe / winter2026"
+                    || (underStrong && (IsPasswordShaped(value) || (shortLine && value.Length >= 8)))
+                    || (underStrong && value.Length >= 8 && AfterUseIt().IsMatch(preceding)); // "Use winter2026 from now on."
+                if (alone.Success && !rightWhereItGoes && !IsPasswordShaped(value) && IsListOfPlainNames(lines, i)) continue;
                 // product and algorithm names with a version (Chrome128, Argon2id), codes and standards (AADSTS50126, KB5031356,
                 // SP800-63B, 28P01) and branch-like paths (task/T-9-outbound-gate) are what password-related messages are full of
                 // — except a shouted word with a number right where the password goes (-p WINTER2026)
@@ -359,7 +384,7 @@ public static partial class SecretScanner
     private static partial Regex CodeReference();
 
     // No word boundaries around token/pwd/secret/…: GITHUB_TOKEN, DB_PWD and AccessToken are names too ("_" and letters are word characters).
-    [GeneratedRegex(@"pass(?:word|wd|phrase|code|wort)|kennwort|(?<![A-Za-z])pass(?![A-Za-z])|_pass(?![A-Za-z])|(?-i:(?<=[a-z])Pass(?![a-z]))|pwd|(?<![A-Za-z])pw(?![A-Za-z])|secret|credential|creds|(?<![A-Za-z])log\s?in(?![A-Za-z])|token|api[ _\-]?key|(?<![A-Za-z])key(?![A-Za-z])|_key(?![A-Za-z])|(?-i:(?<=[a-z])Key(?![a-z]))|(?<![A-Za-z])auth(?![A-Za-z])|(?<![A-Za-z0-9])-[pPaw](?![A-Za-z0-9])|--password|/p:|IDENTIFIED\s+BY|SecureString|NetworkCredential|/user:|(?:store|key)pass|(?<![A-Za-z])net\s+user\s|(?<![A-Za-z])sqlplus\s", RegexOptions.IgnoreCase)]
+    [GeneratedRegex(@"pass(?:word|wd|phrase|code|wort)|kennwort|(?<![A-Za-z])pass(?![A-Za-z])|_pass(?![A-Za-z])|(?-i:(?<=[a-z])Pass(?![a-z]))|pwd|(?<![A-Za-z])pw(?![A-Za-z])|secret|credential|creds|(?<![A-Za-z])log\s?ins?(?![A-Za-z])|token|api[ _\-]?key|(?<![A-Za-z])key(?![A-Za-z])|_key(?![A-Za-z])|(?-i:(?<=[a-z])Key(?![a-z]))|(?<![A-Za-z])auth(?![A-Za-z])|(?<![A-Za-z0-9])-[pPaw](?![A-Za-z0-9])|--password|/p:|IDENTIFIED\s+BY|SecureString|NetworkCredential|/user:|(?:store|key)pass|(?<![A-Za-z])net\s+user\s|(?<![A-Za-z])sqlplus\s", RegexOptions.IgnoreCase)]
     private static partial Regex PasswordClassWord();
 
     [GeneratedRegex(@"pass(?:word|wd|phrase|code|wort)|kennwort|(?<![A-Za-z])pass(?![A-Za-z])|_pass(?![A-Za-z])|(?-i:(?<=[a-z])Pass(?![a-z]))|pwd|(?<![A-Za-z])pw(?![A-Za-z])", RegexOptions.IgnoreCase)]
@@ -411,7 +436,7 @@ public static partial class SecretScanner
     private static partial Regex CodeOrStandard();
 
     // a line that is about a password, a login or credentials
-    [GeneratedRegex(@"pass(?:word|wd|phrase|code|wort)|kennwort|(?<![A-Za-z])pass(?![A-Za-z])|_pass(?![A-Za-z])|(?-i:(?<=[a-z])Pass(?![a-z]))|pwd|(?<![A-Za-z])pw(?![A-Za-z])|(?<![A-Za-z])log\s?in(?![A-Za-z])|(?<![A-Za-z])creds(?![A-Za-z])|credentials?|IDENTIFIED\s+BY|SecureString|PSCredential|NetworkCredential|(?:store|key)pass|(?<![A-Za-z])net\s+user\s|(?<![A-Za-z])sqlplus\s|(?<![A-Za-z0-9])-[pPwa](?![A-Za-z0-9])", RegexOptions.IgnoreCase)]
+    [GeneratedRegex(@"pass(?:word|wd|phrase|code|wort)|kennwort|(?<![A-Za-z])pass(?![A-Za-z])|_pass(?![A-Za-z])|(?-i:(?<=[a-z])Pass(?![a-z]))|pwd|(?<![A-Za-z])pw(?![A-Za-z])|(?<![A-Za-z])log\s?ins?(?![A-Za-z])|(?<![A-Za-z])creds(?![A-Za-z])|credentials?|IDENTIFIED\s+BY|SecureString|PSCredential|NetworkCredential|(?:store|key)pass|(?<![A-Za-z])net\s+user\s|(?<![A-Za-z])sqlplus\s|(?<![A-Za-z0-9])-[pPwa](?![A-Za-z0-9])", RegexOptions.IgnoreCase)]
     private static partial Regex CredentialLine();
 
     // products, platforms, protocols and algorithms that carry a version or a number in their name
@@ -438,6 +463,9 @@ public static partial class SecretScanner
     // a line that holds one token, perhaps behind a bullet, a quote mark or a short "admin:" lead
     [GeneratedRegex(@"^\s*(?:[-*>•]\s+|\d+[.)]\s+)?(?:[A-Za-z][\w .\-]{0,20}:\s*)?[`'""]?(?<value>[^\s`'""]+)[`'""]?\s*$")]
     private static partial Regex AloneOnLine();
+
+    [GeneratedRegex(@"(?<![A-Za-z])(?:use|try|enter|type|it'?s|it\s+is)\s+[""'`]?$", RegexOptions.IgnoreCase)]
+    private static partial Regex AfterUseIt();
 
     // WINTER2026 · PASSWORD123 · ADMIN_2026!
     [GeneratedRegex(@"^[A-Z]{4,}[_.\-]?\d{2,}[^A-Za-z0-9]*$")]
@@ -479,7 +507,9 @@ public static partial class SecretScanner
     private static string Mask(string value)
     {
         value = value.ReplaceLineEndings(" ");
-        return value.Length <= 12 ? new string('*', value.Length) : $"{value[..6]}…{new string('*', 6)} ({value.Length} chars)";
+        // a long token keeps its vendor prefix so the author can find it; a human password gives away far more in six characters
+        if (value.Length <= 12) return new string('*', value.Length);
+        return $"{value[..(value.Length >= 20 ? 6 : 2)]}…{new string('*', 6)} ({value.Length} chars)";
     }
 
     [GeneratedRegex(@"<[^<>]{1,200}>")]
