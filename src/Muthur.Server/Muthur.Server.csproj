@@ -1,6 +1,7 @@
 <Project Sdk="Microsoft.NET.Sdk.Web">
   <ItemGroup>
     <ProjectReference Include="..\Muthur.Data\Muthur.Data.csproj" />
+    <ProjectReference Include="..\Muthur.Launch\Muthur.Launch.csproj" />
   </ItemGroup>
   <ItemGroup>
     <InternalsVisibleTo Include="Muthur.Server.Tests" />

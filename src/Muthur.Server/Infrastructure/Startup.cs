@@ -4,6 +4,7 @@ using Muthur.Contracts;
 using Muthur.Core;
 using Muthur.Core.Entities;
 using Muthur.Data;
+using Muthur.Launch;
 using Muthur.Server.Auth;
 using Muthur.Server.Services;
 
@@ -46,6 +47,11 @@ public static class Startup
         builder.Services.AddSingleton<ProjectService>();
         builder.Services.AddSingleton<TaskService>();
         builder.Services.AddSingleton<EventService>();
+        builder.Services.AddSingleton<RoleService>();
+        builder.Services.AddSingleton<LifecycleService>();
+        builder.Services.AddSingleton<IProcessRunner, ProcessRunner>();
+        builder.Services.AddSingleton<IPullRequestOpener, GhPullRequestOpener>();
+        builder.Services.AddSingleton<ITaskLander, GitLander>();
         if (options.BackgroundServices)
             builder.Services.AddHostedService<LeaseSweeper>();
 

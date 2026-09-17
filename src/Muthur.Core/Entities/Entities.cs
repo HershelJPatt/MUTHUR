@@ -68,3 +68,36 @@ public sealed class LedgerEvent
     public int? TaskId { get; set; }
     public string PayloadJson { get; set; } = "{}";
 }
+
+/// <summary>A standing responsibility (validator, comms, observability…) described by a brief.</summary>
+public sealed class Role
+{
+    public required string Key { get; set; }
+    public string BriefMd { get; set; } = "";
+    /// <summary>Validator roles may give verdicts on tasks and can be listed in a project's required validators.</summary>
+    public bool IsValidator { get; set; }
+    public DateTimeOffset UpdatedAt { get; set; }
+}
+
+/// <summary>Who currently holds a role. One holder per role; the hold is a lease.</summary>
+public sealed class RoleHold
+{
+    public required string RoleKey { get; set; }
+    public Guid AgentId { get; set; }
+    public Agent? Agent { get; set; }
+    public DateTimeOffset AcquiredAt { get; set; }
+    public DateTimeOffset LeaseExpires { get; set; }
+}
+
+/// <summary>Current verdict of one required validator on one task. History lives in the ledger.</summary>
+public sealed class TaskValidation
+{
+    public int Id { get; set; }
+    public int TaskId { get; set; }
+    public required string ValidatorKey { get; set; }
+    public Verdict Verdict { get; set; }
+    public string? Evidence { get; set; }
+    public Guid? AgentId { get; set; }
+    public Agent? Agent { get; set; }
+    public DateTimeOffset? At { get; set; }
+}
