@@ -95,6 +95,18 @@ public static class TaskCommands
         reopen.SetAction(async (parse, ct) => Output.Emit(parse, await HubClient.For(parse).PostAsync(Routes.TaskAction(parse.GetValue(reopenId)!, "reopen"), ct)));
         task.Subcommands.Add(reopen);
 
+        var implementedId = Id();
+        var branch = new Option<string>("--branch") { Description = "The task branch holding the finished work.", Required = true };
+        var implemented = new Command("implemented", "Declare the work built, reviewed and tested; hands the task to its validators.") { implementedId, branch };
+        implemented.SetAction(async (parse, ct) => Output.Emit(parse, await HubClient.For(parse).PostAsync(
+            Routes.TaskAction(parse.GetValue(implementedId)!, "implemented"), new ImplementedRequest(parse.GetValue(branch)!), MuthurJsonContext.Default.ImplementedRequest, ct)));
+        task.Subcommands.Add(implemented);
+
+        var landId = Id();
+        var land = new Command("land", "Land a validated task: MUTHUR merges the branch (or opens the pull request). Exit 3 on merge conflict.") { landId };
+        land.SetAction(async (parse, ct) => Output.Emit(parse, await HubClient.For(parse, TimeSpan.FromMinutes(5)).PostAsync(Routes.TaskAction(parse.GetValue(landId)!, "land"), ct)));
+        task.Subcommands.Add(land);
+
         var logTask = new Option<string?>("--task") { Description = "Only events of this task." };
         var since = new Option<long?>("--since") { Description = "Only events after this sequence number." };
         var logLimit = new Option<int?>("--limit");
