@@ -13,9 +13,11 @@ public static class HubTestExtensions
         return hub.CreateClient(registered!.Token);
     }
 
-    public static async Task<ProjectDto> AddProjectAsync(this HubFactory hub, string key = "demo", string? repoPath = null, LandMode landMode = LandMode.Merge, params string[] validators)
+    public static async Task<ProjectDto> AddProjectAsync(this HubFactory hub, string key = "demo", string? repoPath = null, LandMode landMode = LandMode.Merge,
+        string[]? validators = null, string[]? ingest = null)
     {
-        var response = await hub.Founder().PostAsJsonAsync(Routes.Projects, new AddProjectRequest(key, repoPath ?? hub.DataDir, LandMode: landMode, RequiredValidators: validators));
+        var response = await hub.Founder().PostAsJsonAsync(Routes.Projects,
+            new AddProjectRequest(key, repoPath ?? hub.DataDir, LandMode: landMode, RequiredValidators: validators ?? [], IngestSources: ingest ?? []));
         response.EnsureSuccessStatusCode();
         return (await response.Content.ReadFromJsonAsync(MuthurJsonContext.Default.ProjectDto))!;
     }

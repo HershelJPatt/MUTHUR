@@ -20,6 +20,8 @@ public sealed class MuthurDb(DbContextOptions<MuthurDb> options) : DbContext(opt
     public DbSet<Message> Messages => Set<Message>();
     public DbSet<FounderRequest> FounderRequests => Set<FounderRequest>();
     public DbSet<AccountLimit> AccountLimits => Set<AccountLimit>();
+    public DbSet<InboundItem> Inbound => Set<InboundItem>();
+    public DbSet<IngestCursor> IngestCursors => Set<IngestCursor>();
 
     protected override void ConfigureConventions(ModelConfigurationBuilder configurationBuilder)
     {
@@ -42,6 +44,7 @@ public sealed class MuthurDb(DbContextOptions<MuthurDb> options) : DbContext(opt
             e.ToTable("projects");
             e.HasIndex(x => x.Key).IsUnique();
             e.Property(x => x.RequiredValidators).HasConversion(StringListConverter.Instance, StringListConverter.Comparer);
+            e.Property(x => x.IngestSources).HasConversion(StringListConverter.Instance, StringListConverter.Comparer);
         });
 
         modelBuilder.Entity<Agent>(e =>
@@ -107,6 +110,21 @@ public sealed class MuthurDb(DbContextOptions<MuthurDb> options) : DbContext(opt
         {
             e.ToTable("account_limits");
             e.HasKey(x => x.Account);
+        });
+
+        modelBuilder.Entity<InboundItem>(e =>
+        {
+            e.ToTable("inbound");
+            e.HasIndex(x => new { x.Source, x.ExternalId }).IsUnique();
+            e.HasIndex(x => x.Status);
+            e.HasOne(x => x.Project).WithMany().HasForeignKey(x => x.ProjectId).OnDelete(DeleteBehavior.SetNull);
+            e.HasOne(x => x.ClaimedBy).WithMany().HasForeignKey(x => x.ClaimedByAgentId).OnDelete(DeleteBehavior.SetNull);
+        });
+
+        modelBuilder.Entity<IngestCursor>(e =>
+        {
+            e.ToTable("ingest_cursors");
+            e.HasKey(x => x.Source);
         });
 
         ApplySnakeCaseColumns(modelBuilder);

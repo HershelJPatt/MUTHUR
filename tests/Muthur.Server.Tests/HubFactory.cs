@@ -17,6 +17,7 @@ public sealed class HubFactory : WebApplicationFactory<Program>
     public FakeTimeProvider Clock { get; } = new(new DateTimeOffset(2026, 1, 1, 12, 0, 0, TimeSpan.Zero));
 
     public FakePullRequestOpener PullRequests { get; } = new();
+    public FakeInboundSource Source { get; } = new();
 
     protected override void ConfigureWebHost(IWebHostBuilder builder)
     {
@@ -28,6 +29,7 @@ public sealed class HubFactory : WebApplicationFactory<Program>
             services.AddSingleton<TimeProvider>(Clock);
             services.RemoveAll<IPullRequestOpener>();
             services.AddSingleton<IPullRequestOpener>(PullRequests);
+            services.AddSingleton<IInboundSource>(Source);
         });
     }
 
@@ -67,5 +69,27 @@ public sealed class FakePullRequestOpener : IPullRequestOpener
         if (FailWith is not null) throw new InvalidOperationException(FailWith);
         Opened.Add((baseBranch, headBranch, title));
         return Task.FromResult($"https://github.com/example/repo/pull/{Opened.Count}");
+    }
+}
+
+/// <summary>An external source ("fake:anything") that behaves like the real ones: items at or after the cursor, oldest first.</summary>
+public sealed class FakeInboundSource : IInboundSource
+{
+    private readonly List<(IncomingItem Item, string UpdatedAt)> _items = [];
+
+    public string Scheme => "fake";
+    public string? FailWith { get; set; }
+    public string? LastCursorSeen { get; private set; }
+
+    public void Add(string externalId, string title, string updatedAt) =>
+        _items.Add((new IncomingItem(externalId, title, "", null, "someone"), updatedAt));
+
+    public Task<SourceFetch> FetchAsync(string location, string? cursor, CancellationToken ct = default)
+    {
+        if (FailWith is not null) throw new InvalidOperationException(FailWith);
+        LastCursorSeen = cursor;
+        var matching = _items.Where(i => cursor is null || string.CompareOrdinal(i.UpdatedAt, cursor) >= 0).OrderBy(i => i.UpdatedAt, StringComparer.Ordinal).ToList();
+        var newest = matching.Count > 0 ? matching[^1].UpdatedAt : cursor;
+        return Task.FromResult(new SourceFetch(matching.Select(i => i.Item).ToList(), newest));
     }
 }

@@ -12,6 +12,8 @@ public sealed class Project
     public LandMode LandMode { get; set; }
     /// <summary>Validator role keys that must all say "yes" before a task may land.</summary>
     public List<string> RequiredValidators { get; set; } = [];
+    /// <summary>External sources polled for inbound items, e.g. "github:owner/repo".</summary>
+    public List<string> IngestSources { get; set; } = [];
     public DateTimeOffset CreatedAt { get; set; }
 }
 
@@ -147,4 +149,39 @@ public sealed class AccountLimit
     public DateTimeOffset LimitedUntil { get; set; }
     public required string ReportedBy { get; set; }
     public DateTimeOffset ReportedAt { get; set; }
+}
+
+public enum InboundStatus { Unclaimed, Claimed, Converted, Dismissed }
+
+/// <summary>Something that arrived from outside (an issue, an email, a chat message) and needs someone to decide what it becomes.</summary>
+public sealed class InboundItem
+{
+    /// <summary>Sequential; shown as "I-{Id}".</summary>
+    public int Id { get; set; }
+    public Guid? ProjectId { get; set; }
+    public Project? Project { get; set; }
+    /// <summary>Where it came from, e.g. "github:owner/repo" or "manual".</summary>
+    public required string Source { get; set; }
+    /// <summary>Identity within the source; (Source, ExternalId) is unique, so re-polling never duplicates.</summary>
+    public required string ExternalId { get; set; }
+    public required string Title { get; set; }
+    public string Body { get; set; } = "";
+    public string? Url { get; set; }
+    public string? Author { get; set; }
+    public InboundStatus Status { get; set; }
+    public Guid? ClaimedByAgentId { get; set; }
+    public Agent? ClaimedBy { get; set; }
+    public int? TaskId { get; set; }
+    public string? Resolution { get; set; }
+    public DateTimeOffset ReceivedAt { get; set; }
+    public DateTimeOffset UpdatedAt { get; set; }
+}
+
+/// <summary>How far a source has been read. Lets the hub catch up after being off for hours.</summary>
+public sealed class IngestCursor
+{
+    public required string Source { get; set; }
+    public string? Cursor { get; set; }
+    public DateTimeOffset UpdatedAt { get; set; }
+    public string? LastError { get; set; }
 }

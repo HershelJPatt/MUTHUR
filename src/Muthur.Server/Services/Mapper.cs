@@ -8,7 +8,7 @@ namespace Muthur.Server.Services;
 public static class Mapper
 {
     public static ProjectDto ToDto(this Project p) =>
-        new(p.Id, p.Key, p.Name, p.RepoPath, p.DefaultBranch, p.LandMode, p.RequiredValidators, p.CreatedAt);
+        new(p.Id, p.Key, p.Name, p.RepoPath, p.DefaultBranch, p.LandMode, p.RequiredValidators, p.CreatedAt, p.IngestSources);
 
     public static AgentDto ToDto(this Agent a, LeasePolicy leases, DateTimeOffset now, IReadOnlyList<string> roles, int openTasks) =>
         new(a.Id, a.Name, leases.StatusOf(a, now), a.LastHeartbeat, a.LimitedUntil, a.Summary, a.Harness, a.Model, a.Tier, a.Account, roles, openTasks);

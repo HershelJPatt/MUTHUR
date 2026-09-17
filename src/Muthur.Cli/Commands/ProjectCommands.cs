@@ -18,12 +18,14 @@ public static class ProjectCommands
         var land = new Option<string?>("--land") { Description = "merge: the hub merges. pr: the hub opens a pull request and a human merges." };
         var validator = new Option<string[]>("--validator") { Description = "Validator role that must pass before landing (repeatable).", AllowMultipleArgumentsPerToken = true };
 
-        var add = new Command("add", "Create a project.") { key, repo, name, branch, land, validator };
+        var ingest = new Option<string[]>("--ingest") { Description = "External source polled for inbound items, e.g. github:owner/repo (repeatable).", AllowMultipleArgumentsPerToken = true };
+
+        var add = new Command("add", "Create a project.") { key, repo, name, branch, land, validator, ingest };
         add.SetAction(async (parse, ct) =>
         {
             if (!TryLandMode(parse.GetValue(land), out var mode, out var error)) return error;
             var request = new AddProjectRequest(parse.GetValue(key)!, Path.GetFullPath(parse.GetValue(repo) ?? "."), parse.GetValue(name),
-                parse.GetValue(branch), mode, parse.GetValue(validator));
+                parse.GetValue(branch), mode, parse.GetValue(validator), parse.GetValue(ingest));
             return Output.Emit(parse, await HubClient.For(parse).PostAsync(Routes.Projects, request, MuthurJsonContext.Default.AddProjectRequest, ct));
         });
         project.Subcommands.Add(add);
@@ -31,12 +33,15 @@ public static class ProjectCommands
         var setKey = new Argument<string>("key");
         var setValidator = new Option<string[]?>("--validator") { Description = "Replaces the validator list (repeatable). Use --no-validators to clear.", AllowMultipleArgumentsPerToken = true };
         var noValidators = new Option<bool>("--no-validators") { Description = "Require no validators." };
-        var set = new Command("set", "Change a project's settings.") { setKey, repo, name, branch, land, setValidator, noValidators };
+        var setIngest = new Option<string[]?>("--ingest") { Description = "Replaces the ingest source list (repeatable). Use --no-ingest to clear.", AllowMultipleArgumentsPerToken = true };
+        var noIngest = new Option<bool>("--no-ingest") { Description = "Poll no external sources." };
+        var set = new Command("set", "Change a project's settings.") { setKey, repo, name, branch, land, setValidator, noValidators, setIngest, noIngest };
         set.SetAction(async (parse, ct) =>
         {
             if (!TryLandMode(parse.GetValue(land), out var mode, out var error)) return error;
             var validators = parse.GetValue(noValidators) ? [] : parse.GetValue(setValidator) is { Length: > 0 } v ? v : null;
-            var request = new UpdateProjectRequest(parse.GetValue(repo) is { } r ? Path.GetFullPath(r) : null, parse.GetValue(name), parse.GetValue(branch), mode, validators);
+            var sources = parse.GetValue(noIngest) ? [] : parse.GetValue(setIngest) is { Length: > 0 } i ? i : null;
+            var request = new UpdateProjectRequest(parse.GetValue(repo) is { } r ? Path.GetFullPath(r) : null, parse.GetValue(name), parse.GetValue(branch), mode, validators, sources);
             return Output.Emit(parse, await HubClient.For(parse).PutAsync(Routes.Project(parse.GetValue(setKey)!), request, MuthurJsonContext.Default.UpdateProjectRequest, ct));
         });
         project.Subcommands.Add(set);
