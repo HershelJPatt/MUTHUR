@@ -59,6 +59,123 @@ public sealed class SecretScannerTests
         Assert.True(findings.Count == 0, $"pass.txt line {line} was refused as {string.Join(", ", findings.Select(f => f.Kind))}: {text}");
     }
 
+    /// <summary>Where people write a password down. {0} is the password.</summary>
+    private static readonly string[] Carriers =
+    [
+        "Temporary password for the new hire: {0}",
+        "The password for the staging admin is now {0}",
+        "the pw is {0}",
+        "docker login registry.acme.io -u deploy -p {0}",
+        "| user | Password |\n|---|---|\n| admin | {0} |",
+        "user,password\nadmin,{0}",
+        "CREATE USER app IDENTIFIED BY '{0}';",
+        "- name: DB_PASSWORD\n  value: {0}",
+        "Login for the staging box: admin / {0}",
+        "net user deploy {0} /add",
+        "Set-ADAccountPassword jdoe -Reset -NewPassword (ConvertTo-SecureString '{0}' -AsPlainText -Force)",
+        "var cred = new NetworkCredential(\"admin\", \"{0}\");",
+        "I reset the password for jdoe to {0}",
+        "Your temporary password will be {0}",
+        // the value on a line of its own, below the sentence that names it
+        "Password:\n{0}",
+        "Here is the password for the staging admin:\n{0}",
+        "Password for staging:\n\n{0}",
+        "The new password:\n{0}",
+        "Hi Jane, your temporary password is below.\n\n{0}\n\nPlease change it at first login.",
+        "Staging passwords:\n- admin: {0}\n- readonly: see vault",
+        "Staging login:\n- admin\n- {0}",
+        "admin password\n{0}",
+        "pw for the wifi:\n{0}",
+        "the password is:\n```\n{0}\n```",
+        "Password for staging:\n> {0}",
+        "Login for staging:\njdoe\n{0}",
+        "what's the staging password again?\n{0}",
+        // …and not alone on that line
+        "Username and password for the staging portal:\njdoe / {0}",
+        "Staging credentials:\njdoe {0}",
+        "Staging password:\n`{0}`",
+        "Staging password:\n{0} (temporary)",
+        "The new password:\n{0}, please change it",
+        "[10:01] jane: what's the staging password?\n[10:02] sam: {0}",
+        "jane: staging password?\n<sam> {0}",
+        "USERNAME   PASSWORD\njdoe       {0}",
+        "The staging password was rotated.\nUse {0} from now on.",
+        "Staging passwords:\n<li>admin: {0}</li>",
+        "staging password\n=> {0}",
+        // …under a heading, a bold label, an HTML paragraph or a sentence that announces nothing
+        "## Staging credentials\n\njdoe / {0}",
+        "**Staging login:**\njdoe / {0}",
+        "**Staging login:**\n{0} (temporary)",
+        "<p>Staging login:</p>\n<p>jdoe / {0}</p>",
+        "Staging login:<br>\njdoe / {0}<br>",
+        "Here's the staging login\njdoe / {0}",
+        "Staging creds\njdoe {0}",
+        "Login: jdoe\n{0} (temporary)",
+    ];
+
+    /// <summary>How people build one: a word or two, a number, maybe a symbol — including the password word itself.</summary>
+    private static readonly string[] HumanPasswords =
+    [
+        "Winter_2026", "W1nter2026", "AdminWinter1", "TempWinter2026", "Admin.Winter.2026", "Acme-Winter-2026", "SuperWinter1",
+        "Password1", "Password123!", "Password2026", "Secret_2026", "Secret123", "Token_2026",
+        "Passwort1!", "Kennwort2026", "Login2026", "Creds_2026", "ApiKey123!", "Auth2026!", "Pwd12345", "Passwd2026", "Credentials1",
+        "Token12345", "Secret1!", "Passcode2026", "Login123",
+        "MyPassword1", "NewPassword2026", "AcmePassword1!", "Password@Acme1", "TempPass2026", "AdminSecret99", "MySecret123", "TopSecret1",
+        "AdminPassword1", "RootPass123", "AdminPass1", "TempPassword1", "TestPassword123", "Admin.Password.2026", "Acme-Secret-2026",
+        "SuperSecret1", "Changeme.Password1", "Autumn.Secret.2026",
+        "password123", "winter2026", "adminpass123", "WINTER2026", "PASSWORD123",
+        "Release_2026", "Team2026", "Sprint2026", "Session_2026", "Customer2026",
+        "P4ssword1", "Passw0rd1", "P@ssword2026", "S3cret_2026", "T0ken_2026", "PassWord2026", "Pa55word1", "Secr3t2026", "L0gin2026",
+    ];
+
+    /// <summary>Longer lines under a sentence that announces nothing. Here only a value that is shaped like a password is promised.</summary>
+    private static readonly string[] LongCarriers =
+    [
+        "Your login for the staging portal is ready.\njdoe / {0} (you will be asked to change it)",
+        "I created the login for you on staging\njdoe / {0} (temporary, please rotate it after the demo)",
+        "Here are the new credentials for the demo tenant.\nadmin@acme.example / {0} - valid until Friday, then it gets rotated",
+        "Sam asked me for the creds for staging again\njdoe {0} - works on demo too, don't share it",
+        "We rotated the credentials on the staging box last night\nthe new one for jdoe is {0} and it expires on Friday",
+        "We rotated the credentials on the staging box last night\nSign in as jdoe with {0} and let me know if it fails",
+    ];
+
+    private static readonly string[] PlainOrNamed =
+        ["password123", "winter2026", "adminpass123", "WINTER2026", "PASSWORD123", "Release_2026", "Team2026", "Sprint2026", "Session_2026", "Customer2026"];
+
+    public static TheoryData<string, string> LongMatrix
+    {
+        get
+        {
+            var data = new TheoryData<string, string>();
+            foreach (var carrier in LongCarriers)
+                foreach (var password in HumanPasswords.Except(PlainOrNamed))
+                    data.Add(carrier, password);
+            return data;
+        }
+    }
+
+    [Theory]
+    [MemberData(nameof(LongMatrix))]
+    public void A_password_shaped_value_is_caught_on_a_long_line_below_a_credential_sentence(string carrier, string password) =>
+        Assert.True(SecretScanner.Scan(string.Format(carrier, password)).Count > 0, $"neither flagged nor blocked: {string.Format(carrier, password)}");
+
+    public static TheoryData<string, string> Matrix
+    {
+        get
+        {
+            var data = new TheoryData<string, string>();
+            foreach (var carrier in Carriers)
+                foreach (var password in HumanPasswords)
+                    data.Add(carrier, password);
+            return data;
+        }
+    }
+
+    [Theory]
+    [MemberData(nameof(Matrix))]
+    public void A_human_password_is_caught_wherever_it_is_written(string carrier, string password) =>
+        Assert.True(SecretScanner.Scan(string.Format(carrier, password)).Count > 0, $"neither flagged nor blocked: {string.Format(carrier, password)}");
+
     [Fact]
     public void Findings_never_repeat_the_secret()
     {

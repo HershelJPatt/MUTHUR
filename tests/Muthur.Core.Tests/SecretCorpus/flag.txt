@@ -184,3 +184,83 @@ admin/Winter_2026 is the login for grafana
 redis-cli -h cache01 -a Cache_2026 ping
 New-LocalUser deploy -Password (ConvertTo-SecureString 'Winter2026' -AsPlainText -Force)
 $cred = New-Object PSCredential('admin', (ConvertTo-SecureString 'Welcome.2026' -AsPlainText -Force))
+| Account | Secret |\n|---|---|\n| deploy | Spring@2026 |
+| Env | Credentials |\n|---|---|\n| prod | Admin_2026 |
+| user | Token |\n|---|---|\n| admin | Spring@2026 |
+| service | API Key |\n|---|---|\n| billing | Spring@2026 |
+account,secret\ndeploy,Orders.Db.2026
+host\tcreds\nsql01\tWinter_2026
+net user administrator Welcome_2026
+sqlplus system/Oracle_2026@orcl
+keytool -genkeypair -alias web -storepass Changeit2026
+the pw is Password123!
+user,password\nadmin,Secret_2026
+Temporary password for the new hire: Password123!
+The temporary password for the new hire is Password123!
+net user deploy Password123! /add
+| user | Password |\n|---|---|\n| admin | Password123! |
+docker login registry.acme.dev -u ci -p Password123!
+CREATE USER app IDENTIFIED BY 'Password123!';
+the login for grafana is admin / Password1
+staging db password is Password2026
+host,user,password\nsql01,sa,Token_2026
+admin password: Secret123 (change it on first login)
+| Konto | Kennwort |\n|---|---|\n| deploy | Winter_2026 |
+The temporary password for the new hire is MyPassword1
+the wifi password at the office is Secret@Acme1
+root login on build01: root / Passwort2026!
+mysql -u root -p Password1 orders
+the pw is password123
+user,password\nadmin,pass1234
+service account creds are svc-deploy / Key_2026!
+the admin login is admin / Login2026
+Temporary password for the new hire: TempPassword1
+docker login registry.acme.io -u deploy -p AdminPassword1
+CREATE USER app IDENTIFIED BY 'NewPassword2026';
+| user | Password |\n|---|---|\n| admin | TopSecret1 |
+user,password\nadmin,SuperSecret1
+net user deploy AdminPass1 /add
+the pw is RootPass123
+The password for the staging admin is now P4ssword1
+CREATE USER app IDENTIFIED BY 'password123';
+docker login registry.acme.io -u deploy -p WINTER2026
+Here is the password for the staging admin:\nWinter_2026
+Password for staging:\n\nP@ssw0rd
+Hi Jane, your temporary password is below.\n\nWelcome1\n\nPlease change it at first login.
+Staging passwords:\n- admin: Spring@2026\n- readonly: see vault
+the password is:\n```\nSummer2025\n```
+Login for staging:\njdoe\nWelcome.2026
+what's the staging password again?\nAcme.Prod.2026
+The new password:\nWelcome#1
+Username and password for the staging portal:\njdoe / Winter_2026
+Staging credentials:\njdoe / P@ssw0rd
+Staging password:\n`Spring@2026`
+Staging password:\nWelcome1 (temporary)
+The new password:\nWinter_2026 (change it)
+[10:01] jane: what's the staging password?\n[10:02] sam: Summer2025
+USERNAME   PASSWORD\njdoe       Welcome.2026
+Staging logins:\n- admin: Welcome#1
+The staging password was rotated.\nUse Winter_2026 from now on.
+## Staging credentials\n\njdoe / P@ssw0rd
+**Staging login:**\njdoe / Winter_2026
+**Staging login:**\nWelcome1 (temporary)
+Here's the staging login\njdoe / Summer2025
+<p>Staging login:</p>\n<p>jdoe / Winter_2026</p>
+Login: jdoe\nWinter_2026 (temporary)
+> can you send me the login for staging?\n\nsure: jdoe / Spring@2026
+new credentials for the demo tenant\n\nadmin@acme.example\nWelcome.2026 (rotate after the demo)
+jane 10:01 AM\nwhat's the staging login?\nsam 10:02 AM\njdoe and Welcome#1
+Staging passwords:\nW3lcome1\nP4ssw0rd1
+Staging passwords:\nWELCOME123\nWINTER2026
+Your login for the staging portal is ready.\njdoe / Welcome1 (you will be asked to change it)
+I created the login for you on staging\njdoe / Winter_2026 (temporary, please rotate it after the demo)
+Here are the new credentials for the demo tenant.\nadmin@acme.example / Spring@2026 - valid until Friday, then it gets rotated
+We rotated the credentials on the staging box last night\nthe new one for jdoe is P@ssw0rd and it expires on Friday
+Sam asked me for the creds for staging again\njdoe Summer2025 - works on demo too, don't share it
+We rotated the credentials on the staging box last night\nSign in as jdoe with Welcome.2026 and let me know if it fails
+docker login -u jdoe -p Release_2026 registry.acme.io
+| User | Password |\n|---|---|\n| jdoe | Team2026 |
+Staging password:\nSprint2026
+CREATE USER app IDENTIFIED BY 'Session_2026';
+net user jdoe Customer2026 /add
+login admin / Wave2026
