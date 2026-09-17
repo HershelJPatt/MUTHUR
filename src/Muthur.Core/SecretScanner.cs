@@ -3,7 +3,15 @@ using System.Text.RegularExpressions;
 
 namespace Muthur.Core;
 
-public sealed record SecretFinding(string Kind, string Excerpt);
+public enum SecretSeverity
+{
+    /// <summary>Looks like it could be a credential. The text may be drafted, but only the founder can let it leave.</summary>
+    Suspect,
+    /// <summary>A recognizable credential. The text is refused and never stored.</summary>
+    Block,
+}
+
+public sealed record SecretFinding(string Kind, string Excerpt, SecretSeverity Severity = SecretSeverity.Block);
 
 /// <summary>
 /// Looks for credentials in text that is about to leave the machine. Deliberately biased toward false
@@ -46,34 +54,126 @@ public static partial class SecretScanner
         ("opaque-value-near-keyword", OpaqueNearKeyword()),
     ];
 
+    /// <summary>
+    /// Two verdicts, because one cannot be both safe and usable: recognizable credentials are <see cref="SecretSeverity.Block"/>;
+    /// anything that merely looks like one near password-class words is <see cref="SecretSeverity.Suspect"/>, which costs
+    /// the founder a look instead of costing the organization a leak or the agents a useless gate.
+    /// </summary>
     public static IReadOnlyList<SecretFinding> Scan(string text)
     {
         var findings = new List<SecretFinding>();
         var visible = RemoveInvisible(text);
-        foreach (var (kind, pattern) in TokenPatterns.Concat(ContextPatterns))
+        foreach (var (kind, pattern) in TokenPatterns)
             foreach (Match match in pattern.Matches(visible))
-                if (!IsPlaceholder(match))
-                    findings.Add(new SecretFinding(kind, Mask(match.Value)));
+                findings.Add(new SecretFinding(kind, Mask(match.Value)));
+
+        foreach (var (kind, pattern) in ContextPatterns)
+        {
+            foreach (Match match in pattern.Matches(visible))
+            {
+                var value = match.Groups["value"].Success ? match.Groups["value"].Value.Trim('"', '\'') : null;
+                if (value is not null && (IsPlaceholder(value) || IsReference(value) || IsConfigurationWord(value))) continue;
+                if (kind == "opaque-value-near-keyword" && IsReference(WholeToken(visible, match.Groups["value"]))) continue; // a long URL or path segment is not a secret
+                var severity = kind == "opaque-value-near-keyword" || (value is not null && !LooksLikeASecretValue(value))
+                    ? SecretSeverity.Suspect
+                    : SecretSeverity.Block;
+                findings.Add(new SecretFinding(kind, Mask(match.Value), severity));
+            }
+        }
 
         var joined = Join(visible);
         foreach (var (kind, pattern) in TokenPatterns)
             foreach (Match match in pattern.Matches(joined))
                 if (!findings.Any(f => f.Kind == kind))
                     findings.Add(new SecretFinding(kind + " (split across whitespace or markup)", Mask(match.Value)));
+
+        findings.AddRange(SuspectsNearPasswordWords(visible, findings));
         return findings;
     }
 
-    /// <summary>`API_KEY=$YOUR_KEY`, `password: &lt;your password&gt;`, `token={{TOKEN}}`: documentation, not a credential.</summary>
-    private static bool IsPlaceholder(Match match)
+    /// <summary>The whitespace-delimited token a capture sits in.</summary>
+    private static string WholeToken(string text, Group capture)
     {
-        var value = match.Groups["value"];
-        if (!value.Success) return false;
-        var v = value.Value.TrimStart('"', '\'');
-        return v.StartsWith('$') || v.StartsWith('<') || v.StartsWith("{{", StringComparison.Ordinal) || v.StartsWith('%')
-            || v.StartsWith("***", StringComparison.Ordinal) || v.StartsWith("xxx", StringComparison.OrdinalIgnoreCase)
-            || v.StartsWith("your", StringComparison.OrdinalIgnoreCase) || v.StartsWith("example", StringComparison.OrdinalIgnoreCase)
-            || v.StartsWith("changeme", StringComparison.OrdinalIgnoreCase) || v.StartsWith("redacted", StringComparison.OrdinalIgnoreCase);
+        var start = capture.Index;
+        while (start > 0 && !char.IsWhiteSpace(text[start - 1])) start--;
+        var end = capture.Index + capture.Length;
+        while (end < text.Length && !char.IsWhiteSpace(text[end])) end++;
+        return text[start..end].TrimStart('(', '<', '[', '"', '\'');
     }
+
+    /// <summary>The whole value is a stand-in: $VAR, ${VAR}, &lt;your key&gt;, {{ secrets.X }}, %VAR%, ****.</summary>
+    private static bool IsPlaceholder(string value) => PlaceholderValue().IsMatch(value);
+
+    /// <summary>The value points somewhere else instead of being the secret: a URL or a path.</summary>
+    private static bool IsReference(string value) =>
+        value.Contains("://", StringComparison.Ordinal) || value.StartsWith('/') || value.StartsWith("./", StringComparison.Ordinal) ||
+        value.StartsWith('\\') || (value.Length > 2 && value[1] == ':' && value[2] is '\\' or '/');
+
+    /// <summary>
+    /// A real secret has a digit or a symbol in it. A bare word (keyvault), a dotted identifier (settings.DB_PASSWORD) or
+    /// a call (TimeSpan.FromMinutes) after a password-like name is more likely configuration — suspect, not blocked.
+    /// </summary>
+    private static bool LooksLikeASecretValue(string value) =>
+        value.Any(char.IsDigit) || value.Any(ch => "!@#$%^&*+/=~?".Contains(ch));
+
+    /// <summary>
+    /// After a password-like name, a code reference (settings.DB_PASSWORD, TimeSpan.FromMinutes) or one short lowercase
+    /// word (keyvault, required, true) is configuration, not a credential.
+    /// </summary>
+    private static bool IsConfigurationWord(string value) =>
+        CodeReference().IsMatch(value) || (value.Length <= 10 && value.All(char.IsAsciiLetterLower));
+
+    /// <summary>
+    /// The catch-all: a standalone mixed-class token (8+ characters, a digit or symbol in it, not a URL, path, hash, id,
+    /// version or number) on a line that talks about passwords, logins or credentials — or right below such a line,
+    /// which is how tables, YAML name/value pairs and "password:\n  value" look.
+    /// </summary>
+    private static IEnumerable<SecretFinding> SuspectsNearPasswordWords(string text, List<SecretFinding> already)
+    {
+        var lines = text.Split('\n');
+        for (var i = 0; i < lines.Length; i++)
+        {
+            // this line and the two above it: a table row sits two lines below its header
+            var context = string.Join('\n', lines[Math.Max(0, i - 2)..(i + 1)]);
+            if (!PasswordClassWord().IsMatch(context)) continue;
+            foreach (Match token in StandaloneToken().Matches(lines[i]))
+            {
+                var value = token.Value.Trim('"', '\'', '`', '*', '_', '(', ')', ',', ';', '|', '<', '>', '.', '[', ']', '{', '}');
+                if (IsReference(value) || value.StartsWith('@')) continue; // URLs, paths, @mentions and @Attributes
+                // user:secret, key=secret, <td>secret</td>: judge the part that would be the secret
+                var cut = value.LastIndexOfAny([':', '=', '>']);
+                if (cut >= 0 && cut < value.Length - 1) value = value[(cut + 1)..].Trim('"', '\'', '<', '/');
+                if (value.Contains('<')) value = value[..value.IndexOf('<')];
+                if (value.Length < 8 || IsPlaceholder(value) || IsReference(value) || IsConfigurationWord(value) || value.Contains('(')) continue;
+                if (value.Contains('/') && value[..value.IndexOf('/')].All(char.IsAsciiLetterLower)) continue; // task/T-9-x, src/app/main.cs
+                if (NotASecretShape().IsMatch(value)) continue;
+                if (!value.Any(char.IsLetter) || !(value.Any(char.IsDigit) || value.Any(ch => "!@#$%^&*+=~?".Contains(ch)))) continue;
+                var masked = Mask(value);
+                if (already.Any(f => f.Excerpt == masked)) continue;
+                yield return new SecretFinding("possible-credential-near-password-word", masked, SecretSeverity.Suspect);
+            }
+        }
+    }
+
+    // A shell variable is a placeholder when it reads like one: $TOKEN, ${DB_PASSWORD}, $password — not $up3rS3cret9
+    [GeneratedRegex(@"^(?:\$\{?(?:[A-Z_][A-Z0-9_.]*|[A-Za-z_.]+)\}?|<[^<>0-9]{1,80}>|\{\{[^{}]{1,80}\}\}|\$\{\{[^{}]{1,80}\}\}|%[A-Za-z_][A-Za-z0-9_]*%|\*{3,}|[xX]{3,}|\.{3,}|…)$")]
+    private static partial Regex PlaceholderValue();
+
+    // settings.DB_PASSWORD · TimeSpan.FromMinutes(30) · Configuration["Smtp:Password"] · os.environ
+    [GeneratedRegex(@"^[A-Za-z_][A-Za-z0-9_]*(?:\.[A-Za-z_][A-Za-z0-9_]*)+(?:\(.*)?$|^[A-Za-z_][A-Za-z0-9_.]*[\[(].*$")]
+    private static partial Regex CodeReference();
+
+    [GeneratedRegex(@"pass(?:word|wd|phrase|code|wort)?\b|\bpwd\b|\bpw\b|secret|credential|\bcreds\b|\blog\s?in\b|\btoken\b|api[ _\-]?key|(?<![A-Za-z0-9])-[pPa]\b|--password|IDENTIFIED\s+BY|SecureString|NetworkCredential|\bauth\s*=|/user:", RegexOptions.IgnoreCase)]
+    private static partial Regex PasswordClassWord();
+
+    // split on whitespace and on the punctuation that separates fields in JSON, CSV, tables and markup
+    [GeneratedRegex(@"[^\s,""'<>|(){}\[\]]+")]
+    private static partial Regex StandaloneToken();
+
+    // things that are long and mixed but are not secrets: hex ids and hashes, UUIDs, versions, numbers with units, times and dates,
+    // e-mail addresses, @mentions, issue refs, key=value pairs and flags (their value part is scanned by the other rules)
+    [GeneratedRegex(@"^(?:[0-9a-fA-F]{7,}|[0-9a-fA-F]{8}-[0-9a-fA-F\-]{27}|v?\d+(?:\.\d+)+[\w.\-]*|\d[\d.,:/\-]*[A-Za-z%]{0,4}|[^@\s]+@[A-Za-z0-9.\-]+\.[A-Za-z]{2,}|@[\w\-]+|#\d+|[A-Za-z]+-\d+|--?[A-Za-z][\w\-]*(?:=.*)?|[A-Za-z_][\w.\-]*[=:].*|[A-Za-z]+\d{0,4}|(?:[A-Za-z]+[./\\_\-])+[A-Za-z0-9]+\d{0,4})$")]
+    private static partial Regex NotASecretShape();
 
     /// <summary>Zero-width and other format characters are invisible to a reviewer and break patterns; drop them.</summary>
     private static string RemoveInvisible(string text)
@@ -117,7 +217,7 @@ public static partial class SecretScanner
     private static partial Regex GitHubToken();
 
     // Vendor-prefixed keys
-    [GeneratedRegex(@"(?:sk-(?:ant-|proj-|live-|test-)?[A-Za-z0-9_\-]{20,}|[sr]k_(?:live|test)_[A-Za-z0-9]{16,}|whsec_[A-Za-z0-9]{20,}|xai-[A-Za-z0-9]{20,}|AIza[0-9A-Za-z_\-]{30,}|ya29\.[A-Za-z0-9_\-]{20,}|GOCSPX-[A-Za-z0-9_\-]{20,}|npm_[A-Za-z0-9]{30,}|glpat-[A-Za-z0-9_\-]{20,}|pypi-[A-Za-z0-9_\-]{30,}|dop_v1_[a-f0-9]{40,}|shp(?:at|ss|ca)_[a-fA-F0-9]{30,}|hf_[A-Za-z0-9]{30,}|hvs\.[A-Za-z0-9_\-]{20,}|lin_api_[A-Za-z0-9]{20,}|sq0(?:atp|csp)-[A-Za-z0-9_\-]{20,}|NRAK-[A-Z0-9]{20,}|key-[0-9a-f]{32})")]
+    [GeneratedRegex(@"(?:sk-(?:ant-|proj-|live-|test-)?[A-Za-z0-9_\-]{20,}|[sr]k_(?:live|test)_[A-Za-z0-9]{16,}|whsec_[A-Za-z0-9]{20,}|xai-[A-Za-z0-9]{20,}|AIza[0-9A-Za-z_\-]{30,}|ya29\.[A-Za-z0-9_\-]{20,}|GOCSPX-[A-Za-z0-9_\-]{20,}|npm_[A-Za-z0-9]{30,}|glpat-[A-Za-z0-9_\-]{20,}|pypi-[A-Za-z0-9_\-]{30,}|dop_v1_[a-f0-9]{40,}|shp(?:at|ss|ca)_[a-fA-F0-9]{30,}|hf_[A-Za-z0-9]{30,}|hvs\.[A-Za-z0-9_\-]{20,}|lin_api_[A-Za-z0-9]{20,}|sq0(?:atp|csp)-[A-Za-z0-9_\-]{20,}|NRAK-[A-Z0-9]{20,}|key-[0-9a-f]{32}|dckr_pat_[A-Za-z0-9_\-]{20,}|ATATT3[A-Za-z0-9_\-=]{20,}|dapi[0-9a-f]{32}|glrt-[A-Za-z0-9_\-]{16,}|glsa_[A-Za-z0-9_]{20,}|PMAK-[A-Za-z0-9\-]{20,}|[A-Za-z0-9]{14}\.atlasv1\.[A-Za-z0-9]{20,}|dp\.pt\.[A-Za-z0-9]{20,}|secret_[A-Za-z0-9]{40,}|figd_[A-Za-z0-9_\-]{20,}|pul-[0-9a-f]{40}|pscale_(?:pw|tkn)_[A-Za-z0-9_\-.]{20,}|sk\.eyJ[A-Za-z0-9_\-.]{20,})")]
     private static partial Regex PrefixedApiKey();
 
     // Keys recognizable by structure: SendGrid SG.x.y, Twilio AC/SK + 32 hex, Telegram bot id:secret, Discord bot token
@@ -155,7 +255,7 @@ public static partial class SecretScanner
     private static partial Regex StrongAssignment();
 
     // Identifiers containing token/key/credential/auth words are everyday vocabulary, so only a long opaque value counts.
-    [GeneratedRegex(@"[""']?(?<![A-Za-z])[A-Za-z0-9_.\-]*?(?:token|api[_\-]?key|access[_\-]?key|private[_\-]?key|encryption[_\-]?key|signing[_\-]?key|secret[_\-]?key|credentials?|_auth|auth[_\-]?key)[A-Za-z0-9_.\-]*[""']?[ \t]*(?:=>|:=|[:=：]|\t)[ \t]*[""']?(?<value>[A-Za-z0-9_\-+/=.:]{16,})", RegexOptions.IgnoreCase)]
+    [GeneratedRegex(@"[""']?(?<![A-Za-z])[A-Za-z0-9_.\-]*?(?:token|api[_\-]?key|access[_\-]?key|private[_\-]?key|encryption[_\-]?key|signing[_\-]?key|secret[_\-]?key|credentials?|_auth|auth[_\-]?key|_pat)[A-Za-z0-9_.\-]*[""']?[ \t]*(?:=>|:=|[:=：]|\t)[ \t]*[""']?(?<value>[A-Za-z0-9_\-+/=.:]{16,})", RegexOptions.IgnoreCase)]
     private static partial Regex WeakAssignment();
 
     // "the password is hunter2hunter2", netrc "login bob password hunter2x" — a value with a digit in it, so "password is required" passes

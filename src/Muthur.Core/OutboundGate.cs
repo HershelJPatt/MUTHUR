@@ -15,11 +15,17 @@ public static class OutboundGate
 
     public static void EnsureClean(string body)
     {
-        var findings = SecretScanner.Scan(body);
+        var findings = SecretScanner.Scan(body).Where(f => f.Severity == SecretSeverity.Block).ToList();
         if (findings.Count == 0) return;
         var list = string.Join("; ", findings.Take(5).Select(f => $"{f.Kind}: {f.Excerpt}"));
         throw Fail.Rule("secret_detected", $"The text contains what looks like {findings.Count} credential(s) and cannot leave the machine: {list}. Remove them and draft again.");
     }
+
+    /// <summary>Things that might be credentials. They do not stop a draft, but only the founder can let such a message leave.</summary>
+    public static List<string> Flags(string body) =>
+        SecretScanner.Scan(body).Where(f => f.Severity == SecretSeverity.Suspect).Select(f => $"{f.Kind}: {f.Excerpt}").Distinct().Take(20).ToList();
+
+    public static bool NeedsFounder(OutboundMessage message) => message.Target is { RequiresFounderApproval: true } || message.Flags.Count > 0;
 
     public static void EnsureReviewer(OutboundMessage message, Guid? reviewerAgentId, string? reviewerModel, string claimedSha, bool requireCrossProvider)
     {
@@ -40,11 +46,11 @@ public static class OutboundGate
     {
         var id = "O-" + message.Id;
         if (message.Status == OutboundStatus.AwaitingFounder)
-            throw Fail.Rule("awaiting_founder", $"{id} goes to a target that needs the founder's approval, and does not have it yet.");
+            throw Fail.Rule("awaiting_founder", $"{id} needs the founder's approval (its target demands it, or the text was flagged), and does not have it yet.");
         if (message.Status != OutboundStatus.Approved)
             throw Fail.Rule("not_approved", $"{id} is {message.Status}. Only an approved message can be sent.");
-        if (message.Target is { RequiresFounderApproval: true } && message.FounderApprovedAt is null)
-            throw Fail.Rule("awaiting_founder", $"{id} goes to a target that needs the founder's approval, and does not have it yet.");
+        if (NeedsFounder(message) && message.FounderApprovedAt is null)
+            throw Fail.Rule("awaiting_founder", $"{id} needs the founder's approval (its target demands it, or the text was flagged), and does not have it yet.");
         if (Hash(message.Body) != message.BodySha256)
             throw Fail.Rule("body_changed", $"The body of {id} no longer matches the hash that was reviewed. It will not be sent.");
         EnsureClean(message.Body);

@@ -173,6 +173,34 @@ public sealed class OutboundTests : IDisposable
     }
 
     [Fact]
+    public async Task Text_that_might_hold_a_credential_can_only_leave_with_the_founders_approval()
+    {
+        await DefineTargetAsync(); // an ordinary target: no founder approval needed for ordinary text
+        var author = await _hub.RegisterAgentAsync("author");
+        var peer = await _hub.RegisterAgentAsync("peer");
+
+        var draft = await ReadAsync(await DraftAsync(author, "docker login registry.example.com -u deploy -p Sup3rS3cretValue9"));
+        Assert.Equal("pending_review", draft.Status);
+        Assert.NotEmpty(draft.Flags);
+        Assert.True(draft.RequiresFounderApproval);
+        Assert.DoesNotContain("Sup3rS3cretValue9", string.Join(' ', draft.Flags)); // flags are masked like findings
+
+        // A careless (or colluding) reviewer cannot wave it through.
+        Assert.Equal("awaiting_founder", (await ReadAsync(await ReviewAsync(peer, draft))).Status);
+        var send = await author.PostAsync(Routes.OutboundAction(draft.Id, "send"), null);
+        Assert.Equal("awaiting_founder", (await send.ReadErrorAsync()).Code);
+        Assert.False(File.Exists(Outbox));
+
+        (await _hub.Founder().PostAsync(Routes.OutboundAction(draft.Id, "approve"), null)).EnsureSuccessStatusCode();
+        Assert.Equal("sent", (await ReadAsync(await author.PostAsync(Routes.OutboundAction(draft.Id, "send"), null))).Status);
+
+        // Ordinary text to the same target needs no founder.
+        var plain = await ReadAsync(await DraftAsync(author, "Release 1.5 is out."));
+        Assert.Empty(plain.Flags);
+        Assert.Equal("approved", (await ReadAsync(await ReviewAsync(peer, plain))).Status);
+    }
+
+    [Fact]
     public async Task The_body_is_delivered_byte_for_byte()
     {
         await DefineTargetAsync();

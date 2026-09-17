@@ -88,6 +88,7 @@ public sealed partial class OutboundService(Ledger ledger, IEnumerable<IOutbound
                 TaskId = taskId,
                 Body = request.Body,
                 BodySha256 = OutboundGate.Hash(request.Body),
+                Flags = OutboundGate.Flags(request.Body),
                 Status = OutboundStatus.PendingReview,
                 AuthorAgentId = caller.AgentId,
                 AuthorName = caller.Name,
@@ -96,7 +97,7 @@ public sealed partial class OutboundService(Ledger ledger, IEnumerable<IOutbound
             };
             m.Db.OutboundMessages.Add(message);
             await m.Db.SaveChangesAsync(ct);
-            m.Record("outbound.drafted", taskId, new { outbound = Id(message), target = key, author = caller.Name, sha256 = message.BodySha256, chars = message.Body.Length });
+            m.Record("outbound.drafted", taskId, new { outbound = Id(message), target = key, author = caller.Name, sha256 = message.BodySha256, chars = message.Body.Length, flags = message.Flags });
 
             if (await m.Db.Roles.AnyAsync(r => r.Key == ReviewerRole, ct))
                 MessageService.PostFromHub(m, Recipient.Role, ReviewerRole, $"{Id(message)} by {caller.Name} to '{key}' is waiting for review: muthur out show {Id(message)}", taskId);
@@ -118,7 +119,7 @@ public sealed partial class OutboundService(Ledger ledger, IEnumerable<IOutbound
             message.ReviewNote = request.Note?.Trim();
             message.ReviewedAt = m.Now;
             message.Status = !request.Approve ? OutboundStatus.Rejected
-                : message.Target!.RequiresFounderApproval ? OutboundStatus.AwaitingFounder
+                : OutboundGate.NeedsFounder(message) ? OutboundStatus.AwaitingFounder
                 : OutboundStatus.Approved;
             m.Record(request.Approve ? "outbound.approved" : "outbound.rejected", message.TaskId,
                 new { outbound = Id(message), reviewer = caller.Name, sha256 = message.BodySha256, note = message.ReviewNote });
@@ -263,8 +264,8 @@ public sealed partial class OutboundService(Ledger ledger, IEnumerable<IOutbound
 
     private static OutboundDto ToDto(OutboundMessage o) =>
         new(Id(o), o.Target?.Key ?? "", o.Target?.Channel ?? "", Status(o.Status), o.Body, o.BodySha256, o.AuthorName, o.AuthorModel,
-            o.ReviewerName, o.ReviewerModel, o.ReviewNote, o.Target?.RequiresFounderApproval ?? false, o.FounderApprovedAt,
-            o.TaskId is { } t ? Wire.TaskId(t) : null, o.CreatedAt, o.SentAt, o.Error);
+            o.ReviewerName, o.ReviewerModel, o.ReviewNote, OutboundGate.NeedsFounder(o), o.FounderApprovedAt,
+            o.TaskId is { } t ? Wire.TaskId(t) : null, o.CreatedAt, o.SentAt, o.Error, o.Flags);
 
     private static string Status(OutboundStatus status) => status switch
     {

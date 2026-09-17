@@ -10,6 +10,8 @@ public sealed class SecretScannerTests
 {
     public static TheoryData<int, string> Block => Load("block.txt");
     public static TheoryData<int, string> Pass => Load("pass.txt");
+    public static TheoryData<int, string> Flag => Load("flag.txt");
+    public static TheoryData<int, string> Clean => Load("clean.txt");
 
     private static TheoryData<int, string> Load(string file)
     {
@@ -34,13 +36,26 @@ public sealed class SecretScannerTests
     [Theory]
     [MemberData(nameof(Block))]
     public void Credentials_are_refused(int line, string text) =>
-        Assert.True(SecretScanner.Scan(Decode(text)).Count > 0, $"block.txt line {line} was not detected: {text}");
+        Assert.True(SecretScanner.Scan(Decode(text)).Any(f => f.Severity == SecretSeverity.Block), $"block.txt line {line} was not blocked: {text}");
+
+    [Theory]
+    [MemberData(nameof(Flag))]
+    public void Possible_credentials_are_at_least_flagged_for_the_founder(int line, string text) =>
+        Assert.True(SecretScanner.Scan(Decode(text)).Count > 0, $"flag.txt line {line} was neither flagged nor blocked: {text}");
+
+    [Theory]
+    [MemberData(nameof(Clean))]
+    public void Everyday_messages_raise_nothing(int line, string text)
+    {
+        var findings = SecretScanner.Scan(Decode(text));
+        Assert.True(findings.Count == 0, $"clean.txt line {line} raised {string.Join(", ", findings.Select(f => f.Kind + "/" + f.Severity))}: {text}");
+    }
 
     [Theory]
     [MemberData(nameof(Pass))]
     public void Ordinary_text_passes(int line, string text)
     {
-        var findings = SecretScanner.Scan(Decode(text));
+        var findings = SecretScanner.Scan(Decode(text)).Where(f => f.Severity == SecretSeverity.Block).ToList();
         Assert.True(findings.Count == 0, $"pass.txt line {line} was refused as {string.Join(", ", findings.Select(f => f.Kind))}: {text}");
     }
 

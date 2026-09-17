@@ -1,0 +1,58 @@
+# Every line is a text that must at least be FLAGGED (a Suspect or a Block finding): it can never leave without the
+# founder having looked at it. These are credentials in formats no pattern can pin down exactly — flags, table cells,
+# name/value pairs on separate lines, code, prose — so they are caught by context: a mixed-class token near a
+# password-class word. Same escapes as block.txt. All values are made up.
+
+# --- command lines
+docker login registry.example.com -u deploy -p Sup3rS3cretValue9
+sqlcmd -S db.internal -U sa -P Sup3rS3cretValue9 -Q "select 1"
+az login --service-principal -u 0123abcd-0123-abcd-0123-0123456789ab -p Sup3rS3cretValue9 --tenant contoso
+sshpass -p 'Sup3rS3cretValue9' ssh deploy@host
+mysqldump -u root -p'Sup3rS3cretValue9' prod > dump.sql
+redis-cli -a Sup3rS3cretValue9 ping
+psexec \\\\host -u admin -p Sup3rS3cretValue9 cmd
+tool -u admin -p Sup3rS3cretValue9
+net use \\\\server\\share Sup3rS3cretValue9 /user:CORP\\svc
+az keyvault secret set --vault-name kv --name SqlPassword --value Sup3rS3cretValue9
+dotnet user-secrets set "Smtp:Password" "Sup3rS3cretValue9"
+setx DB_PASSWORD Sup3rS3cretValue9
+echo Sup3rS3cretValue9 | docker login --password-stdin -u deploy
+
+# --- name and value in separate fields or lines
+- name: DB_PASSWORD\n  value: "Sup3rS3cretValue9"
+{"name":"SqlPassword","value":"Sup3rS3cretValue9","slotSetting":false}
+username,password\nadmin,Sup3rS3cretValue9
+
+# --- markdown and HTML
+**Password:** Sup3rS3cretValue9
+**Password**: Sup3rS3cretValue9
+__Password:__ Sup3rS3cretValue9
+*Password:* Sup3rS3cretValue9
+| user | password |\n|---|---|\n| admin | Sup3rS3cretValue9 |
+| Setting | Value |\n|---|---|\n| SmtpPassword | Sup3rS3cretValue9 |
+<tr><td>Password</td><td>Sup3rS3cretValue9</td></tr>
+<dt>Password</dt><dd>Sup3rS3cretValue9</dd>
+<input type="password" value="Sup3rS3cretValue9">
+
+# --- code
+$pw = ConvertTo-SecureString "Sup3rS3cretValue9" -AsPlainText -Force
+var c = new NetworkCredential("svc", "Sup3rS3cretValue9");
+requests.get(url, auth=("admin", "Sup3rS3cretValue9"))
+CREATE USER app IDENTIFIED BY 'Sup3rS3cretValue9';
+
+# --- prose
+pw is Sup3rS3cretValue9
+creds for staging: admin / Sup3rS3cretValue9
+login: admin / Sup3rS3cretValue9
+use Sup3rS3cretValue9 as the password for the staging db
+password for the staging db -> Sup3rS3cretValue9
+Password - Sup3rS3cretValue9
+Log in with admin:Sup3rS3cretValue9
+password = Sup3r S3cretV4lue
+password=$up3rS3cretValue9
+password: <Sup3rS3cretValue9>
+
+# --- values without a digit or symbol: cannot be told from configuration words, so flagged rather than blocked
+api_key = "zzzzzzzzzzzzzzzz"
+{ "api_key": "zzzzzzzzzzzzzzzz" }
+passphrase: correct-horse-battery

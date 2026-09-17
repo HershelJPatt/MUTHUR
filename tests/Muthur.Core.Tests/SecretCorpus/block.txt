@@ -65,13 +65,11 @@ mysql -h db -u root -pSup3rS3cret prod
 # --- assignments
 Server=db;User Id=sa;Password=Sup3rS3cret!;
 DefaultEndpointsProtocol=https;AccountName=x;AccountKey=abcd1234abcd1234abcd==
-api_key = "zzzzzzzzzzzzzzzz"
 the password: hunter2hunter2
 password: hunter2
 {"password": "hunter2hunter2"}
 "password":"hunter2hunter2"
 {"password": "hunter2"}
-{ "api_key": "zzzzzzzzzzzzzzzz" }
 {"credentials":"abcdef0123456789abcdef"}
 "secretKey": "abcdef0123456789abcdef"
 "secret_key": "abcdef0123456789abcdef"
@@ -89,7 +87,6 @@ PRIVATE_KEY_PEM=MIIEvQIBADANBgkqhkiG9w0BAQEFAASC
 ENCRYPTION_KEY=0123456789abcdef0123456789abcdef
 signingKey: 0123456789abcdef0123456789abcdef
 token: 9f86d081884c7d659a2feaa0c55ad015
-passphrase: correct-horse-battery
 pw: Sup3rS3cret
 password\tSup3rS3cret
 password => 'Sup3rS3cret'
@@ -114,3 +111,20 @@ gh~p_abcdefghijklmnop\\\nqrstuvwxyzABCDEF0123
 AK~IAIOSF\nODNN7EXAMPLE
 -----BEGIN RSA\nPRIVATE~ KEY-----
 https://discord.com/api/web~hooks/123456789012345678/abcdefghij\nklmnopqrstuvwxyz
+
+# --- round 3: vendor tokens with a fixed prefix
+dc~kr_pat_abcdefghijklmnopqrstuvwxyz0
+ATA~TT3xFfGF0abcdefghijklmnopqrstuvwxyz0123456789
+da~pi0123456789abcdef0123456789abcdef
+gl~rt-abcdefghijklmnopqrst
+gl~sa_abcdefghijklmnopqrstuvwxyz012345_0a1b2c3d
+PM~AK-0123456789abcdef01234567-0123456789abcdef0123456789abcdef01
+abcdefghijklmn.atl~asv1.abcdefghijklmnopqrstuvwxyz0123456789abcdefghijklmnopqrstuvwxyz0123
+dp~.pt.abcdefghijklmnopqrstuvwxyz0123456789abcdefg
+notion sec~ret_abcdefghijklmnopqrstuvwxyz0123456789ABCDEFG
+fi~gd_abcdefghijklmnopqrstuvwxyz0123456789ABCD
+pu~l-0123456789abcdef0123456789abcdef01234567
+psc~ale_pw_abcdefghijklmnopqrstuvwxyz0123456789abcdefg
+mapbox sk~.eyJ1IjoiYWNtZSIsImEiOiJjbGFiY2RlZjAxMjM0NTY3ODkifQ.abcdefghijklmnopqrstuv
+AZURE_DEVOPS_EXT_PAT=abcdefghijklmnopqrstuvwxyz0123456789abcdefghijklmnop
+- name: GITHUB_TOKEN\n  value: gh~p_abcdefghijklmnopqrstuvwxyzABCDEF0123
