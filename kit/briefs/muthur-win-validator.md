@@ -21,12 +21,17 @@ env $T ./artifacts/validate/muthur.exe status
 
 **Always pass `-Destination` to `scripts/install.ps1`.** Its default destination is the live hub's directory.
 
+## Before anything else
+
+Record the live hub's identity so you can prove you never touched it: `M status` → note `processId` and `startedAt`.
+Compare again when you finish; if they changed, say so in your evidence (someone else may have upgraded it).
+
 ## Build the branch
 
 Run from the repository root (`C:\src\Experiment`); never check the branch out in the main checkout.
 
 ```bash
-git worktree add .worktrees/validate-T-n <branch>
+git worktree add --detach .worktrees/validate-T-n <branch>     # --detach: the builder usually still has the branch checked out
 cd .worktrees/validate-T-n
 dotnet build                                           # 0 warnings, 0 errors
 dotnet test                                            # all green
@@ -37,7 +42,8 @@ powershell -NoProfile -File scripts/install.ps1 -Destination ./artifacts/validat
 
 1. `env $T ./artifacts/validate/muthur.exe up` → JSON status, exit 0; `status` answers in well under a second.
 2. From the worktree root: `project add demo --repo . --founder`, register two agents
-   (`agent register --name a1 --harness claude --model x`), add tasks, then race a claim:
+   (`agent register --name a1 --harness claude --model x`), add tasks (`task add "<title>" --as-agent a1` — the title is
+   positional and an identity is required), then race a claim:
    ```bash
    (env $T $X task claim T-1 --as-agent a1 >/dev/null 2>&1; echo "a1=$?") & \
    (env $T $X task claim T-1 --as-agent a2 >/dev/null 2>&1; echo "a2=$?") & wait      # exactly one 0, one 3
@@ -50,7 +56,9 @@ powershell -NoProfile -File scripts/install.ps1 -Destination ./artifacts/validat
    check is mandatory**: use a browser tool (e.g. the `web-engine` skill). If you have none, the verdict is not
    "pass" — report blocked to the task owner (`muthur msg send --to <owner> --blocking …`) and release the role.
 5. Read `$SCRATCH/muthur.log`: no warnings, errors or unhandled exceptions the change could have caused.
-6. `env $T … down` returns only once the server is gone; `status` must then exit 4.
+6. Shutdown, the way it happens in real life: start `msg inbox --wait 300 --as-agent a1` in the background, then `down`.
+   `status` exiting 4 is not enough — check the **server process by PID** (`tasklist //FI "PID eq <pid>"`): it must be
+   gone within a couple of seconds, and only then may `up` be run again.
 
 ## Healthy looks like
 
