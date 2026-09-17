@@ -74,3 +74,18 @@ Basic auth for the staging site is admin and Sup3rS3cretValue9.
 the password is CorrectHorseBatteryStaple
 password = Sup3r S3cret
 password: 'My dog Rex 2019'
+
+# --- round 5, verbatim: .env NAME=value where the name is a *_KEY the scanner had no word for
+MEILI_MASTER_KEY=Ohc4c5j862d3Rc9c3f6a5b8c7d9e0f1a2b3c4d5e6f7
+FERNET_KEY=zH8kQ9mX2vB7nL5pR8tW1yC4dF6gH0jK3sM7uE2qAB=
+SESSION_KEY=aZ3kQ9mX2vB7nL5pR8tW1yC4dF6gH0jK3sM7uE2q
+APP_KEY=base64:Wq7Kp2Lm9Rt4Xz8pN6aB3kQ9mX2vB7nL5pR8tW1yC=
+KEY=aZ3kQ9mX2vB7nL5pR8tW1yC4dF6gH0jK3sM7uE2q
+MASTER_KEY=aZ3kQ9mX2vB7nL5pR8tW1yC4dF6gH0jK3sM7uE2q
+HMAC_KEY=aZ3kQ9mX2vB7nL5pR8tW1yC4dF6gH0jK3sM7uE2q
+CONSUMER_KEY=aZ3kQ9mX2vB7nL5pR8tW1yC4dF6gH0jK3sM7uE2q
+STORAGE_KEY=aZ3kQ9mX2vB7nL5pR8tW1yC4dF6gH0jK3sM7uE2q
+JWT_KEY=s3cr3t!Jwt#Key$2024
+<add key="StorageKey" value="Sup3rS3cret9"/>
+SUPABASE_ACCESS_TOKEN\nsb~p_0123456789abcdef0123456789abcdef01234567
+api_token:\n9f86d081884c7d659a2feaa0c55ad015a3bf4f1b

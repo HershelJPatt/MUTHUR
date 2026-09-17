@@ -166,7 +166,9 @@ public static partial class SecretScanner
                 value = CleanValue(value);
                 if (value.Length < minimum || value.StartsWith('@') || value.Contains('(') || IsNotACredential(value)) continue;
                 if (value.Contains('/') && value[..value.IndexOf('/')].All(char.IsAsciiLetterLower)) continue; // task/T-9-x, src/app/main.cs
-                if (NotASecretShape().IsMatch(value)) continue;
+                // "api_token:" alone on the line above: whatever stands below it is its value, even if it looks like a hash
+                var namedAbove = i > 0 && DanglingSecretName().IsMatch(lines[i - 1]);
+                if (NotASecretShape().IsMatch(value) && !(namedAbove && value.Length >= 16)) continue;
                 if (!value.Any(char.IsLetter) || !(value.Any(char.IsDigit) || value.Any(ch => "!@#$%^&*+=~?".Contains(ch)))) continue;
                 var masked = Mask(value);
                 if (already.Any(f => f.Excerpt == masked)) continue;
@@ -184,11 +186,15 @@ public static partial class SecretScanner
     private static partial Regex CodeReference();
 
     // No word boundaries around token/pwd/secret/…: GITHUB_TOKEN, DB_PWD and AccessToken are names too ("_" and letters are word characters).
-    [GeneratedRegex(@"pass(?:word|wd|phrase|code|wort)?|pwd|(?<![A-Za-z])pw(?![A-Za-z])|secret|credential|creds|(?<![A-Za-z])log\s?in(?![A-Za-z])|token|api[ _\-]?key|(?<![A-Za-z])auth(?![A-Za-z])|(?<![A-Za-z0-9])-[pPaw](?![A-Za-z0-9])|--password|/p:|IDENTIFIED\s+BY|SecureString|NetworkCredential|/user:", RegexOptions.IgnoreCase)]
+    [GeneratedRegex(@"pass(?:word|wd|phrase|code|wort)?|pwd|(?<![A-Za-z])pw(?![A-Za-z])|secret|credential|creds|(?<![A-Za-z])log\s?in(?![A-Za-z])|token|api[ _\-]?key|(?<![A-Za-z])key(?![A-Za-z])|_key(?![A-Za-z])|(?-i:(?<=[a-z])Key(?![a-z]))|(?<![A-Za-z])auth(?![A-Za-z])|(?<![A-Za-z0-9])-[pPaw](?![A-Za-z0-9])|--password|/p:|IDENTIFIED\s+BY|SecureString|NetworkCredential|/user:", RegexOptions.IgnoreCase)]
     private static partial Regex PasswordClassWord();
 
     [GeneratedRegex(@"pass(?:word|wd|phrase|code|wort)|pwd|(?<![A-Za-z])pw(?![A-Za-z])", RegexOptions.IgnoreCase)]
     private static partial Regex StrongPasswordWord();
+
+    // a line that is nothing but a sensitive name, optionally with a list dash, quotes and a trailing : or =
+    [GeneratedRegex(@"^[\s\-]*[""']?[A-Za-z0-9_.\-]*(?:pass|pwd|secret|token|credential|key)[A-Za-z0-9_.\-]*[""']?\s*[:=]?\s*$", RegexOptions.IgnoreCase)]
+    private static partial Regex DanglingSecretName();
 
     [GeneratedRegex(@"^(?:-[pPw]|/[pP]:)(?<value>.{6,})$")]
     private static partial Regex GluedPasswordFlag();
@@ -282,7 +288,7 @@ public static partial class SecretScanner
     private static partial Regex StrongAssignment();
 
     // Identifiers containing token/key/credential/auth words are everyday vocabulary, so only a long opaque value counts.
-    [GeneratedRegex(@"[""']?(?<![A-Za-z])[A-Za-z0-9_.\-]*?(?:token|api[_\-]?key|access[_\-]?key|private[_\-]?key|encryption[_\-]?key|signing[_\-]?key|secret[_\-]?key|credentials?|_auth|auth[_\-]?key|_pat)[A-Za-z0-9_.\-]*[""']?[ \t]*(?:=>|:=|[:=：]|\t)[ \t]*[""']?(?<value>[A-Za-z0-9_\-+/=.:]{16,})", RegexOptions.IgnoreCase)]
+    [GeneratedRegex(@"[""']?(?<![A-Za-z])[A-Za-z0-9_.\-]*?(?:token|api[_\-]?key|access[_\-]?key|private[_\-]?key|encryption[_\-]?key|signing[_\-]?key|secret[_\-]?key|credentials?|_auth|auth[_\-]?key|_pat|(?<![A-Za-z])key|_key|(?-i:(?<=[a-z])Key))[A-Za-z0-9_.\-]*[""']?[ \t]*(?:=>|:=|[:=：]|\t)[ \t]*[""']?(?<value>[^\s""',;}<]{16,})", RegexOptions.IgnoreCase)]
     private static partial Regex WeakAssignment();
 
     // "the password is hunter2hunter2", netrc "login bob password hunter2x" — a value with a digit in it, so "password is required" passes
@@ -301,7 +307,7 @@ public static partial class SecretScanner
     private static partial Regex XmlElement();
 
     // <add key="SmtpPassword" value="…"/>
-    [GeneratedRegex(@"[""'][A-Za-z0-9_.\-]*(?:pass|pwd|secret|token|apikey|api_key)[A-Za-z0-9_.\-]*[""']\s+value\s*=\s*[""'](?<value>[^""']{6,})", RegexOptions.IgnoreCase)]
+    [GeneratedRegex(@"[""'][A-Za-z0-9_.\-]*(?:pass|pwd|secret|token|apikey|api_key|(?-i:(?<=[a-z])Key)|_key)[A-Za-z0-9_.\-]*[""']\s+value\s*=\s*[""'](?<value>[^""']{6,})", RegexOptions.IgnoreCase)]
     private static partial Regex XmlAttributePair();
 
     // curl -u user:pass · --user user:pass · mysql -pSECRET · docker/npm "auth": "<base64>"

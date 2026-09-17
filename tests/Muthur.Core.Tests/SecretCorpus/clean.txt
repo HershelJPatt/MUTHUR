@@ -30,3 +30,9 @@ Login failed with a password error; correlation id 3f2504e0-4f89-11d3-9a0c-0305e
 Connection string template: Server=<host>;Database=<db>;User Id=<user>;Password=<password>;
 Migration 20240917_AddPasswordHashColumn applied to staging and production.
 The password is incorrect message now shows after three failed attempts; the token is refreshed automatically.
+
+# --- "key" is an everyday word
+Press the Escape key to close the dialog; the keyboard shortcut list is under Help.
+The cache key is built from the user id and the locale, e.g. profile:42:en-GB.
+Primary key changed from int to bigint in migration 20240918_WidenOrderIds.
+cacheKey=user_profile_settings and sortKey=created_at are the defaults.
