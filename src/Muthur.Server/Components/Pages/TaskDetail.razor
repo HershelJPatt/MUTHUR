@@ -1,0 +1,131 @@
+@page "/tasks/{Id}"
+@inherits LivePanel
+@inject TaskService Tasks
+@inject TimeProvider Clock
+
+<PageTitle>MUTHUR · @Id</PageTitle>
+
+@if (_detail is { } detail)
+{
+    var task = detail.Task;
+    <div class="page">
+        <section class="panel panel-fit">
+            <div class="panel-body">
+                <div class="detail-head">
+                    <span class="card-id">@task.Id</span>
+                    <h1 class="detail-title">@task.Title</h1>
+                    <span class="pill pill-owner">@task.State.ToWire()</span>
+                    @if (task.Priority > 0)
+                    {
+                        <span class="pill pill-priority">priority @task.Priority</span>
+                    }
+                    @foreach (var v in task.Validations)
+                    {
+                        <span class="pill pill-verdict-@v.Verdict">@v.Validator @v.Verdict</span>
+                    }
+                </div>
+                <dl class="kv" style="margin-top: 12px">
+                    <dt>Project</dt><dd>@task.Project</dd>
+                    <dt>Owner</dt>
+                    <dd>
+                        @(task.Owner ?? "—")@(task.ClaimExpires is { } lease ? " · lease " + Format.Until(lease, _now) : "")
+                    </dd>
+                    @if (task.SpecPath is { } spec)
+                    {
+                        <dt>Spec</dt><dd>@spec</dd>
+                    }
+                    @if (task.Branch is { } branch)
+                    {
+                        <dt>Branch</dt><dd>@branch</dd>
+                    }
+                    @if (task.PrUrl is { } pr)
+                    {
+                        <dt>Pull request</dt><dd><a href="@pr">@pr</a></dd>
+                    }
+                    @if (task.Parent is { } parent)
+                    {
+                        <dt>Parent</dt><dd><a href="/tasks/@parent">@parent</a></dd>
+                    }
+                    <dt>Created</dt><dd>@Stamp(task.CreatedAt)</dd>
+                    <dt>Updated</dt><dd>@Stamp(task.UpdatedAt)</dd>
+                    @if (task.DoneAt is { } doneAt)
+                    {
+                        <dt>Done</dt><dd>@Stamp(doneAt)</dd>
+                    }
+                </dl>
+            </div>
+        </section>
+        <section class="panel panel-fit">
+            <div class="panel-head"><span class="panel-title">Description</span></div>
+            <div class="panel-body">
+                @if (string.IsNullOrWhiteSpace(task.Body))
+                {
+                    <div class="empty">no description</div>
+                }
+                else
+                {
+                    <div class="prose">@task.Body</div>
+                }
+            </div>
+        </section>
+        <section class="panel">
+            <div class="panel-head">
+                <span class="panel-title">History</span>
+                <span class="panel-sub">@detail.Events.Count events</span>
+            </div>
+            <div class="panel-body">
+                @foreach (var e in detail.Events)
+                {
+                    <EventRow Event="e" Now="_now" ShowTask="false" />
+                }
+            </div>
+        </section>
+    </div>
+}
+else if (_error is { } message)
+{
+    <div class="page">
+        <section class="panel panel-fit">
+            <div class="panel-body"><div class="empty">@message</div></div>
+        </section>
+    </div>
+}
+
+@code {
+    private TaskDetailDto? _detail;
+    private string? _error;
+    private string? _loadedId;
+    private DateTimeOffset _now;
+
+    [Parameter] public string Id { get; set; } = "";
+
+    // Lease wording and event ages change with time alone.
+    protected override TimeSpan? ClockInterval => TimeSpan.FromSeconds(30);
+
+    protected override bool IsRelevant(Muthur.Core.Entities.LedgerEvent e) =>
+        Wire.TryParseTaskId(Id, out var number) && e.TaskId == number;
+
+    protected override async Task LoadAsync()
+    {
+        _now = Clock.GetUtcNow();
+        _loadedId = Id;
+        try
+        {
+            _detail = await Tasks.GetAsync(Id);
+            _error = null;
+        }
+        catch (Muthur.Core.MuthurException ex)
+        {
+            _detail = null;
+            _error = ex.Message;
+        }
+    }
+
+    // Blazor reuses this component when navigating from one task to another.
+    protected override async Task OnParametersSetAsync()
+    {
+        if (_loadedId is not null && _loadedId != Id) await ReloadNowAsync();
+    }
+
+    private static string Stamp(DateTimeOffset value) => value.ToLocalTime().ToString("yyyy-MM-dd HH:mm");
+}
