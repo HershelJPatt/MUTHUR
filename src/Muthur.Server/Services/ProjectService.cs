@@ -76,7 +76,7 @@ public sealed partial class ProjectService(Ledger ledger)
             var normalized = key.Trim().ToLowerInvariant();
             return await db.Projects.SingleOrDefaultAsync(p => p.Key == normalized, ct) ?? throw Fail.NotFound("Project", normalized);
         }
-        var all = await db.Projects.Take(2).ToListAsync(ct);
+        var all = await db.Projects.OrderBy(p => p.Key).Take(2).ToListAsync(ct);
         return all.Count switch
         {
             1 => all[0],
