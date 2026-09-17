@@ -135,6 +135,18 @@ public static partial class SecretScanner
         return CapitalizedWord().IsMatch(value) || value.Any(ch => "@!#$%&*".Contains(ch));
     }
 
+    /// <summary>
+    /// Password1, Password123!, Secret_2026, MyToken_2026: a password built from the password word itself. What is left once the word is
+    /// taken out has a digit and no other real word, and the token is not an ALL_CAPS variable name (DB_PASSWORD_2).
+    /// </summary>
+    private static bool IsPasswordWordPassword(string value)
+    {
+        if (value.All(ch => char.IsAsciiLetterUpper(ch) || char.IsAsciiDigit(ch) || ch == '_')) return false;
+        var rest = PasswordClassWord().Replace(value, "");
+        if (value.Any(ch => "@!#$%&*".Contains(ch)) && value.Any(char.IsAsciiDigit)) return true; // Secret@Acme1: no name is spelled like that
+        return rest.Any(char.IsAsciiDigit) && !LongLetterRun().IsMatch(rest);
+    }
+
     /// <summary>A table or CSV row whose header (one or two lines up, same delimiter) names a password column.</summary>
     private static bool UnderPasswordHeader(string[] lines, int i)
     {
@@ -252,8 +264,9 @@ public static partial class SecretScanner
                 var cut = value.LastIndexOfAny([':', '=']);
                 if (cut >= 0 && cut < value.Length - 1) value = value[(cut + 1)..];
                 value = CleanValue(value);
-                // a token that carries the password word itself is a name (20240917_AddPasswordHashColumn, DB_PASSWORD), never the value
-                if (PasswordClassWord().IsMatch(value)) continue;
+                // a token that carries the password word itself is a name (20240917_AddPasswordHashColumn, DB_PASSWORD), not the value —
+                // unless the word is all there is to it besides digits and symbols (Password123!, Secret_2026), which is a password
+                if (PasswordClassWord().IsMatch(value) && !IsPasswordWordPassword(value)) continue;
                 // product and algorithm names with a version (Chrome128, Argon2id), codes and standards (AADSTS50126, KB5031356,
                 // SP800-63B, 28P01) and branch-like paths (task/T-9-outbound-gate) are what password-related messages are full of
                 if (KnownTechnicalName().IsMatch(value) || CodeOrStandard().IsMatch(value)) continue;
@@ -313,14 +326,17 @@ public static partial class SecretScanner
     private static partial Regex CodeReference();
 
     // No word boundaries around token/pwd/secret/…: GITHUB_TOKEN, DB_PWD and AccessToken are names too ("_" and letters are word characters).
-    [GeneratedRegex(@"pass(?:word|wd|phrase|code|wort)|(?<![A-Za-z])pass(?![A-Za-z])|_pass(?![A-Za-z])|(?-i:(?<=[a-z])Pass(?![a-z]))|pwd|(?<![A-Za-z])pw(?![A-Za-z])|secret|credential|creds|(?<![A-Za-z])log\s?in(?![A-Za-z])|token|api[ _\-]?key|(?<![A-Za-z])key(?![A-Za-z])|_key(?![A-Za-z])|(?-i:(?<=[a-z])Key(?![a-z]))|(?<![A-Za-z])auth(?![A-Za-z])|(?<![A-Za-z0-9])-[pPaw](?![A-Za-z0-9])|--password|/p:|IDENTIFIED\s+BY|SecureString|NetworkCredential|/user:|(?:store|key)pass|(?<![A-Za-z])net\s+user\s|(?<![A-Za-z])sqlplus\s", RegexOptions.IgnoreCase)]
+    [GeneratedRegex(@"pass(?:word|wd|phrase|code|wort)|kennwort|(?<![A-Za-z])pass(?![A-Za-z])|_pass(?![A-Za-z])|(?-i:(?<=[a-z])Pass(?![a-z]))|pwd|(?<![A-Za-z])pw(?![A-Za-z])|secret|credential|creds|(?<![A-Za-z])log\s?in(?![A-Za-z])|token|api[ _\-]?key|(?<![A-Za-z])key(?![A-Za-z])|_key(?![A-Za-z])|(?-i:(?<=[a-z])Key(?![a-z]))|(?<![A-Za-z])auth(?![A-Za-z])|(?<![A-Za-z0-9])-[pPaw](?![A-Za-z0-9])|--password|/p:|IDENTIFIED\s+BY|SecureString|NetworkCredential|/user:|(?:store|key)pass|(?<![A-Za-z])net\s+user\s|(?<![A-Za-z])sqlplus\s", RegexOptions.IgnoreCase)]
     private static partial Regex PasswordClassWord();
 
-    [GeneratedRegex(@"pass(?:word|wd|phrase|code|wort)|(?<![A-Za-z])pass(?![A-Za-z])|_pass(?![A-Za-z])|(?-i:(?<=[a-z])Pass(?![a-z]))|pwd|(?<![A-Za-z])pw(?![A-Za-z])", RegexOptions.IgnoreCase)]
+    [GeneratedRegex(@"pass(?:word|wd|phrase|code|wort)|kennwort|(?<![A-Za-z])pass(?![A-Za-z])|_pass(?![A-Za-z])|(?-i:(?<=[a-z])Pass(?![a-z]))|pwd|(?<![A-Za-z])pw(?![A-Za-z])", RegexOptions.IgnoreCase)]
     private static partial Regex StrongPasswordWord();
 
+    [GeneratedRegex(@"[A-Za-z]{3,}")]
+    private static partial Regex LongLetterRun();
+
     // What a table or CSV calls its credential column. A bare "key" is left out: "key,value" heads far more tables than secrets do.
-    [GeneratedRegex(@"pass(?:word|wd|phrase|code|wort)|(?<![A-Za-z])pass(?![A-Za-z])|pwd|(?<![A-Za-z])pw(?![A-Za-z])|secret|credential|creds|token|api[ _\-]?key", RegexOptions.IgnoreCase)]
+    [GeneratedRegex(@"pass(?:word|wd|phrase|code|wort)|kennwort|(?<![A-Za-z])pass(?![A-Za-z])|pwd|(?<![A-Za-z])pw(?![A-Za-z])|secret|credential|creds|token|api[ _\-]?key", RegexOptions.IgnoreCase)]
     private static partial Regex CredentialColumnWord();
 
     // the assignment's name says the value is a location, a label or a number, not the secret: SSH_KEY_PATH=, key_name =, KEY_SIZE=, "KeyPath":
@@ -359,7 +375,7 @@ public static partial class SecretScanner
     private static partial Regex CodeOrStandard();
 
     // a line that is about a password, a login or credentials
-    [GeneratedRegex(@"pass(?:word|wd|phrase|code|wort)|(?<![A-Za-z])pass(?![A-Za-z])|_pass(?![A-Za-z])|(?-i:(?<=[a-z])Pass(?![a-z]))|pwd|(?<![A-Za-z])pw(?![A-Za-z])|(?<![A-Za-z])log\s?in(?![A-Za-z])|(?<![A-Za-z])creds(?![A-Za-z])|credentials?|IDENTIFIED\s+BY|SecureString|PSCredential|NetworkCredential|(?:store|key)pass|(?<![A-Za-z])net\s+user\s|(?<![A-Za-z])sqlplus\s|(?<![A-Za-z0-9])-[pPwa](?![A-Za-z0-9])", RegexOptions.IgnoreCase)]
+    [GeneratedRegex(@"pass(?:word|wd|phrase|code|wort)|kennwort|(?<![A-Za-z])pass(?![A-Za-z])|_pass(?![A-Za-z])|(?-i:(?<=[a-z])Pass(?![a-z]))|pwd|(?<![A-Za-z])pw(?![A-Za-z])|(?<![A-Za-z])log\s?in(?![A-Za-z])|(?<![A-Za-z])creds(?![A-Za-z])|credentials?|IDENTIFIED\s+BY|SecureString|PSCredential|NetworkCredential|(?:store|key)pass|(?<![A-Za-z])net\s+user\s|(?<![A-Za-z])sqlplus\s|(?<![A-Za-z0-9])-[pPwa](?![A-Za-z0-9])", RegexOptions.IgnoreCase)]
     private static partial Regex CredentialLine();
 
     // products, platforms, protocols and algorithms that carry a version or a number in their name

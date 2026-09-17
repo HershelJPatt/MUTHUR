@@ -100,3 +100,6 @@ Usage: deploy-tool login [-u, --user <name>] [-p, --password <value>] [--token <
 | Secret | Rotation | Owner |\n|---|---|---|\n| smtp-relay | 90 days | platform team |
 | Token type | Lifetime |\n|---|---|\n| refresh | 14 days |\n| access | 60 minutes |
 key,value\nregion,westeurope\nreplicas,3
+Rename DB_PASSWORD to DB_PWD in the deploy password docs; DB_PASSWORD_2 stays for the replica.
+The password migration 20240917_AddPasswordHashColumn adds PasswordHashV2 and drops LegacyToken1.
+Password reset uses ResetPasswordTokenV2 and the login page calls /api/v2/password.

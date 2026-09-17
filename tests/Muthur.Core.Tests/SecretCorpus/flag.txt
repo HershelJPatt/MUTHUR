@@ -193,3 +193,24 @@ host\tcreds\nsql01\tWinter_2026
 net user administrator Welcome_2026
 sqlplus system/Oracle_2026@orcl
 keytool -genkeypair -alias web -storepass Changeit2026
+the pw is Password123!
+user,password\nadmin,Secret_2026
+Temporary password for the new hire: Password123!
+The temporary password for the new hire is Password123!
+net user deploy Password123! /add
+| user | Password |\n|---|---|\n| admin | Password123! |
+docker login registry.acme.dev -u ci -p Password123!
+CREATE USER app IDENTIFIED BY 'Password123!';
+the login for grafana is admin / Password1
+staging db password is Password2026
+host,user,password\nsql01,sa,Token_2026
+admin password: Secret123 (change it on first login)
+| Konto | Kennwort |\n|---|---|\n| deploy | Winter_2026 |
+The temporary password for the new hire is MyPassword1
+the wifi password at the office is Secret@Acme1
+root login on build01: root / Passwort2026!
+mysql -u root -p Password1 orders
+the pw is password123
+user,password\nadmin,pass1234
+service account creds are svc-deploy / Key_2026!
+the admin login is admin / Login2026
