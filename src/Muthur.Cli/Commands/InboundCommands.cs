@@ -34,7 +34,8 @@ public static class InboundCommands
         var asTask = new Option<bool>("--as-task") { Description = "Also turn it into a backlog task in one step." };
         var priority = new Option<int>("--priority");
         var title = new Option<string?>("--title") { Description = "Task title (default: the item's title)." };
-        var claim = new Command("claim", "Take responsibility for an item. Exit 3 if someone else already has it.") { claimId, asTask, priority, title };
+        var claimProject = new Option<string?>("--project") { Description = "Project for the task, when the item has none and the hub has several." };
+        var claim = new Command("claim", "Take responsibility for an item. Exit 3 if someone else already has it.") { claimId, asTask, priority, title, claimProject };
         claim.SetAction(async (parse, ct) =>
         {
             var hub = HubClient.For(parse);
@@ -42,16 +43,17 @@ public static class InboundCommands
             var claimed = await hub.PostAsync(Routes.InboundAction(id, "claim"), ct);
             if (!claimed.IsSuccess || !parse.GetValue(asTask)) return Output.Emit(parse, claimed);
             return Output.Emit(parse, await hub.PostAsync(Routes.InboundAction(id, "convert"),
-                new ConvertInboundRequest(parse.GetValue(priority), parse.GetValue(title)), MuthurJsonContext.Default.ConvertInboundRequest, ct));
+                new ConvertInboundRequest(parse.GetValue(priority), parse.GetValue(title), parse.GetValue(claimProject)), MuthurJsonContext.Default.ConvertInboundRequest, ct));
         });
         inbound.Subcommands.Add(claim);
 
         var convertId = Id();
         var convertPriority = new Option<int>("--priority");
         var convertTitle = new Option<string?>("--title");
-        var convert = new Command("convert", "Turn an item into a backlog task.") { convertId, convertPriority, convertTitle };
+        var convertProject = new Option<string?>("--project") { Description = "Project for the task, when the item has none and the hub has several." };
+        var convert = new Command("convert", "Turn an item into a backlog task.") { convertId, convertPriority, convertTitle, convertProject };
         convert.SetAction(async (parse, ct) => Output.Emit(parse, await HubClient.For(parse).PostAsync(Routes.InboundAction(parse.GetValue(convertId)!, "convert"),
-            new ConvertInboundRequest(parse.GetValue(convertPriority), parse.GetValue(convertTitle)), MuthurJsonContext.Default.ConvertInboundRequest, ct)));
+            new ConvertInboundRequest(parse.GetValue(convertPriority), parse.GetValue(convertTitle), parse.GetValue(convertProject)), MuthurJsonContext.Default.ConvertInboundRequest, ct)));
         inbound.Subcommands.Add(convert);
 
         var dismissId = Id();
