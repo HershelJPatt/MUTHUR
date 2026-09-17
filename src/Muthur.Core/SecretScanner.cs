@@ -131,7 +131,7 @@ public static partial class SecretScanner
     /// </summary>
     private static bool IsPasswordShaped(string value)
     {
-        if (!value.Any(char.IsAsciiDigit) || !value.Any(char.IsAsciiLetter) || KnownTechnicalName().IsMatch(value)) return false;
+        if (!value.Any(char.IsAsciiDigit) || !value.Any(char.IsAsciiLetter) || KnownTechnicalName().IsMatch(value) || EverydayName().IsMatch(value)) return false;
         if (VersionedIdentifier().IsMatch(value)) return false; // LoginFormV2, SessionStoreV3
         return CapitalizedWord().IsMatch(value) || value.Any(ch => "@!#$%&*".Contains(ch));
     }
@@ -190,6 +190,13 @@ public static partial class SecretScanner
     /// build01 / sql02, asmith2 / mbrown17: a neighbouring line holds another lone lowercase name with a number. That is a list of hosts,
     /// users or builds; a password comes alone.
     /// </summary>
+    /// <summary>
+    /// How a password travels on a longer line: "jdoe / X (temporary, please rotate)", "jdoe X - works on demo too", "with X and let me
+    /// know", "is X and it expires" — after a slash or a name at the start of the line, after with/and/is/as, or before a remark.
+    /// </summary>
+    private static bool IsPairOrRemark(string preceding, string following) =>
+        PairLead().IsMatch(preceding) || RemarkTail().IsMatch(following);
+
     private static bool IsPlainName(string value) =>
         !IsPasswordShaped(value) && !value.Any(char.IsAsciiLetterUpper); // W3lcome1 and WELCOME123 are not host names
 
@@ -319,7 +326,7 @@ public static partial class SecretScanner
                 // -pSECRET, -wSECRET, /p:SECRET: a password flag with its value glued on needs no other context
                 var glued = GluedPasswordFlag().Match(value);
                 if (glued.Success) value = glued.Groups["value"].Value;
-                else if (!nearPasswordWord || IsReference(value) || value.StartsWith('@')) continue; // URLs, paths, @mentions and @Attributes
+                else if (!(nearPasswordWord || under) || IsReference(value) || value.StartsWith('@')) continue; // URLs, paths, @mentions and @Attributes
 
                 // user:secret, key=secret: judge the part that would be the secret
                 var cut = value.LastIndexOfAny([':', '=']);
@@ -343,13 +350,13 @@ public static partial class SecretScanner
                     || (underStrong && (IsPasswordShaped(value) || (shortLine && value.Length >= 8)))
                     // under a sentence about a login or credentials that announces nothing ("can you send me the login for staging?"),
                     // a pair or a value with a remark still reads as the answer: "sure: jdoe / Spring@2026", "Welcome.2026 (rotate it)"
-                    || (under && briefLine && IsPasswordShaped(value))
+                    || (under && IsPasswordShaped(value) && (briefLine || IsPairOrRemark(preceding, lines[i][(token.Index + token.Length)..])))
                     || (underStrong && value.Length >= 8 && AfterUseIt().IsMatch(preceding)); // "Use winter2026 from now on."
                 if (alone.Success && !rightWhereItGoes && IsPlainName(value) && IsListOfPlainNames(lines, i)) continue;
                 // product and algorithm names with a version (Chrome128, Argon2id), codes and standards (AADSTS50126, KB5031356,
                 // SP800-63B, 28P01) and branch-like paths (task/T-9-outbound-gate) are what password-related messages are full of
                 // — except a shouted word with a number right where the password goes (-p WINTER2026)
-                if (KnownTechnicalName().IsMatch(value) || (CodeOrStandard().IsMatch(value) && !(direct && ShoutedPassword().IsMatch(value)))) continue;
+                if (KnownTechnicalName().IsMatch(value) || (!direct && EverydayName().IsMatch(value)) || (CodeOrStandard().IsMatch(value) && !(direct && ShoutedPassword().IsMatch(value)))) continue;
                 if (value.Contains('/') && value[..value.IndexOf('/')].All(char.IsAsciiLetterLower) && !glued.Success
                     && !value.Split('/').Skip(1).Any(IsPasswordShaped)) continue; // but not admin/Winter_2026
                 // a token that carries the password word itself is a name (20240917_AddPasswordHashColumn, DB_PASSWORD), not the value —
@@ -368,6 +375,7 @@ public static partial class SecretScanner
                     if (!already.Any(f => f.Excerpt == m)) yield return new SecretFinding("possible-credential-near-password-word", m, SecretSeverity.Suspect);
                     continue;
                 }
+                if (!nearPasswordWord) continue; // a long line under a credential line: only a credential position counts
                 if (value.Contains('/') && value[..value.IndexOf('/')].All(char.IsAsciiLetterLower)) continue; // task/T-9-x, src/app/main.cs
                 // "api_token:" alone on the line above: whatever stands below it is its value, even if it looks like a hash
                 var namedAbove = i > 0 && DanglingSecretName().IsMatch(lines[i - 1]);
@@ -453,8 +461,13 @@ public static partial class SecretScanner
     private static partial Regex CredentialLine();
 
     // products, platforms, protocols and algorithms that carry a version or a number in their name
-    [GeneratedRegex(@"^(?:Chrome|Chromium|Firefox|Safari|Edge|Opera|Windows|Win|Server|iOS|iPadOS|macOS|Android|Ubuntu|Debian|Fedora|CentOS|RHEL|Node|Deno|Python|Java|Kotlin|Swift|Go|Rust|PHP|Ruby|Rails|Django|Angular|React|Vue|Net|DotNet|NetCore|Core|Postgres|PostgreSQL|MySQL|MariaDB|Mongo|MongoDB|Redis|Oracle|SqlServer|Office|Dynamics|Exchange|SharePoint|Argon|Bcrypt|Scrypt|Sha|Md|Base|Utf|OAuth|OpenID|Http|Tls|Ssl|Ipv|Log4j|Log4Net|Ed|Rs|Hs|Es|Ps|Aes|Des|Rsa|Ecdsa|Curve|X|P|Gpt|Claude|Llama|AADSTS|Sprint|Release|Pixel|Galaxy|iPhone|iPad|Outlook|Teams?|Captcha|reCaptcha|WebAuthn|Fido|Totp|Finding|Session|Wave|Phase|Customer|PR|Q)[\-_]?\d+(?:[.\-_]\d+)*[A-Za-z]{0,3}$", RegexOptions.IgnoreCase)]
+    [GeneratedRegex(@"^(?:Chrome|Chromium|Firefox|Safari|Edge|Opera|Windows|Win|Server|iOS|iPadOS|macOS|Android|Ubuntu|Debian|Fedora|CentOS|RHEL|Node|Deno|Python|Java|Kotlin|Swift|Go|Rust|PHP|Ruby|Rails|Django|Angular|React|Vue|Net|DotNet|NetCore|Core|Postgres|PostgreSQL|MySQL|MariaDB|Mongo|MongoDB|Redis|Oracle|SqlServer|Office|Dynamics|Exchange|SharePoint|Argon|Bcrypt|Scrypt|Sha|Md|Base|Utf|OAuth|OpenID|Http|Tls|Ssl|Ipv|Log4j|Log4Net|Ed|Rs|Hs|Es|Ps|Aes|Des|Rsa|Ecdsa|Curve|X|P|Gpt|Claude|Llama|AADSTS)[\-_]?\d+(?:[.\-_]\d+)*[A-Za-z]{0,3}$", RegexOptions.IgnoreCase)]
     private static partial Regex KnownTechnicalName();
+
+    // everyday names that carry a number (Sprint42, Pixel8, Team4, PR2291). Unlike the technical names above they make plausible
+    // passwords (Sprint2026), so they are excused only where nothing says a password goes
+    [GeneratedRegex(@"^(?:Sprint|Release|Pixel|Galaxy|iPhone|iPad|Outlook|Teams?|Captcha|reCaptcha|WebAuthn|Fido|Totp|Finding|Session|Wave|Phase|Customer|Ticket|Milestone|Chapter|Appendix|Version|Template|Tenant|Cluster|Patch|PR|Q)[\-_]?\d+(?:[.\-_]\d+)*[A-Za-z]{0,3}$", RegexOptions.IgnoreCase)]
+    private static partial Regex EverydayName();
 
     // the text before a token ends with a password flag: -p X, -P X, -w X, -a X, --password X
     [GeneratedRegex(@"(?<![A-Za-z0-9])(?:-[pPwa]|--pass(?:word)?)[ \t]+[""']?$")]
@@ -483,12 +496,18 @@ public static partial class SecretScanner
     [GeneratedRegex(@"^[A-Za-z]+[a-z]V\d{1,2}$")]
     private static partial Regex VersionedIdentifier();
 
+    [GeneratedRegex(@"(?:/|(?<![A-Za-z])(?:with|and|is|as|use|try)|^\s*[^\s]+)\s+[""'`]?$|^\s*[""'`]?$", RegexOptions.IgnoreCase)]
+    private static partial Regex PairLead();
+
+    [GeneratedRegex(@"^[""'`]?\s*(?:\(|-\s|–|—|,\s)")]
+    private static partial Regex RemarkTail();
+
     // tags and emphasis marks: <p>, </b>, <br>, **, __, `
-    [GeneratedRegex(@"</?[A-Za-z][^<>]*>|[*_`]+")]
+    [GeneratedRegex(@"</?[A-Za-z][^<>]*>|(?<![A-Za-z0-9])[*_`]+|[*_`]+(?![A-Za-z0-9])")]
     private static partial Regex MarkupAround();
 
     // WINTER2026 · PASSWORD123 · ADMIN_2026!
-    [GeneratedRegex(@"^[A-Z]{4,}[_.\-]?\d{2,}[^A-Za-z0-9]*$")]
+    [GeneratedRegex(@"^[A-Z]{4,}[_.]?\d{2,}[^A-Za-z0-9]*$")]
     private static partial Regex ShoutedPassword();
 
     // "  value: X" — the second half of a name/value pair

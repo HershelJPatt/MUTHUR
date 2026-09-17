@@ -252,3 +252,15 @@ new credentials for the demo tenant\n\nadmin@acme.example\nWelcome.2026 (rotate 
 jane 10:01 AM\nwhat's the staging login?\nsam 10:02 AM\njdoe and Welcome#1
 Staging passwords:\nW3lcome1\nP4ssw0rd1
 Staging passwords:\nWELCOME123\nWINTER2026
+Your login for the staging portal is ready.\njdoe / Welcome1 (you will be asked to change it)
+I created the login for you on staging\njdoe / Winter_2026 (temporary, please rotate it after the demo)
+Here are the new credentials for the demo tenant.\nadmin@acme.example / Spring@2026 - valid until Friday, then it gets rotated
+We rotated the credentials on the staging box last night\nthe new one for jdoe is P@ssw0rd and it expires on Friday
+Sam asked me for the creds for staging again\njdoe Summer2025 - works on demo too, don't share it
+We rotated the credentials on the staging box last night\nSign in as jdoe with Welcome.2026 and let me know if it fails
+docker login -u jdoe -p Release_2026 registry.acme.io
+| User | Password |\n|---|---|\n| jdoe | Team2026 |
+Staging password:\nSprint2026
+CREATE USER app IDENTIFIED BY 'Session_2026';
+net user jdoe Customer2026 /add
+login admin / Wave2026

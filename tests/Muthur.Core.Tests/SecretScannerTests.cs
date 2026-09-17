@@ -124,8 +124,40 @@ public sealed class SecretScannerTests
         "AdminPassword1", "RootPass123", "AdminPass1", "TempPassword1", "TestPassword123", "Admin.Password.2026", "Acme-Secret-2026",
         "SuperSecret1", "Changeme.Password1", "Autumn.Secret.2026",
         "password123", "winter2026", "adminpass123", "WINTER2026", "PASSWORD123",
+        "Release_2026", "Team2026", "Sprint2026", "Session_2026", "Customer2026",
         "P4ssword1", "Passw0rd1", "P@ssword2026", "S3cret_2026", "T0ken_2026", "PassWord2026", "Pa55word1", "Secr3t2026", "L0gin2026",
     ];
+
+    /// <summary>Longer lines under a sentence that announces nothing. Here only a value that is shaped like a password is promised.</summary>
+    private static readonly string[] LongCarriers =
+    [
+        "Your login for the staging portal is ready.\njdoe / {0} (you will be asked to change it)",
+        "I created the login for you on staging\njdoe / {0} (temporary, please rotate it after the demo)",
+        "Here are the new credentials for the demo tenant.\nadmin@acme.example / {0} - valid until Friday, then it gets rotated",
+        "Sam asked me for the creds for staging again\njdoe {0} - works on demo too, don't share it",
+        "We rotated the credentials on the staging box last night\nthe new one for jdoe is {0} and it expires on Friday",
+        "We rotated the credentials on the staging box last night\nSign in as jdoe with {0} and let me know if it fails",
+    ];
+
+    private static readonly string[] PlainOrNamed =
+        ["password123", "winter2026", "adminpass123", "WINTER2026", "PASSWORD123", "Release_2026", "Team2026", "Sprint2026", "Session_2026", "Customer2026"];
+
+    public static TheoryData<string, string> LongMatrix
+    {
+        get
+        {
+            var data = new TheoryData<string, string>();
+            foreach (var carrier in LongCarriers)
+                foreach (var password in HumanPasswords.Except(PlainOrNamed))
+                    data.Add(carrier, password);
+            return data;
+        }
+    }
+
+    [Theory]
+    [MemberData(nameof(LongMatrix))]
+    public void A_password_shaped_value_is_caught_on_a_long_line_below_a_credential_sentence(string carrier, string password) =>
+        Assert.True(SecretScanner.Scan(string.Format(carrier, password)).Count > 0, $"neither flagged nor blocked: {string.Format(carrier, password)}");
 
     public static TheoryData<string, string> Matrix
     {
