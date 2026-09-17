@@ -112,6 +112,7 @@ public sealed class TaskService(Ledger ledger, LeasePolicy leases)
             RequireOwnerOrFounder(task, caller);
             TaskStateMachine.EnsureCanTransition(Wire.TaskId(task.Id), task.State, TaskState.Backlog);
             ReturnToBacklog(task, m.Now);
+            await RequestService.WithdrawForTaskAsync(m, task.Id, "task released", ct);
             m.Record("task.released", task.Id, new { agent = caller.Name, request.Reason });
             return task.ToDto();
         }, ct);
@@ -153,6 +154,7 @@ public sealed class TaskService(Ledger ledger, LeasePolicy leases)
             else caller.RequireIdentified();
             TaskStateMachine.EnsureCanTransition(Wire.TaskId(task.Id), task.State, TaskState.Cancelled);
             task.State = TaskState.Cancelled;
+            await RequestService.WithdrawForTaskAsync(m, task.Id, "task cancelled", ct);
             task.ClaimExpires = null;
             task.UpdatedAt = m.Now;
             m.Record("task.cancelled", task.Id, new { request.Reason });
