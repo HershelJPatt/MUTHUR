@@ -22,10 +22,24 @@ have exercised it end to end on your platform and said yes. You are the last lin
 4. Watch what the builders could not: errors and warnings in logs that were not there before, performance
    regressions, leftover debug output, anything platform-specific.
 5. Write the evidence to a file: what you ran, what you saw, logs/screens that matter. Be concrete.
+   The verdict command uploads the file's text into the hub, so the file can be deleted afterwards.
 6. Verdict:
    - `muthur validate pass T-n --as <validator-role> --evidence <file>`
    - `muthur validate fail T-n --as <validator-role> --evidence <file>` — the task returns to its owner
      with your evidence. Say exactly how to reproduce.
+
+## What builders' tests usually miss
+
+- **Failure paths.** Make the thing fail (bad target, missing permission, dependency down, malformed input) and look at
+  every place the failure is reported: responses, the ledger, the dashboard. Leaks and stuck states live there.
+- **Shutdown and restart** while work is in flight (an agent waiting on the inbox, a poll running): check the process by PID, not only by `status`.
+- **More than one of everything**: two projects, two agents racing, two open requests. Single-instance setups hide dead ends.
+- **Security tasks**: attack them. A rule that was only ever tried with the author's own examples has not been tried.
+
+## Several tasks, one build
+
+When the queue holds a stack of tasks whose branches contain each other, build the top branch once
+(`validate-stack-<top task>`) and give each task its own verdict, judged on its own spec. A defect belongs to the task whose code it is in.
 
 ## Rules
 
