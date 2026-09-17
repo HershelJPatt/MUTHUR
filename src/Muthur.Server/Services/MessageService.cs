@@ -116,12 +116,12 @@ public sealed class MessageService(Ledger ledger, EventFeed feed, TimeProvider c
         }, ct);
     }
 
-    /// <summary>Recent traffic, newest last. <paramref name="toFounderOnly"/> narrows it to what is addressed to the founder.</summary>
-    public Task<IReadOnlyList<MessageDto>> HistoryAsync(int limit, bool toFounderOnly = false, CancellationToken ct = default) =>
+    /// <summary>Recent traffic, newest last. <paramref name="founderThread"/> narrows it to messages to or from the founder.</summary>
+    public Task<IReadOnlyList<MessageDto>> HistoryAsync(int limit, bool founderThread = false, CancellationToken ct = default) =>
         ledger.ReadAsync<IReadOnlyList<MessageDto>>(async (db, _) =>
         {
             var query = db.Messages.AsQueryable();
-            if (toFounderOnly) query = query.Where(x => x.ToKind == Recipient.Founder);
+            if (founderThread) query = query.Where(x => x.ToKind == Recipient.Founder || (x.FromAgentId == null && x.FromName == Caller.Founder.Name));
             var rows = await query.OrderByDescending(x => x.Id).Take(Math.Clamp(limit, 1, 500)).ToListAsync(ct);
             return rows.OrderBy(x => x.Id).Select(ToDto).ToList();
         }, ct);

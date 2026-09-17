@@ -33,7 +33,7 @@ public static class MessageCommands
         msg.Subcommands.Add(inbox);
 
         var limit = new Option<int?>("--limit");
-        var founderOnly = new Option<bool>("--to-founder") { Description = "Only messages addressed to the founder." };
+        var founderOnly = new Option<bool>("--founder-thread") { Description = "Only messages to or from the founder." };
         var log = new Command("log", "Recent messages on the bus.") { limit, founderOnly };
         log.SetAction(async (parse, ct) => Output.Emit(parse, await HubClient.For(parse).GetAsync(
             $"{Routes.Messages}?limit={parse.GetValue(limit) ?? 50}" + (parse.GetValue(founderOnly) ? "&founder=true" : ""), ct)));
