@@ -21,17 +21,22 @@ public static class SystemCommands
         down.SetAction(async (parse, ct) =>
         {
             // A build under test run without its scratch environment would otherwise take the live hub down.
+            // So "down" must positively establish that the running hub is the one bundled with this CLI;
+            // anything it cannot establish (no bundled server, unreadable status, an older hub) is a refusal.
             var running = await new HubClient(null, TimeSpan.FromSeconds(3)).GetAsync(Routes.Status, ct);
             if (running.ExitCode == ExitCodes.NotRunning) return ExitCodes.Ok;
-            if (running.IsSuccess && !parse.GetValue(any) && ServerProcess.Locate() is { } mine)
+            if (!parse.GetValue(any))
             {
-                var theirs = System.Text.Json.JsonSerializer.Deserialize(running.Body, MuthurJsonContext.Default.StatusResponse)?.ServerDirectory ?? "";
-                var ours = Path.GetDirectoryName(Path.GetFullPath(mine))!;
-                // A hub too old to say where it runs from is, by definition, not the one bundled with this CLI.
-                if (theirs.Length == 0 || !string.Equals(Path.GetFullPath(theirs), ours, StringComparison.OrdinalIgnoreCase))
+                var ours = ServerProcess.Locate() is { } mine ? Path.GetDirectoryName(Path.GetFullPath(mine)) : null;
+                var theirs = running.IsSuccess
+                    ? System.Text.Json.JsonSerializer.Deserialize(running.Body, MuthurJsonContext.Default.StatusResponse)?.ServerDirectory
+                    : null;
+                var isOurs = ours is not null && theirs is { Length: > 0 } && string.Equals(Path.GetFullPath(theirs), ours, StringComparison.OrdinalIgnoreCase);
+                if (!isOurs)
                     return Output.Error("not_my_hub",
-                        $"The hub at {MuthurEnvironment.Url} runs from {(theirs.Length > 0 ? theirs : "another (older) installation")}, not from this installation ({ours}). " +
-                        "Use that installation's CLI, fix MUTHUR_URL/MUTHUR_HOME, or pass --any.", ExitCodes.RuleViolation);
+                        $"The hub at {MuthurEnvironment.Url} runs from {(theirs is { Length: > 0 } ? theirs : "an installation that cannot be identified")}; " +
+                        $"this CLI {(ours is null ? "has no bundled server (it is a build output, not an installation)" : $"belongs to {ours}")}. " +
+                        "Use the CLI of the hub's own installation, fix MUTHUR_URL/MUTHUR_HOME, or pass --any.", ExitCodes.RuleViolation);
             }
 
             var result = await new HubClient(Globals.ReadFounderToken()).PostAsync(Routes.Shutdown, ct);

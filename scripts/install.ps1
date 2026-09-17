@@ -20,7 +20,7 @@ $Destination = $ExecutionContext.SessionState.Path.GetUnresolvedProviderPathFrom
 $existing = Join-Path $Destination 'muthur.exe'
 $serverDir = Join-Path $Destination 'server'
 $running = Get-Process -Name 'Muthur.Server' -ErrorAction SilentlyContinue |
-    Where-Object { $_.Path -and $_.Path.StartsWith($serverDir, [StringComparison]::OrdinalIgnoreCase) }
+    Where-Object { $_.Path -and $_.Path.StartsWith($serverDir + [IO.Path]::DirectorySeparatorChar, [StringComparison]::OrdinalIgnoreCase) }
 if ($running) {
     # A hub is running from this very directory. Replacing it is a deliberate act, never a side effect:
     # a validator who forgets -Destination must not take the organization's live hub down.
