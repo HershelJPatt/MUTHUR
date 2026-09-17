@@ -39,13 +39,15 @@ public static partial class SecretScanner
         ("password-hash", PasswordHash()),
     ];
 
+    private static readonly Regex WeakAssignmentPattern = WeakAssignment();
+
     /// <summary>Shapes that depend on the words around them; only meaningful on the text as written.</summary>
     private static readonly (string Kind, Regex Pattern)[] ContextPatterns =
     [
         ("authorization-header", AuthorizationHeader()),
         ("connection-string-secret", ConnectionStringSecret()),
         ("credential-assignment", StrongAssignment()),
-        ("credential-assignment", WeakAssignment()),
+        ("credential-assignment", WeakAssignmentPattern),
         ("credential-in-prose", Prose()),
         ("possible-passphrase", ProseWords()),
         ("possible-passphrase", QuotedPassphrase()),
@@ -73,13 +75,27 @@ public static partial class SecretScanner
         {
             foreach (Match match in pattern.Matches(visible))
             {
-                var value = match.Groups["value"].Success ? CleanValue(match.Groups["value"].Value) : null;
+                var group = match.Groups["value"];
+                var value = group.Success ? CleanValue(group.Value) : null;
                 if (value is not null && IsNotACredential(value)) continue;
+
+                // "key", "token", "credentials" name plenty of things that are not secrets (S3 object keys, cache keys,
+                // idempotency keys, key file paths, key names). For that vocabulary only an opaque value counts.
+                var weakVocabulary = ReferenceEquals(pattern, WeakAssignmentPattern) || kind == "opaque-value-near-keyword";
+                if (weakVocabulary && value is not null)
+                {
+                    // after an explicit assignment a hex or base64 run IS the value, so only structure (not shape) excuses it
+                    var structured = kind == "opaque-value-near-keyword" ? IsStructured(value) : HasWordStructure(value);
+                    if (structured || value.All(char.IsAsciiLetter)) continue;
+                    if (kind == "opaque-value-near-keyword" && IsReference(WholeToken(visible, group))) continue; // a long URL or path segment is not a secret
+                    if (NamesSomethingElse().IsMatch(visible[match.Index..group.Index])) continue; // KEY_PATH=, key_name =, KEY_SIZE=
+                }
+
                 var suspectOnly = kind is "opaque-value-near-keyword" or "possible-passphrase";
-                if (kind == "opaque-value-near-keyword" && (IsReference(WholeToken(visible, match.Groups["value"])) || NotASecretShape().IsMatch(value!))) continue;
                 var severity = suspectOnly || (value is not null && !LooksLikeASecretValue(value)) ? SecretSeverity.Suspect : SecretSeverity.Block;
-                // a suspect finding shows the founder the value that raised it; a blocked one shows where in the text it is
-                findings.Add(new SecretFinding(kind, Mask(suspectOnly ? value! : match.Value), severity));
+                // the name stays readable so the author can find it; the value never does
+                var excerpt = suspectOnly || !group.Success ? Mask(value ?? match.Value) : visible[match.Index..group.Index] + new string('*', 6) + $" ({group.Length} chars)";
+                findings.Add(new SecretFinding(kind, excerpt, severity));
             }
         }
 
@@ -108,7 +124,7 @@ public static partial class SecretScanner
 
     /// <summary>The value points somewhere else instead of being the secret: a URL or a path.</summary>
     private static bool IsReference(string value) =>
-        value.Contains("://", StringComparison.Ordinal) || value.StartsWith('/') || value.StartsWith("./", StringComparison.Ordinal) ||
+        value.Contains("://", StringComparison.Ordinal) || value.StartsWith('/') || value.StartsWith("./", StringComparison.Ordinal) || value.StartsWith('~') ||
         value.StartsWith('\\') || (value.Length > 2 && value[1] == ':' && value[2] is '\\' or '/');
 
     /// <summary>
@@ -132,7 +148,25 @@ public static partial class SecretScanner
         return segments.Length >= 2 && segments.All(s => s.Length > 0 && (s.All(char.IsAsciiLetter) || s.All(char.IsAsciiDigit)));
     }
 
-    private static string CleanValue(string raw) => raw.Trim('"', '\'', '`').TrimEnd(')', '.', ',', ';', ']', '}');
+    /// <summary>
+    /// A value with visible structure — a file name, or words and numbers joined by separators (reports/2026/q3/summary.pdf,
+    /// orders:by-customer:v3, deploy-keypair-2026, createdAt#orderId, build01-win-x64) — or a known non-secret shape (UUID, hex id, version).
+    /// Opaque secrets have no such structure: they are one run of mixed characters.
+    /// </summary>
+    private static bool IsStructured(string value)
+    {
+        if (NotASecretShape().IsMatch(value)) return true;
+        return HasWordStructure(value);
+    }
+
+    private static bool HasWordStructure(string value)
+    {
+        if (FileName().IsMatch(value) || Uuid().IsMatch(value)) return true;
+        var segments = value.Split(['-', '_', '.', ':', '/', '#', '\\', '+', '~', '@', '$', '{', '}'], StringSplitOptions.RemoveEmptyEntries);
+        return segments.Length >= 2 && segments.All(s => s.Length <= 4 || s.All(char.IsAsciiLetter) || s.All(char.IsAsciiDigit) || WordWithNumber().IsMatch(s));
+    }
+
+    private static string CleanValue(string raw) => raw.Trim('"', '\'', '`').TrimStart('!', '(').TrimEnd(')', '.', ',', ';', ']', '}');
 
     private static bool IsNotACredential(string value) =>
         IsPlaceholder(value) || IsReference(value) || IsConfigurationWord(value) || IsIdentifier(value);
@@ -168,8 +202,10 @@ public static partial class SecretScanner
                 if (value.Contains('/') && value[..value.IndexOf('/')].All(char.IsAsciiLetterLower)) continue; // task/T-9-x, src/app/main.cs
                 // "api_token:" alone on the line above: whatever stands below it is its value, even if it looks like a hash
                 var namedAbove = i > 0 && DanglingSecretName().IsMatch(lines[i - 1]);
-                if (NotASecretShape().IsMatch(value) && !(namedAbove && value.Length >= 16)) continue;
-                if (!value.Any(char.IsLetter) || !(value.Any(char.IsDigit) || value.Any(ch => "!@#$%^&*+=~?".Contains(ch)))) continue;
+                if (IsStructured(value) && !(namedAbove && value.Length >= 16)) continue;
+                // a digit among the letters, or a symbol in a mixed-case word: "Sup3rS3cret", "Tr0ub4dor&3", "Correct!Horse" — not "-nuget-$"
+                var mixedCase = value.Any(char.IsAsciiLetterUpper) && value.Any(char.IsAsciiLetterLower);
+                if (!value.Any(char.IsLetter) || !(value.Any(char.IsDigit) || (mixedCase && value.Any(ch => "!@#$%^&*+=~?".Contains(ch))))) continue;
                 var masked = Mask(value);
                 if (already.Any(f => f.Excerpt == masked)) continue;
                 yield return new SecretFinding("possible-credential-near-password-word", masked, SecretSeverity.Suspect);
@@ -186,11 +222,25 @@ public static partial class SecretScanner
     private static partial Regex CodeReference();
 
     // No word boundaries around token/pwd/secret/…: GITHUB_TOKEN, DB_PWD and AccessToken are names too ("_" and letters are word characters).
-    [GeneratedRegex(@"pass(?:word|wd|phrase|code|wort)?|pwd|(?<![A-Za-z])pw(?![A-Za-z])|secret|credential|creds|(?<![A-Za-z])log\s?in(?![A-Za-z])|token|api[ _\-]?key|(?<![A-Za-z])key(?![A-Za-z])|_key(?![A-Za-z])|(?-i:(?<=[a-z])Key(?![a-z]))|(?<![A-Za-z])auth(?![A-Za-z])|(?<![A-Za-z0-9])-[pPaw](?![A-Za-z0-9])|--password|/p:|IDENTIFIED\s+BY|SecureString|NetworkCredential|/user:", RegexOptions.IgnoreCase)]
+    [GeneratedRegex(@"pass(?:word|wd|phrase|code|wort)|(?<![A-Za-z])pass(?![A-Za-z])|_pass(?![A-Za-z])|pwd|(?<![A-Za-z])pw(?![A-Za-z])|secret|credential|creds|(?<![A-Za-z])log\s?in(?![A-Za-z])|token|api[ _\-]?key|(?<![A-Za-z])key(?![A-Za-z])|_key(?![A-Za-z])|(?-i:(?<=[a-z])Key(?![a-z]))|(?<![A-Za-z])auth(?![A-Za-z])|(?<![A-Za-z0-9])-[pPaw](?![A-Za-z0-9])|--password|/p:|IDENTIFIED\s+BY|SecureString|NetworkCredential|/user:", RegexOptions.IgnoreCase)]
     private static partial Regex PasswordClassWord();
 
     [GeneratedRegex(@"pass(?:word|wd|phrase|code|wort)|pwd|(?<![A-Za-z])pw(?![A-Za-z])", RegexOptions.IgnoreCase)]
     private static partial Regex StrongPasswordWord();
+
+    // the assignment's name says the value is a location, a label or a number, not the secret: SSH_KEY_PATH=, key_name =, KEY_SIZE=, "KeyPath":
+    [GeneratedRegex(@"(?:path|file|name|names|id|ids|size|length|bits|days|hours|minutes|seconds|ttl|url|uri|dir|directory|type|count|version|algorithm|alg|format|prefix|suffix|header|field|column|index|vault|store|provider|rotation[A-Za-z_]*)[""']?[ \t]*(?:=>|:=|[:=：]|\t)[ \t]*[""']?$", RegexOptions.IgnoreCase)]
+    private static partial Regex NamesSomethingElse();
+
+    [GeneratedRegex(@"^[^\s]*[A-Za-z0-9_\-]\.[A-Za-z][A-Za-z0-9]{0,5}$")]
+    private static partial Regex FileName();
+
+    [GeneratedRegex(@"^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$")]
+    private static partial Regex Uuid();
+
+    // build01, x64, v3, 2026q3, ed25519
+    [GeneratedRegex(@"^(?:[A-Za-z]+\d{1,6}|\d{1,6}[A-Za-z]{1,3})$")]
+    private static partial Regex WordWithNumber();
 
     // a line that is nothing but a sensitive name, optionally with a list dash, quotes and a trailing : or =
     [GeneratedRegex(@"^[\s\-]*[""']?[A-Za-z0-9_.\-]*(?:pass|pwd|secret|token|credential|key)[A-Za-z0-9_.\-]*[""']?\s*[:=]?\s*$", RegexOptions.IgnoreCase)]
@@ -205,7 +255,7 @@ public static partial class SecretScanner
 
     // things that are long and mixed but are not secrets: hex ids and hashes, UUIDs, versions, numbers with units, times and dates,
     // e-mail addresses, @mentions, issue refs, key=value pairs and flags (their value part is scanned by the other rules)
-    [GeneratedRegex(@"^(?:[0-9a-fA-F]{7,}|[0-9a-fA-F]{8}-[0-9a-fA-F\-]{27}|v?\d+(?:\.\d+)+[\w.\-]*|\d[\d.,:/\-]*[A-Za-z%]{0,4}|[^@\s]+@[A-Za-z0-9.\-]+\.[A-Za-z]{2,}|@[\w\-]+|#\d+|[A-Za-z]+-\d+|--?[A-Za-z][\w\-]*(?:=.*)?|[A-Za-z_][\w.\-]*[=:].*|[A-Za-z]+\d{0,4}|(?:[A-Za-z]+[./\\_\-])+[A-Za-z0-9]+\d{0,4})$")]
+    [GeneratedRegex(@"^(?:[0-9a-fA-F]{7,}|0x[0-9a-fA-F]+|[0-9a-fA-F]{8}-[0-9a-fA-F\-]{27}|(?:Ctrl|Alt|Shift|Cmd|Win|Meta|Option|Fn)(?:\+\w+)+|SHA256:[A-Za-z0-9+/=]+|AAAA[A-Za-z0-9+/=]{20,}|[^@\s]+@[A-Za-z0-9.\-]+|v?\d+(?:\.\d+)+[\w.\-]*|\d[\d.,:/\-]*[A-Za-z%]{0,4}|[^@\s]+@[A-Za-z0-9.\-]+\.[A-Za-z]{2,}|@[\w\-]+|#\d+|[A-Za-z]+-\d+|--?[A-Za-z][\w\-]*(?:=.*)?|[A-Za-z_][\w.\-]*[=:].*|[A-Za-z]+\d{0,4}|(?:[A-Za-z]+[./\\_\-])+[A-Za-z0-9]+\d{0,4})$")]
     private static partial Regex NotASecretShape();
 
     /// <summary>Zero-width and other format characters are invisible to a reviewer and break patterns; drop them.</summary>

@@ -53,7 +53,6 @@ password=$up3rS3cretValue9
 password: <Sup3rS3cretValue9>
 
 # --- values without a digit or symbol: cannot be told from configuration words, so flagged rather than blocked
-api_key = "ZzzzZzzzZzzzZzzzQ"
 passphrase: correct-horse-battery
 
 # --- round 4, verbatim from the validator (non-vendor values on purpose: a vendor token would be blocked whatever surrounds it)

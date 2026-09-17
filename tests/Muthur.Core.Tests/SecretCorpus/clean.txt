@@ -36,3 +36,31 @@ Press the Escape key to close the dialog; the keyboard shortcut list is under He
 The cache key is built from the user id and the locale, e.g. profile:42:en-GB.
 Primary key changed from int to bigint in migration 20240918_WidenOrderIds.
 cacheKey=user_profile_settings and sortKey=created_at are the defaults.
+
+# --- round 6, verbatim from the validator: "key" names things that are not secrets
+DynamoDB design: partition key = tenantId, sort key = createdAt#orderId. Query by partition key with begins_with on the sort key.
+{"Bucket": "acme-reports", "Key": "reports/2026/q3/summary.pdf", "ContentType": "application/pdf"}
+The upload returns {"bucket":"acme-uploads","key":"tenants/42/invoices/INV-2026-0917.pdf","size":48211}.
+terraform { backend "s3" { bucket = "acme-tfstate"  key = "prod/network/terraform.tfstate"  region = "eu-west-1" } }
+PR #88: move Terraform state to S3. Backend block now reads bucket = "acme-tfstate", key = "staging/app/terraform.tfstate", dynamodb_table = "tf-locks".
+Idempotency-Key must be a UUID, e.g. Idempotency-Key: 3f2a1b4c-5d6e-4f70-8a9b-0c1d2e3f4a5b
+Send an Idempotency-Key header with every POST. Example: Idempotency-Key: order-2026-09-17-000123
+Feature flag key: checkout-redesign-2026, enabled for 10% of tenants since Monday.
+cache_key = "orders:by-customer:v3"
+ENCRYPTION_KEY_ROTATION_DAYS=90 / KEY_SIZE=2048 / SSH_KEY_PATH=~/.ssh/id_ed25519 / KEY_FILE=/etc/ssl/private/server.key
+Kestrel: "Certificate": { "Path": "certs/site.pem", "KeyPath": "certs/site-private.key" }
+resource "aws_instance" "web" { ami = "ami-0abc" key_name = "deploy-keypair-2026" }
+The webpack chunk map uses the content hash as key: main.8f3a2b1c9d.js, vendor.1c9d8f3a2b.js.
+Press Ctrl+Shift+P to open the command palette; the key binding for Save All is Ctrl+K S. The Esc key closes it.
+The Fn key and the Windows key are swapped on the new ThinkPad keyboards; the hotkey Win+Shift+S still works.
+foreach (var key in dict.Keys) { if (!seen.Contains(key)) result[key] = dict[key]; }
+actions/cache step: `key: ${{ runner.os }}-nuget-${{ hashFiles('**/packages.lock.json') }}` + restore-keys
+<add key="PageSize" value="50" /> <add key="ServiceBaseUrl" value="https://api.example.com" /> <add key="FeatureToggleNewCheckout" value="true"/>
+<add key="MaxUploadSizeMegabytes" value="250" /> <add key="AllowedOriginsList" value="https://app.example.com" />
+LaunchDarkly flag key: enable-new-checkout-flow; variation served: true for segment beta-testers.
+Sort key is `createdAt#orderId`, partition key is `tenantId`; GSI1 flips them.
+gpg --recv-keys 0x3AA5C34371567BD2   # public signing key of the release manager
+kid (key id) in the token header selects the JWKS entry; ours is currently sig-2026-09.
+ssh -i ~/.ssh/deploy_ed25519 deploy@build01   # IdentityFile is the deploy key, path only
+Build 2026.09.17.4 is green: 330 tests passed, coverage 81.4%, artifact muthur-win-x64.zip (23.8 MB).
+All checks passed on build01-win-x64 this morning.
