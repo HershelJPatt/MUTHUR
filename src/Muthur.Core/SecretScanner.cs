@@ -162,6 +162,25 @@ public static partial class SecretScanner
         return false;
     }
 
+    /// <summary>
+    /// One of the two lines of text above (blank lines and code fences do not count) is about a password, a login or credentials.
+    /// </summary>
+    private static bool IsBelowCredentialLine(string[] lines, int i, out bool strong)
+    {
+        strong = false;
+        var seen = 0;
+        for (var h = i - 1; h >= 0 && h >= i - 5 && seen < 2; h--)
+        {
+            var line = lines[h].Trim();
+            if (line.Length == 0 || line.StartsWith("```", StringComparison.Ordinal)) continue;
+            seen++;
+            if (!CredentialLine().IsMatch(line)) continue;
+            strong = StrongPasswordWord().IsMatch(line) || line.EndsWith(':'); // "Login for staging:" announces what follows
+            return true;
+        }
+        return false;
+    }
+
     /// <summary>"Password", "Temp password", "API Key" — not a data cell that happens to carry the word (PasswordHasherV2, password_v2_enabled).</summary>
     private static bool IsCredentialColumn(string cell) =>
         cell.Length <= 40 && !cell.Any(char.IsAsciiDigit) && CredentialColumnWord().IsMatch(cell);
@@ -256,9 +275,13 @@ public static partial class SecretScanner
         {
             // this line and the two above it: a table row sits two lines below its header
             var context = string.Join('\n', lines[Math.Max(0, i - 2)..(i + 1)]);
-            var nearPasswordWord = PasswordClassWord().IsMatch(context);
+            // "Here is the staging password:" / blank / "Winter_2026": the value stands alone below the sentence that names it
+            var alone = AloneOnLine().Match(lines[i]);
+            var strongAbove = false;
+            var below = alone.Success && IsBelowCredentialLine(lines, i, out strongAbove);
+            var nearPasswordWord = below || PasswordClassWord().IsMatch(context);
             // right next to the word itself ("password = Sup3r S3cret") even a short mixed token is worth a look
-            var minimum = StrongPasswordWord().IsMatch(lines[i]) ? 5 : 8;
+            var minimum = below || StrongPasswordWord().IsMatch(lines[i]) ? 5 : 8;
             foreach (Match token in StandaloneToken().Matches(lines[i]))
             {
                 var value = token.Value.Trim('"', '\'', '`', '*', '_', '(', ')', ',', ';', '|', '<', '>', '.', '[', ']', '{', '}');
@@ -283,7 +306,8 @@ public static partial class SecretScanner
                     || (i > 0 && DanglingSecretName().IsMatch(lines[i - 1]))
                     || (i > 0 && ValueLine().IsMatch(lines[i]) && StrongPasswordWord().IsMatch(lines[i - 1]))
                     || UnderPasswordHeader(lines, i);
-                var direct = rightWhereItGoes || (CredentialLine().IsMatch(lines[i]) && AfterCredentialLead().IsMatch(preceding));
+                var direct = rightWhereItGoes || (CredentialLine().IsMatch(lines[i]) && AfterCredentialLead().IsMatch(preceding))
+                    || (below && token.Index >= alone.Groups["value"].Index && (strongAbove || IsPasswordShaped(value)));
                 // product and algorithm names with a version (Chrome128, Argon2id), codes and standards (AADSTS50126, KB5031356,
                 // SP800-63B, 28P01) and branch-like paths (task/T-9-outbound-gate) are what password-related messages are full of
                 // — except a shouted word with a number right where the password goes (-p WINTER2026)
@@ -375,7 +399,7 @@ public static partial class SecretScanner
 
     // In a credential position only these are plainly not the password: hex ids, UUIDs, versions, numbers, e-mail and host
     // references, mentions, issue refs and command-line flags. Words with numbers are exactly what passwords look like.
-    [GeneratedRegex(@"^(?:[0-9a-fA-F]{7,}|0x[0-9a-fA-F]+|[0-9a-fA-F]{8}-[0-9a-fA-F\-]{27}|v?\d+(?:\.\d+)+[\w.\-]*|\d[\d.,:/\-]*[A-Za-z%]{0,4}|[^@\s]+@[A-Za-z0-9\-]+(?:\.[A-Za-z0-9\-]+)*\.[A-Za-z]{2,}|@[\w\-]+|#\d+|[A-Z][A-Z0-9]*(?:[-_][A-Z0-9]+)*|--?[A-Za-z][\w\-]*(?:=.*)?)$")]
+    [GeneratedRegex(@"^(?:[0-9a-fA-F]{7,}|0x[0-9a-fA-F]+|[0-9a-fA-F]{8}-[0-9a-fA-F\-]{27}|v?\d+(?:\.\d+)+[\w.\-]*|\d[\d.,:/\-]*[A-Za-z%]{0,4}|\d{1,4}(?:chars?|characters|tickets|entries|days|hours|minutes|seconds|attempts|tries|bytes|bits|users|times|words)|[^@\s]+@[A-Za-z0-9\-]+(?:\.[A-Za-z0-9\-]+)*\.[A-Za-z]{2,}|@[\w\-]+|#\d+|[A-Z][A-Z0-9]*(?:[-_][A-Z0-9]+)*|--?[A-Za-z][\w\-]*(?:=.*)?)$")]
     private static partial Regex PlainlyNotASecret();
 
     // a capitalized word inside the value: Winter, App, Orders — not the lone capital of T-9 or x64
@@ -391,7 +415,7 @@ public static partial class SecretScanner
     private static partial Regex CredentialLine();
 
     // products, platforms, protocols and algorithms that carry a version or a number in their name
-    [GeneratedRegex(@"^(?:Chrome|Chromium|Firefox|Safari|Edge|Opera|Windows|Win|Server|iOS|iPadOS|macOS|Android|Ubuntu|Debian|Fedora|CentOS|RHEL|Node|Deno|Python|Java|Kotlin|Swift|Go|Rust|PHP|Ruby|Rails|Django|Angular|React|Vue|Net|DotNet|NetCore|Core|Postgres|PostgreSQL|MySQL|MariaDB|Mongo|MongoDB|Redis|Oracle|SqlServer|Office|Dynamics|Exchange|SharePoint|Argon|Bcrypt|Scrypt|Sha|Md|Base|Utf|OAuth|OpenID|Http|Tls|Ssl|Ipv|Log4j|Log4Net|Ed|Rs|Hs|Es|Ps|Aes|Des|Rsa|Ecdsa|Curve|X|P|Gpt|Claude|Llama)[\-_]?\d+(?:[.\-_]\d+)*[A-Za-z]{0,3}$", RegexOptions.IgnoreCase)]
+    [GeneratedRegex(@"^(?:Chrome|Chromium|Firefox|Safari|Edge|Opera|Windows|Win|Server|iOS|iPadOS|macOS|Android|Ubuntu|Debian|Fedora|CentOS|RHEL|Node|Deno|Python|Java|Kotlin|Swift|Go|Rust|PHP|Ruby|Rails|Django|Angular|React|Vue|Net|DotNet|NetCore|Core|Postgres|PostgreSQL|MySQL|MariaDB|Mongo|MongoDB|Redis|Oracle|SqlServer|Office|Dynamics|Exchange|SharePoint|Argon|Bcrypt|Scrypt|Sha|Md|Base|Utf|OAuth|OpenID|Http|Tls|Ssl|Ipv|Log4j|Log4Net|Ed|Rs|Hs|Es|Ps|Aes|Des|Rsa|Ecdsa|Curve|X|P|Gpt|Claude|Llama|AADSTS)[\-_]?\d+(?:[.\-_]\d+)*[A-Za-z]{0,3}$", RegexOptions.IgnoreCase)]
     private static partial Regex KnownTechnicalName();
 
     // the text before a token ends with a password flag: -p X, -P X, -w X, -a X, --password X
@@ -404,12 +428,16 @@ public static partial class SecretScanner
 
     // on a line about credentials, the lead-ins a value follows: IDENTIFIED BY 'X' · net user deploy X · admin / X · "…the new hire: X" ·
     // "…is now X" · "…changed to X"
-    [GeneratedRegex(@"(?:IDENTIFIED\s+BY|net\s+user\s+\S+|\s/|:|(?<![A-Za-z])is(?:\s+now)?|(?:changed|reset|set|updated|rotated)\s+to)\s+[""'`]?$", RegexOptions.IgnoreCase)]
+    [GeneratedRegex(@"(?:IDENTIFIED\s+BY|net\s+user\s+\S+|\s/|:|(?<![A-Za-z])is(?:\s+now)?|(?:changed|reset|set|updated|rotated)(?![A-Za-z])[^.\r\n]{0,60}?\sto|will\s+be|SecureString(?:\s+-String)?|NetworkCredential\([^)\r\n]*,)\s+[""'`(]*$", RegexOptions.IgnoreCase)]
     private static partial Regex AfterCredentialLead();
 
     // passlib==1.7.4 reads like an assignment to "pass…"; what follows is a version
     [GeneratedRegex(@"^=?v?\d+(?:\.\d+)+$")]
     private static partial Regex PinnedVersion();
+
+    // a line that holds one token, perhaps behind a bullet, a quote mark or a short "admin:" lead
+    [GeneratedRegex(@"^\s*(?:[-*>•]\s+|\d+[.)]\s+)?(?:[A-Za-z][\w .\-]{0,20}:\s*)?[`'""]?(?<value>[^\s`'""]+)[`'""]?\s*$")]
+    private static partial Regex AloneOnLine();
 
     // WINTER2026 · PASSWORD123 · ADMIN_2026!
     [GeneratedRegex(@"^[A-Z]{4,}[_.\-]?\d{2,}[^A-Za-z0-9]*$")]
@@ -432,7 +460,7 @@ public static partial class SecretScanner
 
     // things that are long and mixed but are not secrets: hex ids and hashes, UUIDs, versions, numbers with units, times and dates,
     // e-mail addresses, @mentions, issue refs, key=value pairs and flags (their value part is scanned by the other rules)
-    [GeneratedRegex(@"^(?:[0-9a-fA-F]{7,}|0x[0-9a-fA-F]+|[0-9a-fA-F]{8}-[0-9a-fA-F\-]{27}|(?:Ctrl|Alt|Shift|Cmd|Win|Meta|Option|Fn)(?:\+\w+)+|SHA256:[A-Za-z0-9+/=]+|AAAA[A-Za-z0-9+/=]{20,}|[^@\s]+@[A-Za-z0-9.\-]+|v?\d+(?:\.\d+)+[\w.\-]*|\d[\d.,:/\-]*[A-Za-z%]{0,4}|[^@\s]+@[A-Za-z0-9.\-]+\.[A-Za-z]{2,}|@[\w\-]+|#\d+|[A-Za-z]+-\d+|--?[A-Za-z][\w\-]*(?:=.*)?|[A-Za-z_][\w.\-]*[=:].*|[A-Za-z]+\d{0,4}|(?:[A-Za-z]+[./\\_\-])+[A-Za-z]+\d{0,4})$")]
+    [GeneratedRegex(@"^(?:[0-9a-fA-F]{7,}|0x[0-9a-fA-F]+|[0-9a-fA-F]{8}-[0-9a-fA-F\-]{27}|(?:Ctrl|Alt|Shift|Cmd|Win|Meta|Option|Fn)(?:\+\w+)+|SHA256:[A-Za-z0-9+/=]+|AAAA[A-Za-z0-9+/=]{20,}|[^@\s]+@[A-Za-z0-9.\-]+|v?\d+(?:\.\d+)+[\w.\-]*|\d[\d.,:/\-]*[A-Za-z%]{0,4}|\d{1,4}(?:chars?|characters|tickets|entries|days|hours|minutes|seconds|attempts|tries|bytes|bits|users|times|words)|[^@\s]+@[A-Za-z0-9.\-]+\.[A-Za-z]{2,}|@[\w\-]+|#\d+|[A-Za-z]+-\d+|--?[A-Za-z][\w\-]*(?:=.*)?|[A-Za-z_][\w.\-]*[=:].*|[A-Za-z]+\d{0,4}|(?:[A-Za-z]+[./\\_\-])+[A-Za-z]+\d{0,4})$")]
     private static partial Regex NotASecretShape();
 
     /// <summary>Zero-width and other format characters are invisible to a reviewer and break patterns; drop them.</summary>

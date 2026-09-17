@@ -224,3 +224,11 @@ the pw is RootPass123
 The password for the staging admin is now P4ssword1
 CREATE USER app IDENTIFIED BY 'password123';
 docker login registry.acme.io -u deploy -p WINTER2026
+Here is the password for the staging admin:\nWinter_2026
+Password for staging:\n\nP@ssw0rd
+Hi Jane, your temporary password is below.\n\nWelcome1\n\nPlease change it at first login.
+Staging passwords:\n- admin: Spring@2026\n- readonly: see vault
+the password is:\n```\nSummer2025\n```
+Login for staging:\njdoe\nWelcome.2026
+what's the staging password again?\nAcme.Prod.2026
+The new password:\nWelcome#1

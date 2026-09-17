@@ -72,6 +72,24 @@ public sealed class SecretScannerTests
         "- name: DB_PASSWORD\n  value: {0}",
         "Login for the staging box: admin / {0}",
         "net user deploy {0} /add",
+        "Set-ADAccountPassword jdoe -Reset -NewPassword (ConvertTo-SecureString '{0}' -AsPlainText -Force)",
+        "var cred = new NetworkCredential(\"admin\", \"{0}\");",
+        "I reset the password for jdoe to {0}",
+        "Your temporary password will be {0}",
+        // the value on a line of its own, below the sentence that names it
+        "Password:\n{0}",
+        "Here is the password for the staging admin:\n{0}",
+        "Password for staging:\n\n{0}",
+        "The new password:\n{0}",
+        "Hi Jane, your temporary password is below.\n\n{0}\n\nPlease change it at first login.",
+        "Staging passwords:\n- admin: {0}\n- readonly: see vault",
+        "Staging login:\n- admin\n- {0}",
+        "admin password\n{0}",
+        "pw for the wifi:\n{0}",
+        "the password is:\n```\n{0}\n```",
+        "Password for staging:\n> {0}",
+        "Login for staging:\njdoe\n{0}",
+        "what's the staging password again?\n{0}",
     ];
 
     /// <summary>How people build one: a word or two, a number, maybe a symbol — including the password word itself.</summary>
