@@ -1,0 +1,107 @@
+@inherits LivePanel
+@inject MessageService Messages
+@inject AgentService Agents
+@inject RoleService Roles
+@inject TimeProvider Clock
+
+<section class="panel">
+    <div class="panel-head"><span class="panel-title">Comms</span><span class="panel-sub">you ↔ the organization</span></div>
+    <div class="panel-body">
+        @if (_thread.Count == 0)
+        {
+            <div class="empty">no messages yet</div>
+        }
+        @foreach (var message in _thread)
+        {
+            <div class="event">
+                <span class="event-age">@Format.Age(message.At, _now)</span>
+                <div>
+                    <div class="event-line">
+                        <span class="event-actor">@message.From</span> <span class="event-detail">→ @message.To</span>
+                        @if (message.Blocking)
+                        {
+                            <span class="tag tag-open">blocking</span>
+                        }
+                        @if (message.Task is { } task)
+                        {
+                            <a class="event-task" href="/tasks/@task">@task</a>
+                        }
+                    </div>
+                    <div class="prose">@message.Body</div>
+                </div>
+            </div>
+        }
+    </div>
+    <div class="panel-head">
+        <select class="select" @bind="_recipient">
+            <option value="">to…</option>
+            @foreach (var agent in _agents)
+            {
+                <option value="@agent.Name">@agent.Name</option>
+            }
+            @foreach (var role in _roles)
+            {
+                <option value="role:@role.Key">role:@role.Key</option>
+            }
+        </select>
+    </div>
+    <div class="panel-body panel-fit">
+        <textarea class="textarea" placeholder="message…" @bind="_body" @bind:event="oninput"></textarea>
+        <div class="btn-row">
+            <button class="btn btn-go" disabled="@(_recipient.Length == 0 || string.IsNullOrWhiteSpace(_body))"
+                    @onclick="SendAsync">Send</button>
+        </div>
+        @if (_error is { } error)
+        {
+            <div class="error-text">@error</div>
+        }
+    </div>
+</section>
+
+@code {
+    private IReadOnlyList<MessageDto> _thread = [];
+    private IReadOnlyList<AgentDto> _agents = [];
+    private IReadOnlyList<RoleDto> _roles = [];
+    private string _recipient = "";
+    private string _body = "";
+    private string? _error;
+    private DateTimeOffset _now;
+
+    // Messages age in place, so refresh occasionally even when nothing is written.
+    protected override TimeSpan? ClockInterval => TimeSpan.FromSeconds(30);
+
+    protected override bool IsRelevant(Muthur.Core.Entities.LedgerEvent e) =>
+        e.Type.StartsWith("message.", StringComparison.Ordinal) ||
+        e.Type.StartsWith("agent.", StringComparison.Ordinal) ||
+        e.Type.StartsWith("role.", StringComparison.Ordinal);
+
+    protected override async Task LoadAsync()
+    {
+        _now = Clock.GetUtcNow();
+        _thread = await Messages.HistoryAsync(60, founderThread: true);
+        _agents = await Agents.ListAsync();
+        _roles = await Roles.ListAsync();
+    }
+
+    // Only a founder who is actually looking has read anything: prerender must not clear the badge.
+    protected override async Task OnAfterRenderAsync(bool firstRender)
+    {
+        if (firstRender) await Messages.MarkFounderReadAsync(Caller.Founder);
+    }
+
+    private async Task SendAsync()
+    {
+        try
+        {
+            await Messages.SendAsync(Caller.Founder, new SendMessageRequest(_recipient, _body));
+        }
+        catch (Muthur.Core.MuthurException ex)
+        {
+            _error = ex.Message;
+            return;
+        }
+        _body = "";
+        _error = null;
+        await ReloadNowAsync();
+    }
+}
