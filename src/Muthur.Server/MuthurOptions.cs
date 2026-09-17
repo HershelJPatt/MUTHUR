@@ -14,6 +14,7 @@ public sealed class MuthurOptions
     public int ClaimLeaseMinutes { get; set; } = 30;
     public int RoleLeaseMinutes { get; set; } = 30;
     public int AgentStaleSeconds { get; set; } = 180;
+    public int IngestIntervalSeconds { get; set; } = 180;
     /// <summary>Off in tests so sweeps and ingest only run when a test asks for them.</summary>
     public bool BackgroundServices { get; set; } = true;
 

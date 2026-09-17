@@ -36,5 +36,10 @@ public static class Routes
     public const string AccountLimits = Api + "/harness/limits";
     public const string WorkerRuns = Api + "/workers/runs";
 
+    public const string Inbound = Api + "/inbound";
+    public static string InboundAction(string id, string action) => $"{Inbound}/{Uri.EscapeDataString(id)}/{action}";
+    public const string IngestSources = Api + "/ingest/sources";
+    public const string IngestPoll = Api + "/ingest/poll";
+
     public const string Events = Api + "/events";
 }

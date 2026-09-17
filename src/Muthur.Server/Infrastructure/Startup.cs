@@ -52,11 +52,17 @@ public static class Startup
         builder.Services.AddSingleton<MessageService>();
         builder.Services.AddSingleton<RequestService>();
         builder.Services.AddSingleton<HarnessService>();
+        builder.Services.AddSingleton<InboundService>();
+        builder.Services.AddSingleton<IngestService>();
+        builder.Services.AddSingleton<IInboundSource, GitHubIssuesSource>();
         builder.Services.AddSingleton<IProcessRunner, ProcessRunner>();
         builder.Services.AddSingleton<IPullRequestOpener, GhPullRequestOpener>();
         builder.Services.AddSingleton<ITaskLander, GitLander>();
         if (options.BackgroundServices)
+        {
             builder.Services.AddHostedService<LeaseSweeper>();
+            builder.Services.AddHostedService<IngestWorker>();
+        }
 
         builder.Services.AddRazorComponents().AddInteractiveServerComponents();
 

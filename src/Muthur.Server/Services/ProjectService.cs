@@ -35,10 +35,11 @@ public sealed partial class ProjectService(Ledger ledger)
                 DefaultBranch = string.IsNullOrWhiteSpace(request.DefaultBranch) ? "main" : request.DefaultBranch.Trim(),
                 LandMode = request.LandMode ?? LandMode.Merge,
                 RequiredValidators = Normalize(request.RequiredValidators),
+                IngestSources = Normalize(request.IngestSources),
                 CreatedAt = m.Now,
             };
             m.Db.Projects.Add(project);
-            m.Record("project.added", payload: new { project = key, project.RepoPath, landMode = project.LandMode.ToWire(), project.RequiredValidators });
+            m.Record("project.added", payload: new { project = key, project.RepoPath, landMode = project.LandMode.ToWire(), project.RequiredValidators, project.IngestSources });
             return project.ToDto();
         }, ct);
     }
@@ -54,7 +55,8 @@ public sealed partial class ProjectService(Ledger ledger)
             if (!string.IsNullOrWhiteSpace(request.DefaultBranch)) project.DefaultBranch = request.DefaultBranch.Trim();
             if (request.LandMode is { } mode) project.LandMode = mode;
             if (request.RequiredValidators is not null) project.RequiredValidators = Normalize(request.RequiredValidators);
-            m.Record("project.updated", payload: new { project = project.Key, project.RepoPath, landMode = project.LandMode.ToWire(), project.RequiredValidators });
+            if (request.IngestSources is not null) project.IngestSources = Normalize(request.IngestSources);
+            m.Record("project.updated", payload: new { project = project.Key, project.RepoPath, landMode = project.LandMode.ToWire(), project.RequiredValidators, project.IngestSources });
             return project.ToDto();
         }, ct);
     }
