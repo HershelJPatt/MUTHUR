@@ -18,7 +18,8 @@ public sealed class FileChannel(TimeProvider clock) : IOutboundChannel
     public async Task SendAsync(string address, string body, CancellationToken ct = default)
     {
         Directory.CreateDirectory(Path.GetDirectoryName(address)!);
-        await File.AppendAllTextAsync(address, $"--- {clock.GetUtcNow():O}\n{body.TrimEnd()}\n", ct);
+        // The body goes out byte for byte: it is what was hashed and reviewed.
+        await File.AppendAllTextAsync(address, $"--- {clock.GetUtcNow():O}\n{body}\n", ct);
     }
 }
 

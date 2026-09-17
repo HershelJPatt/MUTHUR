@@ -112,6 +112,55 @@ public sealed class OutboundTests : IDisposable
     }
 
     [Fact]
+    public async Task A_delivery_that_blows_up_is_failed_retryable_and_never_reveals_the_address()
+    {
+        // A file target whose path is a directory: the write throws UnauthorizedAccessException, not IOException.
+        var directory = Path.Combine(_hub.DataDir, "secret-location-7f3a");
+        Directory.CreateDirectory(directory);
+        (await _hub.Founder().PutAsJsonAsync(Routes.OutboundTargets, new DefineTargetRequest("broken", "file", directory))).EnsureSuccessStatusCode();
+        var author = await _hub.RegisterAgentAsync("author");
+        var peer = await _hub.RegisterAgentAsync("peer");
+        var draft = await ReadAsync(await DraftAsync(author, "Hello out there.", target: "broken"));
+        await ReadAsync(await ReviewAsync(peer, draft));
+
+        var send = await author.PostAsync(Routes.OutboundAction(draft.Id, "send"), null);
+
+        Assert.Equal(HttpStatusCode.Conflict, send.StatusCode);
+        var error = await send.ReadErrorAsync();
+        Assert.Equal("delivery_failed", error.Code);
+        Assert.DoesNotContain("secret-location-7f3a", error.Message);
+
+        var shown = await ReadAsync(await author.GetAsync($"{Routes.Outbound}/{draft.Id}"));
+        Assert.Equal("failed", shown.Status);
+        Assert.DoesNotContain("secret-location-7f3a", shown.Error);
+        var ledger = await (await author.GetAsync($"{Routes.Events}?limit=200")).Content.ReadAsStringAsync();
+        Assert.DoesNotContain("secret-location-7f3a", ledger);
+
+        // Only the author (or founder) retries — and a refused retry changes nothing.
+        var byPeer = await peer.PostAsync(Routes.OutboundAction(draft.Id, "retry"), null);
+        Assert.Equal("not_author", (await byPeer.ReadErrorAsync()).Code);
+        Assert.Equal("failed", (await ReadAsync(await author.GetAsync($"{Routes.Outbound}/{draft.Id}"))).Status);
+
+        // The founder fixes the target; the same reviewed bytes go out without a new review.
+        await DefineTargetAsync("broken");
+        Assert.Equal("sent", (await ReadAsync(await author.PostAsync(Routes.OutboundAction(draft.Id, "retry"), null))).Status);
+    }
+
+    [Fact]
+    public async Task The_body_is_delivered_byte_for_byte()
+    {
+        await DefineTargetAsync();
+        var author = await _hub.RegisterAgentAsync("author");
+        var peer = await _hub.RegisterAgentAsync("peer");
+        const string body = "line one\n\n  indented\ntrailing spaces   \n\n";
+        var draft = await ReadAsync(await DraftAsync(author, body));
+        await ReadAsync(await ReviewAsync(peer, draft));
+        await ReadAsync(await author.PostAsync(Routes.OutboundAction(draft.Id, "send"), null));
+
+        Assert.Contains(body, await File.ReadAllTextAsync(Outbox));
+    }
+
+    [Fact]
     public async Task Some_targets_also_need_the_founder()
     {
         await DefineTargetAsync("press", founderApproval: true);

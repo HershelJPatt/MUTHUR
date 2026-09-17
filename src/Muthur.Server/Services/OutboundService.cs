@@ -141,7 +141,7 @@ public sealed partial class OutboundService(Ledger ledger, IEnumerable<IOutbound
             message.Status = approve ? OutboundStatus.Approved : OutboundStatus.Rejected;
             message.FounderApprovedAt = approve ? m.Now : null;
             if (!approve) message.ReviewNote = $"Founder: {note ?? "declined"}";
-            m.Record(approve ? "outbound.founder_approved" : "outbound.founder_declined", message.TaskId, new { outbound = Id(message), note });
+            m.Record(approve ? "outbound.founder_approved" : "outbound.founder_declined", message.TaskId, new { outbound = Id(message), sha256 = message.BodySha256, note });
 
             if (message.AuthorAgentId is not null)
                 MessageService.Post(m, null, caller.Name, Recipient.Agent, message.AuthorName,
@@ -167,9 +167,11 @@ public sealed partial class OutboundService(Ledger ledger, IEnumerable<IOutbound
             {
                 await FindChannel(message.Target!.Channel).SendAsync(message.Target.Address, message.Body, ct);
             }
-            catch (Exception ex) when (ex is InvalidOperationException or HttpRequestException or IOException)
+            catch (Exception ex) when (ex is not OperationCanceledException)
             {
-                error = ex.Message;
+                // Whatever went wrong out there, the message is "failed", never stuck in "approved" — and the reason
+                // is recorded without the target's address, which is often a credential and is never shown to agents.
+                error = Redact(ex.Message, message.Target!.Address);
             }
 
             var dto = await ledger.MutateAsync(caller, async m =>
@@ -197,6 +199,8 @@ public sealed partial class OutboundService(Ledger ledger, IEnumerable<IOutbound
         await ledger.MutateAsync(caller, async m =>
         {
             var message = await LoadAsync(m.Db, id, ct);
+            if (!caller.IsFounder && caller.AgentId != message.AuthorAgentId)
+                throw Fail.Rule("not_author", $"{Id(message)} was written by '{message.AuthorName}'; only they or the founder retry it.");
             if (message.Status != OutboundStatus.Failed)
                 throw Fail.Rule("not_failed", $"{Id(message)} is {message.Status}; only a failed delivery can be retried.");
             message.Status = OutboundStatus.Approved;
@@ -237,6 +241,23 @@ public sealed partial class OutboundService(Ledger ledger, IEnumerable<IOutbound
     }
 
     private static string Id(OutboundMessage message) => "O-" + message.Id;
+
+    /// <summary>Removes the target's address (and, for a path, its directory and file name) from an error message.</summary>
+    private static string Redact(string text, string address)
+    {
+        var secrets = new List<string> { address };
+        if (Path.IsPathRooted(address))
+        {
+            secrets.Add(Path.GetFullPath(address));
+            if (Path.GetDirectoryName(address) is { Length: > 3 } directory) secrets.Add(directory);
+        }
+        foreach (var secret in secrets.Where(s => s.Length > 0).OrderByDescending(s => s.Length))
+        {
+            text = text.Replace(secret, "<target address>", StringComparison.OrdinalIgnoreCase);
+            text = text.Replace(secret.Replace('\\', '/'), "<target address>", StringComparison.OrdinalIgnoreCase);
+        }
+        return text;
+    }
 
     private static TargetDto ToDto(OutboundTarget t) => new(t.Key, t.Channel, t.RequiresFounderApproval, t.CreatedAt);
 

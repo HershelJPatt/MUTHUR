@@ -24,11 +24,41 @@ public sealed class SecretScannerTests
     public void Credentials_are_found(string text, string expectedKind) =>
         Assert.Contains(SecretScanner.Scan(text), f => f.Kind == expectedKind);
 
+    // Every one of these got past the first version of the scanner and was delivered during validation of T-9.
+    [Theory]
+    [InlineData("{\"password\": \"hunter2hunter2\"}")]
+    [InlineData("\"password\":\"hunter2hunter2\"")]
+    [InlineData("{ \"api_key\": \"zzzzzzzzzzzzzzzz\" }")]
+    [InlineData("aws_secret_access_key = wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY")]
+    [InlineData("DATABASE_URL=postgres://app:s3cretpw@db.internal:5432/prod")]
+    [InlineData("mongodb+srv://admin:hunter2@cluster0.example.mongodb.net/test")]
+    [InlineData("redis://:hunter2hunter2@cache:6379/0")]
+    [InlineData("curl https://deploy:hunter2@ci.example.com/job")]
+    [InlineData("token: 9f86d081884c7d659a2feaa0c55ad015")]
+    [InlineData("stripe sk_" + "live_4eC39HqLyjWDarjtT1zdp7dc")]
+    [InlineData("npm_abcdefghijklmnopqrstuvwxyz0123456789")]
+    [InlineData("glpat-abcdefghij0123456789")]
+    public void Shapes_that_once_slipped_through_are_found(string text) => Assert.NotEmpty(SecretScanner.Scan(text));
+
+    [Theory]
+    [InlineData("ghp_abcdefghijklmnop\nqrstuvwxyzABCDEF0123")]
+    [InlineData("ghp_abcdefghijklmnop qrstuvwxyzABCDEF0123")]
+    [InlineData("ghp_abcdefghijklmnop​qrstuvwxyzabcdef0123")]
+    [InlineData("ghp_abcdefghij<b></b>klmnopqrstuvwxyzABCDEF0123")]
+    [InlineData("AKIAIOSF\nODNN7EXAMPLE")]
+    [InlineData("-----BEGIN RSA\nPRIVATE KEY-----")]
+    [InlineData("https://discord.com/api/webhooks/123456789012345678/abcdefghij\nklmnopqrstuvwxyz")]
+    public void A_token_split_by_whitespace_markup_or_invisible_characters_is_still_found(string text) =>
+        Assert.NotEmpty(SecretScanner.Scan(text));
+
     [Theory]
     [InlineData("Release 1.4 is out. Thanks to everyone who reported the login bug!")]
     [InlineData("We rotated the password last week; no action needed on your side.")]
     [InlineData("See https://github.com/acme/widgets/issues/42 and commit 9f86d081884c7d659a2feaa0c55ad015a3bf4f1b.")]
     [InlineData("The token bucket algorithm limits requests; the secret is good caching.")]
+    [InlineData("Docs: https://example.com/guide and mailto:team@example.com. Token: see the vault.")]
+    [InlineData("Fixed in 2.3.1:\n- login loop\n- export timing\n\nThanks @alice and @bob for the reports.")]
+    [InlineData("Meeting at 10:30 with user:admin role review; ratio 3:2@scale is fine.")]
     public void Ordinary_text_passes(string text) => Assert.Empty(SecretScanner.Scan(text));
 
     [Fact]
