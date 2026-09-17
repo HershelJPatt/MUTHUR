@@ -16,9 +16,15 @@ public static class Output
         return result.ExitCode;
     }
 
+    /// <summary>The source-generated metadata, minus escape sequences for quotes and other plain punctuation.</summary>
+    private static readonly MuthurJsonContext Relaxed = new(new JsonSerializerOptions(MuthurJsonContext.Default.Options)
+    {
+        Encoder = System.Text.Encodings.Web.JavaScriptEncoder.UnsafeRelaxedJsonEscaping,
+    });
+
     public static int Error(string code, string message, int exitCode = ExitCodes.Error)
     {
-        Console.Error.WriteLine(JsonSerializer.Serialize(new ErrorResponse(code, message), MuthurJsonContext.Default.ErrorResponse));
+        Console.Error.WriteLine(JsonSerializer.Serialize(new ErrorResponse(code, message), Relaxed.ErrorResponse));
         return exitCode;
     }
 

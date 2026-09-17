@@ -16,9 +16,29 @@ public static class SystemCommands
         up.SetAction(UpAsync);
         root.Subcommands.Add(up);
 
-        var down = new Command("down", "Stop the hub server.");
+        var any = new Option<bool>("--any") { Description = "Stop the hub at MUTHUR_URL even if it belongs to a different installation." };
+        var down = new Command("down", "Stop the hub server that belongs to this installation.") { any };
         down.SetAction(async (parse, ct) =>
         {
+            // A build under test run without its scratch environment would otherwise take the live hub down.
+            // So "down" must positively establish that the running hub is the one bundled with this CLI;
+            // anything it cannot establish (no bundled server, unreadable status, an older hub) is a refusal.
+            var running = await new HubClient(null, TimeSpan.FromSeconds(3)).GetAsync(Routes.Status, ct);
+            if (running.ExitCode == ExitCodes.NotRunning) return ExitCodes.Ok;
+            if (!parse.GetValue(any))
+            {
+                var ours = ServerProcess.Locate() is { } mine ? Path.GetDirectoryName(Path.GetFullPath(mine)) : null;
+                var theirs = running.IsSuccess
+                    ? System.Text.Json.JsonSerializer.Deserialize(running.Body, MuthurJsonContext.Default.StatusResponse)?.ServerDirectory
+                    : null;
+                var isOurs = ours is not null && theirs is { Length: > 0 } && string.Equals(Path.GetFullPath(theirs), ours, StringComparison.OrdinalIgnoreCase);
+                if (!isOurs)
+                    return Output.Error("not_my_hub",
+                        $"The hub at {MuthurEnvironment.Url} runs from {(theirs is { Length: > 0 } ? theirs : "an installation that cannot be identified")}; " +
+                        $"this CLI {(ours is null ? "has no bundled server (it is a build output, not an installation)" : $"belongs to {ours}")}. " +
+                        "Use the CLI of the hub's own installation, fix MUTHUR_URL/MUTHUR_HOME, or pass --any.", ExitCodes.RuleViolation);
+            }
+
             var result = await new HubClient(Globals.ReadFounderToken()).PostAsync(Routes.Shutdown, ct);
             if (result.ExitCode == ExitCodes.NotRunning) return ExitCodes.Ok;
             if (!result.IsSuccess) return Output.Emit(parse, result);

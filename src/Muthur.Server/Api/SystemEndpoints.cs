@@ -21,7 +21,8 @@ public static class SystemEndpoints
                 instance.StartedAt,
                 clock.GetUtcNow(),
                 options.DataDir,
-                options.DbProvider));
+                options.DbProvider,
+                AppContext.BaseDirectory.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar)));
 
         app.MapPost(Routes.Shutdown, (IHostApplicationLifetime lifetime) =>
         {

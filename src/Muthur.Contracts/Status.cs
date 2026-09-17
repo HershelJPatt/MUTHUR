@@ -8,4 +8,6 @@ public sealed record StatusResponse(
     DateTimeOffset StartedAt,
     DateTimeOffset Now,
     string DataDirectory,
-    string DbProvider);
+    string DbProvider,
+    /// <summary>Directory the server binary runs from; lets a CLI tell "its" hub from another installation.</summary>
+    string ServerDirectory);
