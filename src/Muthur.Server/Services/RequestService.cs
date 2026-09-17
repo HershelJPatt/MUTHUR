@@ -84,7 +84,11 @@ public sealed class RequestService(Ledger ledger, LeasePolicy leases)
             entity.Status = RequestStatus.Cancelled;
             entity.AnsweredAt = m.Now;
             m.Record("request.cancelled", entity.TaskId, new { request = id });
-            return ToDto(entity, await UnblockAsync(m, entity, ct));
+            var title = await UnblockAsync(m, entity, ct);
+            if (caller.AgentId != entity.AgentId) // someone else closed the asker's question: they should hear about it
+                MessageService.Post(m, null, caller.Name, Recipient.Agent, entity.AgentName,
+                    $"Your request #{id} (\"{entity.Question}\") was withdrawn without an answer. Decide it yourself within your remit, or ask again with more context.", entity.TaskId);
+            return ToDto(entity, title);
         }, ct);
 
     public Task<IReadOnlyList<FounderRequestDto>> ListAsync(bool openOnly, int limit = 200, CancellationToken ct = default) =>

@@ -21,7 +21,7 @@ public static class RoleEndpoints
         app.MapPost(Routes.Roles + "/{key}/release", async (HttpContext http, string key, RoleService roles, CancellationToken ct) =>
         {
             await roles.ReleaseAsync(http.GetCaller(), key, ct);
-            return Results.NoContent();
+            return (await roles.ListAsync(ct)).Single(r => string.Equals(r.Key, key.Trim(), StringComparison.OrdinalIgnoreCase));
         });
     }
 
