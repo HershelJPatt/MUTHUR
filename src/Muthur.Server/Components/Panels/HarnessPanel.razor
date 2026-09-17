@@ -1,0 +1,61 @@
+@inherits LivePanel
+@inject HarnessService Harnesses
+@inject TimeProvider Clock
+
+<section class="panel">
+    <div class="panel-head">
+        <span class="panel-title">Tiers</span>
+        <span class="panel-sub">harnesses.json</span>
+    </div>
+    <div class="panel-body">
+        @if (_error is { } error)
+        {
+            <div class="error-text">@error</div>
+        }
+        else
+        {
+            @foreach (var tier in _tiers)
+            {
+                <div class="section-label">@tier.Tier</div>
+                @for (var i = 0; i < tier.Candidates.Count; i++)
+                {
+                    var candidate = tier.Candidates[i];
+                    var limitedUntil = candidate.Limited ? candidate.LimitedUntil : null;
+                    <div class="role-row">
+                        <span class="@(candidate.Limited ? "tag" : "tag tag-held")">@(i + 1)</span>
+                        <span>@candidate.Harness/@(candidate.Model.Length > 0 ? candidate.Model : "default")</span>
+                        <span class="role-holder">@candidate.Account@(limitedUntil is { } until ? " · limited " + Format.Until(until, _now) : "")</span>
+                    </div>
+                }
+            }
+        }
+    </div>
+</section>
+
+@code {
+    private IReadOnlyList<TierDto> _tiers = [];
+    private string? _error;
+    private DateTimeOffset _now;
+
+    // A limit lapses on its own, so refresh on the clock too.
+    protected override TimeSpan? ClockInterval => TimeSpan.FromSeconds(30);
+
+    protected override bool IsRelevant(Muthur.Core.Entities.LedgerEvent e) =>
+        e.Type.StartsWith("account.", StringComparison.Ordinal) || e.Type.StartsWith("agent.", StringComparison.Ordinal);
+
+    protected override async Task LoadAsync()
+    {
+        _now = Clock.GetUtcNow();
+        try
+        {
+            _tiers = await Harnesses.TiersAsync();
+            _error = null;
+        }
+        catch (Muthur.Core.MuthurException ex)
+        {
+            // The catalog is a file the founder edits by hand; a typo in it must not take the page down.
+            _tiers = [];
+            _error = ex.Message;
+        }
+    }
+}
