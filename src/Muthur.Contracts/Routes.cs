@@ -26,5 +26,11 @@ public static class Routes
 
     public const string Validations = Api + "/validations";
 
+    public const string Messages = Api + "/messages";
+    public const string Inbox = Messages + "/inbox";
+
+    public const string Requests = Api + "/requests";
+    public static string RequestAction(int id, string action) => $"{Requests}/{id}/{action}";
+
     public const string Events = Api + "/events";
 }

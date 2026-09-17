@@ -17,6 +17,8 @@ public sealed class MuthurDb(DbContextOptions<MuthurDb> options) : DbContext(opt
     public DbSet<Role> Roles => Set<Role>();
     public DbSet<RoleHold> RoleHolds => Set<RoleHold>();
     public DbSet<TaskValidation> TaskValidations => Set<TaskValidation>();
+    public DbSet<Message> Messages => Set<Message>();
+    public DbSet<FounderRequest> FounderRequests => Set<FounderRequest>();
 
     protected override void ConfigureConventions(ModelConfigurationBuilder configurationBuilder)
     {
@@ -85,6 +87,19 @@ public sealed class MuthurDb(DbContextOptions<MuthurDb> options) : DbContext(opt
             e.HasIndex(x => new { x.TaskId, x.ValidatorKey }).IsUnique();
             e.HasOne<WorkTask>().WithMany().HasForeignKey(x => x.TaskId).OnDelete(DeleteBehavior.Cascade);
             e.HasOne(x => x.Agent).WithMany().HasForeignKey(x => x.AgentId).OnDelete(DeleteBehavior.SetNull);
+        });
+
+        modelBuilder.Entity<Message>(e =>
+        {
+            e.ToTable("messages");
+            e.HasIndex(x => new { x.ToKind, x.ToKey, x.ReadAt });
+        });
+
+        modelBuilder.Entity<FounderRequest>(e =>
+        {
+            e.ToTable("founder_requests");
+            e.HasIndex(x => x.Status);
+            e.Property(x => x.Options).HasConversion(StringListConverter.Instance, StringListConverter.Comparer);
         });
 
         ApplySnakeCaseColumns(modelBuilder);

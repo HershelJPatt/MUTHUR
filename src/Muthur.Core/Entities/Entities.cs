@@ -101,3 +101,41 @@ public sealed class TaskValidation
     public Agent? Agent { get; set; }
     public DateTimeOffset? At { get; set; }
 }
+
+public enum Recipient { Agent, Role, Founder }
+
+/// <summary>A message on the internal bus: agent ↔ agent, agent → role, agent ↔ founder, hub → anyone.</summary>
+public sealed class Message
+{
+    public long Id { get; set; }
+    /// <summary>Null when the sender is the founder or the hub itself.</summary>
+    public Guid? FromAgentId { get; set; }
+    public required string FromName { get; set; }
+    public Recipient ToKind { get; set; }
+    /// <summary>Agent name or role key; null for the founder.</summary>
+    public string? ToKey { get; set; }
+    public required string Body { get; set; }
+    /// <summary>The sender cannot continue until this is answered.</summary>
+    public bool Blocking { get; set; }
+    public int? TaskId { get; set; }
+    public DateTimeOffset CreatedAt { get; set; }
+    public DateTimeOffset? ReadAt { get; set; }
+    public string? ReadBy { get; set; }
+}
+
+public enum RequestStatus { Open, Answered, Cancelled }
+
+/// <summary>A decision only a founder can make. While open, the task it concerns is blocked.</summary>
+public sealed class FounderRequest
+{
+    public int Id { get; set; }
+    public int? TaskId { get; set; }
+    public Guid AgentId { get; set; }
+    public required string AgentName { get; set; }
+    public required string Question { get; set; }
+    public List<string> Options { get; set; } = [];
+    public RequestStatus Status { get; set; }
+    public string? Answer { get; set; }
+    public DateTimeOffset CreatedAt { get; set; }
+    public DateTimeOffset? AnsweredAt { get; set; }
+}
