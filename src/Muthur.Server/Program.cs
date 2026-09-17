@@ -21,6 +21,7 @@ app.MapLifecycleEndpoints();
 app.MapMessageEndpoints();
 app.MapHarnessEndpoints();
 app.MapInboundEndpoints();
+app.MapOutboundEndpoints();
 
 app.MapRazorComponents<Muthur.Server.Components.App>().AddInteractiveServerRenderMode();
 

@@ -1,0 +1,266 @@
+# Every line is a text that must at least be FLAGGED (a Suspect or a Block finding): it can never leave without the
+# founder having looked at it. These are credentials in formats no pattern can pin down exactly — flags, table cells,
+# name/value pairs on separate lines, code, prose — so they are caught by context: a mixed-class token near a
+# password-class word. Same escapes as block.txt. All values are made up.
+
+# --- command lines
+docker login registry.example.com -u deploy -p Sup3rS3cretValue9
+sqlcmd -S db.internal -U sa -P Sup3rS3cretValue9 -Q "select 1"
+az login --service-principal -u 0123abcd-0123-abcd-0123-0123456789ab -p Sup3rS3cretValue9 --tenant contoso
+sshpass -p 'Sup3rS3cretValue9' ssh deploy@host
+mysqldump -u root -p'Sup3rS3cretValue9' prod > dump.sql
+redis-cli -a Sup3rS3cretValue9 ping
+psexec \\\\host -u admin -p Sup3rS3cretValue9 cmd
+tool -u admin -p Sup3rS3cretValue9
+net use \\\\server\\share Sup3rS3cretValue9 /user:CORP\\svc
+az keyvault secret set --vault-name kv --name SqlPassword --value Sup3rS3cretValue9
+dotnet user-secrets set "Smtp:Password" "Sup3rS3cretValue9"
+setx DB_PASSWORD Sup3rS3cretValue9
+echo Sup3rS3cretValue9 | docker login --password-stdin -u deploy
+
+# --- name and value in separate fields or lines
+- name: DB_PASSWORD\n  value: "Sup3rS3cretValue9"
+{"name":"SqlPassword","value":"Sup3rS3cretValue9","slotSetting":false}
+username,password\nadmin,Sup3rS3cretValue9
+
+# --- markdown and HTML
+**Password:** Sup3rS3cretValue9
+**Password**: Sup3rS3cretValue9
+__Password:__ Sup3rS3cretValue9
+*Password:* Sup3rS3cretValue9
+| user | password |\n|---|---|\n| admin | Sup3rS3cretValue9 |
+| Setting | Value |\n|---|---|\n| SmtpPassword | Sup3rS3cretValue9 |
+<tr><td>Password</td><td>Sup3rS3cretValue9</td></tr>
+<dt>Password</dt><dd>Sup3rS3cretValue9</dd>
+<input type="password" value="Sup3rS3cretValue9">
+
+# --- code
+$pw = ConvertTo-SecureString "Sup3rS3cretValue9" -AsPlainText -Force
+var c = new NetworkCredential("svc", "Sup3rS3cretValue9");
+requests.get(url, auth=("admin", "Sup3rS3cretValue9"))
+CREATE USER app IDENTIFIED BY 'Sup3rS3cretValue9';
+
+# --- prose
+pw is Sup3rS3cretValue9
+creds for staging: admin / Sup3rS3cretValue9
+login: admin / Sup3rS3cretValue9
+use Sup3rS3cretValue9 as the password for the staging db
+password for the staging db -> Sup3rS3cretValue9
+Password - Sup3rS3cretValue9
+Log in with admin:Sup3rS3cretValue9
+password = Sup3r S3cretV4lue
+password=$up3rS3cretValue9
+password: <Sup3rS3cretValue9>
+
+# --- values without a digit or symbol: cannot be told from configuration words, so flagged rather than blocked
+passphrase: correct-horse-battery
+
+# --- round 4, verbatim from the validator (non-vendor values on purpose: a vendor token would be blocked whatever surrounds it)
+- name: GITHUB_TOKEN\n  value: aB3dE5fG7hJ9kL1mN3pQ5rS7tU9vW1xY3zA5bC7d
+env:\n  - name: NPM_TOKEN\n    value: "aB3dE5fG7hJ9kL1mN3pQ5rS7tU9vW1xY3zA5bC7d"
+- name: ACCESS_TOKEN\n  value: Sup3rS3cretValue9
+variables:\n  DEPLOY_TOKEN:\n    value: aB3dE5fG7hJ9kL1mN3pQ5rS7tU9vW1xY3zA5bC7d
+{"name":"AccessToken","value":"Sup3rS3cretValue9"}
+| API_TOKEN | Sup3rS3cretValue9 |
+| DB_PWD | Sup3rS3cretValue9 |
+setx API_TOKEN Sup3rS3cretValue9
+az pipelines variable create --name DEPLOY_TOKEN --value Sup3rS3cretValue9
+docker login -u deploy -pSup3rS3cretValue9 registry.example.com
+7z a -pSup3rS3cretValue9 backup.7z ./data
+xfreerdp /u:admin /p:Sup3rS3cretValue9 /v:host.example.com
+ldapsearch -x -D cn=admin,dc=example,dc=com -w Sup3rS3cretValue9 -b dc=example,dc=com
+Basic auth for the staging site is admin and Sup3rS3cretValue9.
+the password is CorrectHorseBatteryStaple
+password = Sup3r S3cret
+password: 'My dog Rex 2019'
+
+# --- round 5, verbatim: .env NAME=value where the name is a *_KEY the scanner had no word for
+MEILI_MASTER_KEY=Ohc4c5j862d3Rc9c3f6a5b8c7d9e0f1a2b3c4d5e6f7
+FERNET_KEY=zH8kQ9mX2vB7nL5pR8tW1yC4dF6gH0jK3sM7uE2qAB=
+SESSION_KEY=aZ3kQ9mX2vB7nL5pR8tW1yC4dF6gH0jK3sM7uE2q
+APP_KEY=base64:Wq7Kp2Lm9Rt4Xz8pN6aB3kQ9mX2vB7nL5pR8tW1yC=
+KEY=aZ3kQ9mX2vB7nL5pR8tW1yC4dF6gH0jK3sM7uE2q
+MASTER_KEY=aZ3kQ9mX2vB7nL5pR8tW1yC4dF6gH0jK3sM7uE2q
+HMAC_KEY=aZ3kQ9mX2vB7nL5pR8tW1yC4dF6gH0jK3sM7uE2q
+CONSUMER_KEY=aZ3kQ9mX2vB7nL5pR8tW1yC4dF6gH0jK3sM7uE2q
+STORAGE_KEY=aZ3kQ9mX2vB7nL5pR8tW1yC4dF6gH0jK3sM7uE2q
+JWT_KEY=s3cr3t!Jwt#Key$2024
+<add key="StorageKey" value="Sup3rS3cret9"/>
+SUPABASE_ACCESS_TOKEN\nsb~p_0123456789abcdef0123456789abcdef01234567
+api_token:\n9f86d081884c7d659a2feaa0c55ad015a3bf4f1b
+
+# --- round 7 family A: a UUID or word-structured value under a credential-grade name (the named services' tokens really are UUIDs)
+HEROKU_API_KEY=3f2a1b4c-5d6e-4f70-8a9b-0c1d2e3f4a5b
+POSTMARK_SERVER_TOKEN=3f2a1b4c-5d6e-4f70-8a9b-0c1d2e3f4a5b
+CODECOV_TOKEN=3f2a1b4c-5d6e-4f70-8a9b-0c1d2e3f4a5b
+env:\n  SNYK_TOKEN: 3f2a1b4c-5d6e-4f70-8a9b-0c1d2e3f4a5b
+X-Api-Key: 3f2a1b4c-5d6e-4f70-8a9b-0c1d2e3f4a5b
+token: 3f2a1b4c-5d6e-4f70-8a9b-0c1d2e3f4a5b
+{"apiKey":"3f2a1b4c-5d6e-4f70-8a9b-0c1d2e3f4a5b"}
+API_TOKEN=staging-admin-2026
+ADMIN_TOKEN=Winter2026-Rollout
+AUTH_TOKEN=hunter2-hunter2-hunter2
+api_key = Winter2026-Summer2025
+API_KEY=aZ3k-Q9mX-2vB7-nL5p-R8tW
+license key: aZ3k-Q9mX-2vB7-nL5p-R8tW
+- name: HEROKU_API_KEY\n  value: 3f2a1b4c-5d6e-4f70-8a9b-0c1d2e3f4a5b
+The API key for the staging tenant is 3f2a1b4c-5d6e-4f70-8a9b-0c1d2e3f4a5b
+
+# --- round 7 family B: a value with a letters prefix and a separator (modern vendor tokens, "prod-…", "acme_…") near a credential word
+- name: GROQ_API_KEY\n  value: gs~k_aB3dE5fG7hJ9kL1mN3pQ5rS7tU9vW1xY3zA5bC7d
+- name: POSTHOG_PERSONAL_API_KEY\n  value: ph~x_aB3dE5fG7hJ9kL1mN3pQ5rS7tU9vW1xY3zA5bC7d
+- name: DB_PASSWORD\n  value: acme_Sup3rS3cretValue9
+docker login -u deploy -p dc~kr_aB3dE5fG7hJ9kL1mN3pQ5r
+az pipelines variable create --name DEPLOY_TOKEN --value dpl_aB3dE5fG7hJ9kL1mN3pQ5r
+sshpass -p prod_Sup3rS3cretValue9 ssh deploy@host
+The Groq key is gs~k_aB3dE5fG7hJ9kL1mN3pQ5rS7tU9vW1xY3zA5bC7d
+setx RESEND_API_KEY re_aB3dE5fG7hJ9kL1mN3pQ5r
+gh secret set SUPABASE_ACCESS_TOKEN --body sb~p_aB3dE5fG7hJ9kL1mN3pQ5rS7tU9vW1xY3zA5bC7d
+gh secret set NETLIFY_AUTH_TOKEN --body nfp_aB3dE5fG7hJ9kL1mN3pQ5rS7tU9vW1xY3zA5bC7d
+| SONAR_TOKEN | sqp_aB3dE5fG7hJ9kL1mN3pQ5rS7tU9vW1xY3zA5bC7d |
+| API_TOKEN | live_aB3dE5fG7hJ9kL1mN3pQ5r |
+| DB_PWD | db-Sup3rS3cretValue9 |
+| Password | prod-Sup3rS3cretValue9 |
+{"name":"AccessToken","value":"sk~_prod_aB3dE5fG7hJ9kL1mN3pQ5r"}
+- name: GITHUB_TOKEN\n  value: tok-aB3dE5fG7hJ9kL1mN3pQ5r
+- name: API_KEY\n  value: acme_live_aB3dE5fG7hJ9kL1mN3pQ5r
+username,password\nadmin,acme-Sup3rS3cretValue9
+CREATE USER app IDENTIFIED BY 'acme_Sup3rS3cretValue9';
+the token is pat_aB3dE5fG7hJ9kL1mN3pQ5r
+The Render API key is rnd_aB3dE5fG7hJ9kL1mN3pQ5r
+NVIDIA key for the eval box: nvapi-aB3dE5fG7hJ9kL1mN3pQ5rS7tU9vW1xY3zA5bC7d
+
+# --- round 8, verbatim: human passwords made of words and numbers joined by _ or . (Season_Year, Company.Year, First.Last1984) and "stg." prefixes
+password: Welcome.2026
+password: Winter_2026
+Server=db01;Database=orders;User Id=sa;Password=Winter_2026;
+postgres://app:Winter_2026@db01:5432/orders
+curl -u admin:Winter_2026 https://build01/api
+mysql -u root -pWelcome.2026 orders
+API_TOKEN=stg.Qw7Lp2Rm9Xt4Zk8Nb6Ja
+docker login -u deploy -p stg.Qw7Lp2Rm9Xt4Zk8Nb6Ja registry.example.com
+- name: DB_PASSWORD\n  value: acme.Sup3rS3cretValue9
+DB_PASSWORD=Acme.Prod.2026
+password = "John.Smith1984"
+"password": "Welcome_2026"
+MYSQL_ROOT_PASSWORD: Root_2026
+the admin password is Summer_2025
+| Setting | Value |\n|---|---|\n| Password | Welcome_2026 |
+sshpass -p Winter_2026 ssh deploy@host
+sqlcmd -S db01 -U sa -P Acme.Sql2026 -Q "select 1"
+net use \\server\share Welcome.2026 /user:CORP\svc
+{"name":"PAYMENTS_TOKEN","value":"stg.Qw7Lp2Rm9Xt4Zk8Nb6Ja"}
+@secure()\nparam adminPass string = 'Tr0ub4dor&3x'
+
+# --- round 9, verbatim: a word-and-number password a few words away from the password word, or in a carrier the position rules did not know
+Temporary password for the new hire: Welcome_2026 (change at first login)
+Login for the staging box: admin / Welcome.2026
+New-LocalUser deploy -Password (ConvertTo-SecureString 'Winter_2026' -AsPlainText -Force)
+CREATE USER 'app'@'%' IDENTIFIED BY 'App_User_2026';
+CREATE USER 'app'@'%' IDENTIFIED BY 'AppUser2026';
+{"name": "DB_PASSWORD", "value": "Orders.Db.2026"}
+Username\tPassword\nadmin\tAdmin_2026
+login admin / Welcome_2026
+The password for the staging admin is Winter_2026.
+| User | Password |\n|---|---|\n| admin | P@ssw0rd |
+Temporary password for the new hire: Welcome2026 (change at first login)
+Password (temporary): Welcome_2026
+ALTER USER app IDENTIFIED BY Oracle.2026;
+GRANT ALL ON shop.* TO 'app'@'%' IDENTIFIED BY 'Shop.App2026';
+CREATE USER 'app'@'%' IDENTIFIED BY 'App-User-2026';
+password for jenkins: Jenkins.2026
+password will be Summer_2025 until Friday
+New password for svc_orders -> Orders.Svc.2026
+root pw on build01 changed to Build_2026
+Temporary password for the new hire: Welcome-2026 (change at first login)
+The credentials are admin and Winter_2026.
+Login: admin / Spring.2026
+creds for staging: admin / Acme_Stage_2026
+Login for the staging box: admin / Welcome2026
+Grafana login: admin:Winter_2026
+admin/Winter_2026 is the login for grafana
+| User | Password |\n|---|---|\n| admin | Spring@2026 |
+{"name": "DB_PASSWORD", "value": "OrdersDb2026"}
+redis-cli -h cache01 -a Cache_2026 ping
+New-LocalUser deploy -Password (ConvertTo-SecureString 'Winter2026' -AsPlainText -Force)
+$cred = New-Object PSCredential('admin', (ConvertTo-SecureString 'Welcome.2026' -AsPlainText -Force))
+| Account | Secret |\n|---|---|\n| deploy | Spring@2026 |
+| Env | Credentials |\n|---|---|\n| prod | Admin_2026 |
+| user | Token |\n|---|---|\n| admin | Spring@2026 |
+| service | API Key |\n|---|---|\n| billing | Spring@2026 |
+account,secret\ndeploy,Orders.Db.2026
+host\tcreds\nsql01\tWinter_2026
+net user administrator Welcome_2026
+sqlplus system/Oracle_2026@orcl
+keytool -genkeypair -alias web -storepass Changeit2026
+the pw is Password123!
+user,password\nadmin,Secret_2026
+Temporary password for the new hire: Password123!
+The temporary password for the new hire is Password123!
+net user deploy Password123! /add
+| user | Password |\n|---|---|\n| admin | Password123! |
+docker login registry.acme.dev -u ci -p Password123!
+CREATE USER app IDENTIFIED BY 'Password123!';
+the login for grafana is admin / Password1
+staging db password is Password2026
+host,user,password\nsql01,sa,Token_2026
+admin password: Secret123 (change it on first login)
+| Konto | Kennwort |\n|---|---|\n| deploy | Winter_2026 |
+The temporary password for the new hire is MyPassword1
+the wifi password at the office is Secret@Acme1
+root login on build01: root / Passwort2026!
+mysql -u root -p Password1 orders
+the pw is password123
+user,password\nadmin,pass1234
+service account creds are svc-deploy / Key_2026!
+the admin login is admin / Login2026
+Temporary password for the new hire: TempPassword1
+docker login registry.acme.io -u deploy -p AdminPassword1
+CREATE USER app IDENTIFIED BY 'NewPassword2026';
+| user | Password |\n|---|---|\n| admin | TopSecret1 |
+user,password\nadmin,SuperSecret1
+net user deploy AdminPass1 /add
+the pw is RootPass123
+The password for the staging admin is now P4ssword1
+CREATE USER app IDENTIFIED BY 'password123';
+docker login registry.acme.io -u deploy -p WINTER2026
+Here is the password for the staging admin:\nWinter_2026
+Password for staging:\n\nP@ssw0rd
+Hi Jane, your temporary password is below.\n\nWelcome1\n\nPlease change it at first login.
+Staging passwords:\n- admin: Spring@2026\n- readonly: see vault
+the password is:\n```\nSummer2025\n```
+Login for staging:\njdoe\nWelcome.2026
+what's the staging password again?\nAcme.Prod.2026
+The new password:\nWelcome#1
+Username and password for the staging portal:\njdoe / Winter_2026
+Staging credentials:\njdoe / P@ssw0rd
+Staging password:\n`Spring@2026`
+Staging password:\nWelcome1 (temporary)
+The new password:\nWinter_2026 (change it)
+[10:01] jane: what's the staging password?\n[10:02] sam: Summer2025
+USERNAME   PASSWORD\njdoe       Welcome.2026
+Staging logins:\n- admin: Welcome#1
+The staging password was rotated.\nUse Winter_2026 from now on.
+## Staging credentials\n\njdoe / P@ssw0rd
+**Staging login:**\njdoe / Winter_2026
+**Staging login:**\nWelcome1 (temporary)
+Here's the staging login\njdoe / Summer2025
+<p>Staging login:</p>\n<p>jdoe / Winter_2026</p>
+Login: jdoe\nWinter_2026 (temporary)
+> can you send me the login for staging?\n\nsure: jdoe / Spring@2026
+new credentials for the demo tenant\n\nadmin@acme.example\nWelcome.2026 (rotate after the demo)
+jane 10:01 AM\nwhat's the staging login?\nsam 10:02 AM\njdoe and Welcome#1
+Staging passwords:\nW3lcome1\nP4ssw0rd1
+Staging passwords:\nWELCOME123\nWINTER2026
+Your login for the staging portal is ready.\njdoe / Welcome1 (you will be asked to change it)
+I created the login for you on staging\njdoe / Winter_2026 (temporary, please rotate it after the demo)
+Here are the new credentials for the demo tenant.\nadmin@acme.example / Spring@2026 - valid until Friday, then it gets rotated
+We rotated the credentials on the staging box last night\nthe new one for jdoe is P@ssw0rd and it expires on Friday
+Sam asked me for the creds for staging again\njdoe Summer2025 - works on demo too, don't share it
+We rotated the credentials on the staging box last night\nSign in as jdoe with Welcome.2026 and let me know if it fails
+docker login -u jdoe -p Release_2026 registry.acme.io
+| User | Password |\n|---|---|\n| jdoe | Team2026 |
+Staging password:\nSprint2026
+CREATE USER app IDENTIFIED BY 'Session_2026';
+net user jdoe Customer2026 /add
+login admin / Wave2026

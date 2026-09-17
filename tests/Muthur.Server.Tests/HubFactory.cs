@@ -16,6 +16,9 @@ public sealed class HubFactory : WebApplicationFactory<Program>
     public string DataDir { get; } = Path.Combine(Path.GetTempPath(), "muthur-tests", Guid.NewGuid().ToString("n"));
     public FakeTimeProvider Clock { get; } = new(new DateTimeOffset(2026, 1, 1, 12, 0, 0, TimeSpan.Zero));
 
+    /// <summary>Extra configuration for a test class, e.g. ["Muthur:RequireCrossProviderReview"] = "true".</summary>
+    public Dictionary<string, string> Settings { get; } = [];
+
     public FakePullRequestOpener PullRequests { get; } = new();
     public FakeInboundSource Source { get; } = new();
 
@@ -23,6 +26,7 @@ public sealed class HubFactory : WebApplicationFactory<Program>
     {
         builder.UseSetting("Muthur:DataDir", DataDir);
         builder.UseSetting("Muthur:BackgroundServices", "false");
+        foreach (var (key, value) in Settings) builder.UseSetting(key, value);
         builder.ConfigureServices(services =>
         {
             services.RemoveAll<TimeProvider>();

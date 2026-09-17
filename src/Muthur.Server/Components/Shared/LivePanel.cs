@@ -31,6 +31,8 @@ public abstract class LivePanel : ComponentBase, IDisposable
     protected override async Task OnInitializedAsync()
     {
         await LoadAsync();
+        // A prerender pass only needs the data; feeds and timers belong to the interactive instance that follows it.
+        if (!RendererInfo.IsInteractive) return;
         _subscription = Feed.Subscribe(events =>
         {
             if (events.Any(IsRelevant)) Interlocked.Exchange(ref _dirty, 1);

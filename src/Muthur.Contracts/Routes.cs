@@ -41,5 +41,9 @@ public static class Routes
     public const string IngestSources = Api + "/ingest/sources";
     public const string IngestPoll = Api + "/ingest/poll";
 
+    public const string Outbound = Api + "/outbound";
+    public const string OutboundTargets = Api + "/outbound-targets";
+    public static string OutboundAction(string id, string action) => $"{Outbound}/{Uri.EscapeDataString(id)}/{action}";
+
     public const string Events = Api + "/events";
 }

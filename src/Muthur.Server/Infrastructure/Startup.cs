@@ -53,6 +53,11 @@ public static class Startup
         builder.Services.AddSingleton<RequestService>();
         builder.Services.AddSingleton<HarnessService>();
         builder.Services.AddSingleton<InboundService>();
+        builder.Services.AddSingleton<OutboundService>();
+        builder.Services.AddHttpClient();
+        builder.Services.AddSingleton<IOutboundChannel, FileChannel>();
+        builder.Services.AddSingleton<IOutboundChannel, DiscordWebhookChannel>();
+        builder.Services.AddSingleton<IOutboundChannel, GitHubIssueChannel>();
         builder.Services.AddSingleton<IngestService>();
         builder.Services.AddSingleton<IInboundSource, GitHubIssuesSource>();
         builder.Services.AddSingleton<IProcessRunner, ProcessRunner>();

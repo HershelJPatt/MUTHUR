@@ -15,6 +15,7 @@ RoleCommands.AddTo(root);
 MessageCommands.AddTo(root);
 WorkerCommands.AddTo(root);
 InboundCommands.AddTo(root);
+OutboundCommands.AddTo(root);
 KitCommands.AddTo(root);
 
 return await root.Parse(args).InvokeAsync();

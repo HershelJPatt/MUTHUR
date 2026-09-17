@@ -1,0 +1,107 @@
+# Every line is an everyday message that must produce NO finding at all — not even a flag — because a flag costs the
+# founder a look. This is what agents actually send: release notes, issue comments, status updates. Same escapes as block.txt.
+
+Release 1.4 is out. Thanks to everyone who reported the login bug!
+The token fix is in https://github.com/acme/widgets/pull/431 and will ship with 2.3.1.
+We rotated the password last week; no action needed on your side.
+See https://github.com/acme/widgets/issues/42 and commit 9f86d081884c7d659a2feaa0c55ad015a3bf4f1b.
+The token bucket algorithm limits requests; the secret is good caching.
+Fixed in 2.3.1:\n- login loop\n- export timing\n\nThanks @alice and @bob for the reports.
+To configure it: export API_KEY=$YOUR_KEY and restart.
+Set password: <your password> in the settings page, then sign in again.
+In CI use token=${{ secrets.DEPLOY_TOKEN }} rather than a literal value.
+A password is required for every account, and the password was reset for inactive users.
+Artifact sha256 e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855 is published with the release.
+Request id 3f2504e0-4f89-11d3-9a0c-0305e82c3301 failed with HTTP 502; retried after 30s and succeeded.
+Maintenance tonight 22:00-23:00 UTC. The API key rotation guide is at https://example.com/docs/keys.
+Status: investigating elevated error rates on the EU cluster since 14:05 UTC. Next update in 30 minutes.
+Bug: clicking Export twice creates two files. Expected: one file. Version 2.3.0, Windows 11, Chrome 128.
+Login fails on Safari 17.4 since build 2024.06.1; tracked in PROJ-1432, fix in task/T-9-outbound-gate.
+The secret store reference is @Microsoft.KeyVault(SecretUri=https://kv.vault.azure.net/secrets/Sql/) and needs no change.
+Set tokenLifetime = TimeSpan.FromMinutes(30) and ACME_SECRET_PROVIDER=keyvault in appsettings.
+In the sample, password=settings.DB_PASSWORD reads it from the environment.
+
+# --- round 4, verbatim false positives from the validator
+az webapp config appsettings set -g rg -n app --settings "Sql__Password=@Microsoft.KeyVault(VaultName=pm-akv;SecretName=SqlPassword)"
+Environment variables: ACME_API_KEY (required), ACME_TOKEN_TTL=3600, ACME_SECRET_PROVIDER=keyvault, ACME_PASSWORD_MIN_LENGTH=12.
+Settings: TokenLifetimeMinutes = 30, PasswordMinLength = 12, SecretProvider = KeyVault.
+client = Client(api_key=os.getenv("ACME_API_KEY"), password=settings.DB_PASSWORD)
+Login failed with a password error; correlation id 3f2504e0-4f89-11d3-9a0c-0305e82c3301 is in the logs.
+Connection string template: Server=<host>;Database=<db>;User Id=<user>;Password=<password>;
+Migration 20240917_AddPasswordHashColumn applied to staging and production.
+The password is incorrect message now shows after three failed attempts; the token is refreshed automatically.
+
+# --- "key" is an everyday word
+Press the Escape key to close the dialog; the keyboard shortcut list is under Help.
+The cache key is built from the user id and the locale, e.g. profile:42:en-GB.
+Primary key changed from int to bigint in migration 20240918_WidenOrderIds.
+cacheKey=user_profile_settings and sortKey=created_at are the defaults.
+
+# --- round 6, verbatim from the validator: "key" names things that are not secrets
+DynamoDB design: partition key = tenantId, sort key = createdAt#orderId. Query by partition key with begins_with on the sort key.
+{"Bucket": "acme-reports", "Key": "reports/2026/q3/summary.pdf", "ContentType": "application/pdf"}
+The upload returns {"bucket":"acme-uploads","key":"tenants/42/invoices/INV-2026-0917.pdf","size":48211}.
+terraform { backend "s3" { bucket = "acme-tfstate"  key = "prod/network/terraform.tfstate"  region = "eu-west-1" } }
+PR #88: move Terraform state to S3. Backend block now reads bucket = "acme-tfstate", key = "staging/app/terraform.tfstate", dynamodb_table = "tf-locks".
+Idempotency-Key must be a UUID, e.g. Idempotency-Key: 3f2a1b4c-5d6e-4f70-8a9b-0c1d2e3f4a5b
+Send an Idempotency-Key header with every POST. Example: Idempotency-Key: order-2026-09-17-000123
+Feature flag key: checkout-redesign-2026, enabled for 10% of tenants since Monday.
+cache_key = "orders:by-customer:v3"
+ENCRYPTION_KEY_ROTATION_DAYS=90 / KEY_SIZE=2048 / SSH_KEY_PATH=~/.ssh/id_ed25519 / KEY_FILE=/etc/ssl/private/server.key
+Kestrel: "Certificate": { "Path": "certs/site.pem", "KeyPath": "certs/site-private.key" }
+resource "aws_instance" "web" { ami = "ami-0abc" key_name = "deploy-keypair-2026" }
+The webpack chunk map uses the content hash as key: main.8f3a2b1c9d.js, vendor.1c9d8f3a2b.js.
+Press Ctrl+Shift+P to open the command palette; the key binding for Save All is Ctrl+K S. The Esc key closes it.
+The Fn key and the Windows key are swapped on the new ThinkPad keyboards; the hotkey Win+Shift+S still works.
+foreach (var key in dict.Keys) { if (!seen.Contains(key)) result[key] = dict[key]; }
+actions/cache step: `key: ${{ runner.os }}-nuget-${{ hashFiles('**/packages.lock.json') }}` + restore-keys
+<add key="PageSize" value="50" /> <add key="ServiceBaseUrl" value="https://api.example.com" /> <add key="FeatureToggleNewCheckout" value="true"/>
+<add key="MaxUploadSizeMegabytes" value="250" /> <add key="AllowedOriginsList" value="https://app.example.com" />
+LaunchDarkly flag key: enable-new-checkout-flow; variation served: true for segment beta-testers.
+Sort key is `createdAt#orderId`, partition key is `tenantId`; GSI1 flips them.
+gpg --recv-keys 0x3AA5C34371567BD2   # public signing key of the release manager
+kid (key id) in the token header selects the JWKS entry; ours is currently sig-2026-09.
+ssh -i ~/.ssh/deploy_ed25519 deploy@build01   # IdentityFile is the deploy key, path only
+Build 2026.09.17.4 is green: 330 tests passed, coverage 81.4%, artifact muthur-win-x64.zip (23.8 MB).
+All checks passed on build01-win-x64 this morning.
+
+# --- more everyday uses of token / secret / password / credentials as words and as names of non-secret things
+LLM call settings: max_tokens=4096, temperature=0.2; usage was 1,234 prompt tokens and 567 completion tokens.
+Rate limiting uses a token bucket: refill 100 tokens/s, burst 2000, one token per request.
+JWT claims we read: iss, sub, aud, exp; the token expires after 3600s (exp=1726600000, iat=1726596400).
+Vault secret names (names only): prod/sql/connection, prod/smtp/password, prod/storage/account-key.
+Password policy: minLength=12, requireDigit=true, requireSymbol=true, maxAgeDays=90, history=5.
+AWS credentials file path is ~/.aws/credentials with profile acme-prod; GOOGLE_APPLICATION_CREDENTIALS=/etc/gcp/sa-key.json.
+Rotated the API key for tenant 42 (key id ak_2026_09); no customer action needed.
+JWKS entry: kid=2026-09-rsa-1, alg=RS256, use=sig.
+Primary key (order_id, line_no) replaces the surrogate key id BIGINT; foreign key fk_orders_customer stays.
+Token usage today: 1.2M input / 340K output, cost $18.40; the secret to lower cost is caching.
+Key Vault reference: secretName: sql-connection, keyVaultName: pm-akv, tenantId: 0123abcd-0123-abcd-0123-0123456789ab
+The password reset email now links to https://app.example.com/reset?t=<token> and expires in 30 minutes.
+OAuth: authorization code flow with PKCE; access token lifetime 60m, refresh token lifetime 14d, rotation enabled.
+Registry key HKLM\SOFTWARE\Acme\Agent\InstallPath is read at startup; the i18n key checkout.button.pay was missing in de-DE.
+Partition key: /tenantId, unique key: /email; RU cost dropped from 12.4 to 3.1 per read.
+
+# --- round 8
+arn:aws:secretsmanager:eu-west-1:123456789012:secret:prod/orders/db-AbCdEf is referenced by the task definition.
+Password hashing moved to the new column in migration 20240917_AddPasswordHashColumn; settings.Password_Policy_V2 is unchanged.
+Password reset emails were delayed by 12m on smtp02; fixed in release-2026.09 (commit 9f86d08).
+The password field now uses the PasswordPolicyV2 validator; see PR #431, verified on build01-win-x64 and Chrome128.
+Password hashing: PBKDF2 with 600000 iterations of HMAC-SHA256, 16-byte salt; bcrypt cost 12 for legacy accounts.
+Change password flow: POST /api/v2/account/password returns 204; the e2e test is tests/e2e/password_change_v2.spec.ts.
+| Setting | Value |\n|---|---|\n| PasswordMinLength | 12 |\n| PasswordHistory | 5 |\n| LockoutMinutes | 15 |
+
+# --- round 9: lines that mention passwords or logins next to product names, error codes and standards
+Password hashing moved from PBKDF2 to Argon2id with memory=64MB, iterations=3, parallelism=4.
+Sign-in fails with AADSTS50126 (invalid username or password) and sometimes AADSTS700016 on the token request.
+Login loop after KB5031356 on Server2019 and Windows11; Chrome128 and Safari17 are affected, Firefox130 is not.
+The password policy follows NIST SP800-63B; failed logins return SQLSTATE 28P01 from Postgres16.
+Usage: deploy-tool login [-u, --user <name>] [-p, --password <value>] [--token <value>]
+| Secret | Rotation | Owner |\n|---|---|---|\n| smtp-relay | 90 days | platform team |
+| Token type | Lifetime |\n|---|---|\n| refresh | 14 days |\n| access | 60 minutes |
+key,value\nregion,westeurope\nreplicas,3
+pip install passlib==1.7.4 argon2-cffi==23.1.0 pyjwt==2.8.0
+requirements.txt now pins passlib==1.7.4 and bcrypt==4.1.2
+Rename DB_PASSWORD to DB_PWD in the deploy password docs; DB_PASSWORD_2 stays for the replica.
+The password migration 20240917_AddPasswordHashColumn adds PasswordHashV2 and drops LegacyTokenV1.
+Password reset uses ResetPasswordTokenV2 and the login page calls /api/v2/password.
