@@ -1,0 +1,17 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <AssemblyName>muthur</AssemblyName>
+    <RootNamespace>Muthur.Cli</RootNamespace>
+    <PublishAot>true</PublishAot>
+    <StackTraceSupport>false</StackTraceSupport>
+    <OptimizationPreference>Size</OptimizationPreference>
+  </PropertyGroup>
+  <ItemGroup>
+    <ProjectReference Include="..\Muthur.Contracts\Muthur.Contracts.csproj" />
+    <ProjectReference Include="..\Muthur.Launch\Muthur.Launch.csproj" />
+  </ItemGroup>
+  <ItemGroup>
+    <PackageReference Include="System.CommandLine" />
+  </ItemGroup>
+</Project>

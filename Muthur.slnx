@@ -1,0 +1,14 @@
+<Solution>
+  <Folder Name="/src/">
+    <Project Path="src/Muthur.Cli/Muthur.Cli.csproj" />
+    <Project Path="src/Muthur.Contracts/Muthur.Contracts.csproj" />
+    <Project Path="src/Muthur.Core/Muthur.Core.csproj" />
+    <Project Path="src/Muthur.Data/Muthur.Data.csproj" />
+    <Project Path="src/Muthur.Launch/Muthur.Launch.csproj" />
+    <Project Path="src/Muthur.Server/Muthur.Server.csproj" />
+  </Folder>
+  <Folder Name="/tests/">
+    <Project Path="tests/Muthur.Core.Tests/Muthur.Core.Tests.csproj" />
+    <Project Path="tests/Muthur.Server.Tests/Muthur.Server.Tests.csproj" />
+  </Folder>
+</Solution>

@@ -1,0 +1,5 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <ItemGroup>
+    <ProjectReference Include="..\Muthur.Contracts\Muthur.Contracts.csproj" />
+  </ItemGroup>
+</Project>
