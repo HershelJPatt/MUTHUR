@@ -15,11 +15,14 @@ public interface IOutboundChannel
     /// <summary>Channel-specific limits (length, format), checked when drafting so problems surface before review.</summary>
     void Validate(string address, string body);
 
-    /// <summary>Throws <see cref="InvalidOperationException"/> with the reason when delivery fails.</summary>
+    /// <summary>Throws <see cref="ChannelException"/> with a reason that is safe to show to agents when delivery fails.</summary>
     Task SendAsync(string address, string body, CancellationToken ct = default);
 }
 
-public sealed partial class OutboundService(Ledger ledger, IEnumerable<IOutboundChannel> channels, MuthurOptions options)
+/// <summary>A delivery failure whose message contains nothing about the target's address (which is often a credential).</summary>
+public sealed class ChannelException(string safeReason) : Exception(safeReason);
+
+public sealed partial class OutboundService(Ledger ledger, IEnumerable<IOutboundChannel> channels, MuthurOptions options, ILogger<OutboundService> logger)
 {
     /// <summary>Agents who volunteered to review outbound traffic are told when something is waiting, if the role exists.</summary>
     public const string ReviewerRole = "outbound-reviewer";
@@ -167,11 +170,13 @@ public sealed partial class OutboundService(Ledger ledger, IEnumerable<IOutbound
             {
                 await FindChannel(message.Target!.Channel).SendAsync(message.Target.Address, message.Body, ct);
             }
-            catch (Exception ex) when (ex is not OperationCanceledException)
+            catch (Exception ex) when (ex is not OperationCanceledException || !ct.IsCancellationRequested)
             {
-                // Whatever went wrong out there, the message is "failed", never stuck in "approved" — and the reason
-                // is recorded without the target's address, which is often a credential and is never shown to agents.
-                error = Redact(ex.Message, message.Target!.Address);
+                // Whatever went wrong out there, the message is "failed", never stuck in "approved". Agents get a fixed
+                // reason by kind of failure; an OS or HTTP error message can name the address or part of it, so the
+                // detail goes to the hub log only.
+                error = SafeReason(ex);
+                logger.LogWarning(ex, "Delivery of {Outbound} to target {Target} failed.", Id(message), message.Target!.Key);
             }
 
             var dto = await ledger.MutateAsync(caller, async m =>
@@ -184,7 +189,7 @@ public sealed partial class OutboundService(Ledger ledger, IEnumerable<IOutbound
                     new { outbound = Id(current), target = current.Target!.Key, sha256 = current.BodySha256, error });
                 return ToDto(current);
             }, ct);
-            return error is null ? dto : throw Fail.Conflict("delivery_failed", $"{Id(message)} could not be delivered: {error}. It stays approved-but-failed; retry with: muthur out retry {Id(message)}");
+            return error is null ? dto : throw Fail.Conflict("delivery_failed", $"{Id(message)} could not be delivered: {error}. It is marked failed; retry with: muthur out retry {Id(message)}");
         }
         finally
         {
@@ -242,22 +247,17 @@ public sealed partial class OutboundService(Ledger ledger, IEnumerable<IOutbound
 
     private static string Id(OutboundMessage message) => "O-" + message.Id;
 
-    /// <summary>Removes the target's address (and, for a path, its directory and file name) from an error message.</summary>
-    private static string Redact(string text, string address)
+    private static string SafeReason(Exception ex) => ex switch
     {
-        var secrets = new List<string> { address };
-        if (Path.IsPathRooted(address))
-        {
-            secrets.Add(Path.GetFullPath(address));
-            if (Path.GetDirectoryName(address) is { Length: > 3 } directory) secrets.Add(directory);
-        }
-        foreach (var secret in secrets.Where(s => s.Length > 0).OrderByDescending(s => s.Length))
-        {
-            text = text.Replace(secret, "<target address>", StringComparison.OrdinalIgnoreCase);
-            text = text.Replace(secret.Replace('\\', '/'), "<target address>", StringComparison.OrdinalIgnoreCase);
-        }
-        return text;
-    }
+        ChannelException => ex.Message,
+        UnauthorizedAccessException => "access to the target was denied",
+        DirectoryNotFoundException or FileNotFoundException or PathTooLongException => "the target path is unavailable",
+        IOException => "the target could not be written",
+        HttpRequestException { StatusCode: { } status } => $"the target answered HTTP {(int)status}",
+        HttpRequestException => "the target could not be reached",
+        TaskCanceledException or TimeoutException or OperationCanceledException => "the target timed out",
+        _ => "delivery failed unexpectedly (details are in the hub log)",
+    };
 
     private static TargetDto ToDto(OutboundTarget t) => new(t.Key, t.Channel, t.RequiresFounderApproval, t.CreatedAt);
 

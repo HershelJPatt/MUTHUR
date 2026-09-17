@@ -85,7 +85,7 @@ public sealed class OutboundTests : IDisposable
         await DefineTargetAsync();
         var agent = await _hub.RegisterAgentAsync("leaky");
 
-        var response = await DraftAsync(agent, "Deploy failed. Use this to debug: ghp_abcdefghijklmnopqrstuvwxyzABCDEF0123");
+        var response = await DraftAsync(agent, "Deploy failed. Use this to debug: gh" + "p_abcdefghijklmnopqrstuvwxyzABCDEF0123");
 
         Assert.Equal("secret_detected", (await response.ReadErrorAsync()).Code);
         await using var db = await _hub.Services.GetRequiredService<IDbContextFactory<MuthurDb>>().CreateDbContextAsync();
@@ -144,6 +144,32 @@ public sealed class OutboundTests : IDisposable
         // The founder fixes the target; the same reviewed bytes go out without a new review.
         await DefineTargetAsync("broken");
         Assert.Equal("sent", (await ReadAsync(await author.PostAsync(Routes.OutboundAction(draft.Id, "retry"), null))).Status);
+    }
+
+    [Fact]
+    public async Task A_failure_whose_os_message_names_part_of_the_address_reveals_nothing()
+    {
+        // The address runs THROUGH an existing file, so the OS error names a parent of the address rather than the address itself.
+        var parent = Path.Combine(_hub.DataDir, "hidden-parent-91c2");
+        Directory.CreateDirectory(parent);
+        await File.WriteAllTextAsync(Path.Combine(parent, "plain.txt"), "i am a file");
+        var address = Path.Combine(parent, "plain.txt", "sub", "f.txt");
+        (await _hub.Founder().PutAsJsonAsync(Routes.OutboundTargets, new DefineTargetRequest("through-a-file", "file", address))).EnsureSuccessStatusCode();
+        var author = await _hub.RegisterAgentAsync("author");
+        var peer = await _hub.RegisterAgentAsync("peer");
+        var draft = await ReadAsync(await DraftAsync(author, "hello io path", target: "through-a-file"));
+        await ReadAsync(await ReviewAsync(peer, draft));
+
+        var send = await author.PostAsync(Routes.OutboundAction(draft.Id, "send"), null);
+
+        Assert.Equal("delivery_failed", (await send.ReadErrorAsync()).Code);
+        var everythingAnAgentCanRead =
+            await send.Content.ReadAsStringAsync() +
+            await (await author.GetAsync($"{Routes.Outbound}/{draft.Id}")).Content.ReadAsStringAsync() +
+            await (await author.GetAsync($"{Routes.Outbound}?status=all")).Content.ReadAsStringAsync() +
+            await (await author.GetAsync($"{Routes.Events}?limit=500")).Content.ReadAsStringAsync();
+        Assert.DoesNotContain("hidden-parent-91c2", everythingAnAgentCanRead);
+        Assert.DoesNotContain("plain.txt", everythingAnAgentCanRead);
     }
 
     [Fact]

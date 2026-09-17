@@ -44,7 +44,7 @@ public sealed class DiscordWebhookChannel(IHttpClientFactory http) : IOutboundCh
         // allowed_mentions: an agent's text must never be able to ping @everyone.
         using var response = await client.PostAsJsonAsync(address, new { content = body, allowed_mentions = new { parse = Array.Empty<string>() } }, ct);
         if (!response.IsSuccessStatusCode)
-            throw new InvalidOperationException($"Discord answered {(int)response.StatusCode}.");
+            throw new ChannelException($"Discord answered HTTP {(int)response.StatusCode}");
     }
 }
 
@@ -60,7 +60,7 @@ public sealed class GitHubIssueChannel(IProcessRunner processes) : IOutboundChan
         var (repo, number) = Parse(address);
         var result = await processes.RunAsync("gh", ["api", "--method", "POST", $"repos/{repo}/issues/{number}/comments", "--input", "-"],
             Environment.CurrentDirectory, stdin: System.Text.Json.JsonSerializer.Serialize(new { body }), timeout: TimeSpan.FromSeconds(60), ct: ct);
-        if (!result.Ok) throw new InvalidOperationException($"gh api failed: {result.Message}");
+        if (!result.Ok) throw new ChannelException($"the GitHub CLI failed (exit {result.ExitCode}); is it logged in? gh auth status");
     }
 
     private static (string Repo, int Number) Parse(string address)
