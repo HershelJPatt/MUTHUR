@@ -16,9 +16,24 @@ public static class SystemCommands
         up.SetAction(UpAsync);
         root.Subcommands.Add(up);
 
-        var down = new Command("down", "Stop the hub server.");
+        var any = new Option<bool>("--any") { Description = "Stop the hub at MUTHUR_URL even if it belongs to a different installation." };
+        var down = new Command("down", "Stop the hub server that belongs to this installation.") { any };
         down.SetAction(async (parse, ct) =>
         {
+            // A build under test run without its scratch environment would otherwise take the live hub down.
+            var running = await new HubClient(null, TimeSpan.FromSeconds(3)).GetAsync(Routes.Status, ct);
+            if (running.ExitCode == ExitCodes.NotRunning) return ExitCodes.Ok;
+            if (running.IsSuccess && !parse.GetValue(any) && ServerProcess.Locate() is { } mine)
+            {
+                var theirs = System.Text.Json.JsonSerializer.Deserialize(running.Body, MuthurJsonContext.Default.StatusResponse)?.ServerDirectory ?? "";
+                var ours = Path.GetDirectoryName(Path.GetFullPath(mine))!;
+                // A hub too old to say where it runs from is, by definition, not the one bundled with this CLI.
+                if (theirs.Length == 0 || !string.Equals(Path.GetFullPath(theirs), ours, StringComparison.OrdinalIgnoreCase))
+                    return Output.Error("not_my_hub",
+                        $"The hub at {MuthurEnvironment.Url} runs from {(theirs.Length > 0 ? theirs : "another (older) installation")}, not from this installation ({ours}). " +
+                        "Use that installation's CLI, fix MUTHUR_URL/MUTHUR_HOME, or pass --any.", ExitCodes.RuleViolation);
+            }
+
             var result = await new HubClient(Globals.ReadFounderToken()).PostAsync(Routes.Shutdown, ct);
             if (result.ExitCode == ExitCodes.NotRunning) return ExitCodes.Ok;
             if (!result.IsSuccess) return Output.Emit(parse, result);

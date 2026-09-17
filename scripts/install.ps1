@@ -14,6 +14,8 @@ param(
 )
 $ErrorActionPreference = 'Stop'
 $repo = Split-Path $PSScriptRoot -Parent
+# Normalise so the running-hub check below cannot be bypassed by a differently spelled path (.\, relative, trailing slash).
+$Destination = $ExecutionContext.SessionState.Path.GetUnresolvedProviderPathFromPSPath($Destination).TrimEnd([char[]]'\/')
 
 $existing = Join-Path $Destination 'muthur.exe'
 $serverDir = Join-Path $Destination 'server'
