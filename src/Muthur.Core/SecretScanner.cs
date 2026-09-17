@@ -142,7 +142,7 @@ public static partial class SecretScanner
         {
             if (!lines[i].Contains(delimiter)) continue;
             for (var h = Math.Max(0, i - 2); h < i; h++)
-                if (lines[h].Contains(delimiter) && StrongPasswordWord().IsMatch(lines[h])) return true;
+                if (lines[h].Contains(delimiter) && CredentialColumnWord().IsMatch(lines[h])) return true;
         }
         return false;
     }
@@ -313,11 +313,15 @@ public static partial class SecretScanner
     private static partial Regex CodeReference();
 
     // No word boundaries around token/pwd/secret/…: GITHUB_TOKEN, DB_PWD and AccessToken are names too ("_" and letters are word characters).
-    [GeneratedRegex(@"pass(?:word|wd|phrase|code|wort)|(?<![A-Za-z])pass(?![A-Za-z])|_pass(?![A-Za-z])|(?-i:(?<=[a-z])Pass(?![a-z]))|pwd|(?<![A-Za-z])pw(?![A-Za-z])|secret|credential|creds|(?<![A-Za-z])log\s?in(?![A-Za-z])|token|api[ _\-]?key|(?<![A-Za-z])key(?![A-Za-z])|_key(?![A-Za-z])|(?-i:(?<=[a-z])Key(?![a-z]))|(?<![A-Za-z])auth(?![A-Za-z])|(?<![A-Za-z0-9])-[pPaw](?![A-Za-z0-9])|--password|/p:|IDENTIFIED\s+BY|SecureString|NetworkCredential|/user:", RegexOptions.IgnoreCase)]
+    [GeneratedRegex(@"pass(?:word|wd|phrase|code|wort)|(?<![A-Za-z])pass(?![A-Za-z])|_pass(?![A-Za-z])|(?-i:(?<=[a-z])Pass(?![a-z]))|pwd|(?<![A-Za-z])pw(?![A-Za-z])|secret|credential|creds|(?<![A-Za-z])log\s?in(?![A-Za-z])|token|api[ _\-]?key|(?<![A-Za-z])key(?![A-Za-z])|_key(?![A-Za-z])|(?-i:(?<=[a-z])Key(?![a-z]))|(?<![A-Za-z])auth(?![A-Za-z])|(?<![A-Za-z0-9])-[pPaw](?![A-Za-z0-9])|--password|/p:|IDENTIFIED\s+BY|SecureString|NetworkCredential|/user:|(?:store|key)pass|(?<![A-Za-z])net\s+user\s|(?<![A-Za-z])sqlplus\s", RegexOptions.IgnoreCase)]
     private static partial Regex PasswordClassWord();
 
     [GeneratedRegex(@"pass(?:word|wd|phrase|code|wort)|(?<![A-Za-z])pass(?![A-Za-z])|_pass(?![A-Za-z])|(?-i:(?<=[a-z])Pass(?![a-z]))|pwd|(?<![A-Za-z])pw(?![A-Za-z])", RegexOptions.IgnoreCase)]
     private static partial Regex StrongPasswordWord();
+
+    // What a table or CSV calls its credential column. A bare "key" is left out: "key,value" heads far more tables than secrets do.
+    [GeneratedRegex(@"pass(?:word|wd|phrase|code|wort)|(?<![A-Za-z])pass(?![A-Za-z])|pwd|(?<![A-Za-z])pw(?![A-Za-z])|secret|credential|creds|token|api[ _\-]?key", RegexOptions.IgnoreCase)]
+    private static partial Regex CredentialColumnWord();
 
     // the assignment's name says the value is a location, a label or a number, not the secret: SSH_KEY_PATH=, key_name =, KEY_SIZE=, "KeyPath":
     [GeneratedRegex(@"(?:path|file|name|names|id|ids|size|length|bits|days|hours|minutes|seconds|ttl|url|uri|dir|directory|type|count|version|algorithm|alg|format|prefix|suffix|header|field|column|index|vault|store|provider|rotation[A-Za-z_]*)[""']?[ \t]*(?:=>|:=|[:=：]|\t)[ \t]*[""']?$", RegexOptions.IgnoreCase)]
@@ -355,7 +359,7 @@ public static partial class SecretScanner
     private static partial Regex CodeOrStandard();
 
     // a line that is about a password, a login or credentials
-    [GeneratedRegex(@"pass(?:word|wd|phrase|code|wort)|(?<![A-Za-z])pass(?![A-Za-z])|_pass(?![A-Za-z])|(?-i:(?<=[a-z])Pass(?![a-z]))|pwd|(?<![A-Za-z])pw(?![A-Za-z])|(?<![A-Za-z])log\s?in(?![A-Za-z])|(?<![A-Za-z])creds(?![A-Za-z])|credentials?|IDENTIFIED\s+BY|SecureString|PSCredential|NetworkCredential|(?<![A-Za-z0-9])-[pPwa](?![A-Za-z0-9])", RegexOptions.IgnoreCase)]
+    [GeneratedRegex(@"pass(?:word|wd|phrase|code|wort)|(?<![A-Za-z])pass(?![A-Za-z])|_pass(?![A-Za-z])|(?-i:(?<=[a-z])Pass(?![a-z]))|pwd|(?<![A-Za-z])pw(?![A-Za-z])|(?<![A-Za-z])log\s?in(?![A-Za-z])|(?<![A-Za-z])creds(?![A-Za-z])|credentials?|IDENTIFIED\s+BY|SecureString|PSCredential|NetworkCredential|(?:store|key)pass|(?<![A-Za-z])net\s+user\s|(?<![A-Za-z])sqlplus\s|(?<![A-Za-z0-9])-[pPwa](?![A-Za-z0-9])", RegexOptions.IgnoreCase)]
     private static partial Regex CredentialLine();
 
     // products, platforms, protocols and algorithms that carry a version or a number in their name

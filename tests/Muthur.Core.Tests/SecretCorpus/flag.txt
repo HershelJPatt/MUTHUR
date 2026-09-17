@@ -184,3 +184,12 @@ admin/Winter_2026 is the login for grafana
 redis-cli -h cache01 -a Cache_2026 ping
 New-LocalUser deploy -Password (ConvertTo-SecureString 'Winter2026' -AsPlainText -Force)
 $cred = New-Object PSCredential('admin', (ConvertTo-SecureString 'Welcome.2026' -AsPlainText -Force))
+| Account | Secret |\n|---|---|\n| deploy | Spring@2026 |
+| Env | Credentials |\n|---|---|\n| prod | Admin_2026 |
+| user | Token |\n|---|---|\n| admin | Spring@2026 |
+| service | API Key |\n|---|---|\n| billing | Spring@2026 |
+account,secret\ndeploy,Orders.Db.2026
+host\tcreds\nsql01\tWinter_2026
+net user administrator Welcome_2026
+sqlplus system/Oracle_2026@orcl
+keytool -genkeypair -alias web -storepass Changeit2026

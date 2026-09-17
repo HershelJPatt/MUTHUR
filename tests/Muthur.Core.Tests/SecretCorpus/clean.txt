@@ -97,3 +97,6 @@ Sign-in fails with AADSTS50126 (invalid username or password) and sometimes AADS
 Login loop after KB5031356 on Server2019 and Windows11; Chrome128 and Safari17 are affected, Firefox130 is not.
 The password policy follows NIST SP800-63B; failed logins return SQLSTATE 28P01 from Postgres16.
 Usage: deploy-tool login [-u, --user <name>] [-p, --password <value>] [--token <value>]
+| Secret | Rotation | Owner |\n|---|---|---|\n| smtp-relay | 90 days | platform team |
+| Token type | Lifetime |\n|---|---|\n| refresh | 14 days |\n| access | 60 minutes |
+key,value\nregion,westeurope\nreplicas,3
