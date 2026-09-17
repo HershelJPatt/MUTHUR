@@ -39,6 +39,7 @@ public sealed partial class OutboundService(Ledger ledger, IEnumerable<IOutbound
         if (!KeyPattern().IsMatch(key)) throw Fail.Rule("invalid_key", "Target keys are 1-48 chars of a-z, 0-9 or '-'.");
         var channel = FindChannel(request.Channel);
         if (string.IsNullOrWhiteSpace(request.Address)) throw Fail.Rule("address_required", "A target needs an address.");
+        channel.Validate(request.Address.Trim(), "address check"); // a malformed address should fail now, not when an agent first drafts to it
 
         return ledger.MutateAsync(caller, async m =>
         {
