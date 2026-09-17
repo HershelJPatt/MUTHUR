@@ -23,6 +23,8 @@ public sealed class InboundService(Ledger ledger)
         var externalId = (request.ExternalId ?? "").Trim();
         if (source.Length == 0 || externalId.Length == 0 || string.IsNullOrWhiteSpace(request.Title))
             throw Fail.Rule("inbound_incomplete", "An inbound item needs a source, an external id and a title.");
+        if (request.Url is { Length: > 0 } url && !(Uri.TryCreate(url, UriKind.Absolute, out var parsed) && parsed.Scheme is "http" or "https"))
+            throw Fail.Rule("invalid_url", "An inbound item's URL must be http or https; it is rendered as a link on the dashboard.");
 
         return ledger.MutateAsync(caller, async m =>
         {
@@ -130,7 +132,9 @@ public sealed class InboundService(Ledger ledger)
             RequireHandler(item, caller);
             if (item.Status is InboundStatus.Converted or InboundStatus.Dismissed)
                 throw Fail.Conflict("inbound_closed", $"{Wire.InboundId(item.Id)} is already {item.Status.ToString().ToLowerInvariant()}.");
-            var project = item.Project ?? await ProjectService.FindAsync(m.Db, null, ct);
+            var project = request.Project is { Length: > 0 } || item.Project is null
+                ? await ProjectService.FindAsync(m.Db, request.Project, ct)
+                : item.Project;
 
             var task = new WorkTask
             {

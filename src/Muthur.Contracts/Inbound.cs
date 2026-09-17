@@ -10,7 +10,8 @@ public sealed record AddInboundRequest(
     string? Author = null,
     string? Project = null);
 
-public sealed record ConvertInboundRequest(int Priority = 0, string? Title = null);
+/// <summary><see cref="Project"/> is needed only when the item has none and the hub has several.</summary>
+public sealed record ConvertInboundRequest(int Priority = 0, string? Title = null, string? Project = null);
 
 public sealed record DismissInboundRequest(string Reason);
 

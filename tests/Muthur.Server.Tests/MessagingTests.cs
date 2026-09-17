@@ -164,6 +164,29 @@ public sealed class MessagingTests : IDisposable
     }
 
     [Fact]
+    public async Task A_founder_who_withdraws_a_question_tells_the_asker()
+    {
+        await _hub.AddProjectAsync();
+        var agent = await _hub.RegisterAgentAsync("waiting");
+        var task = await agent.AddTaskAsync("Needs a decision");
+        (await agent.ClaimAsync(task.Id)).EnsureSuccessStatusCode();
+        var asked = await agent.PostAsJsonAsync(Routes.Requests, new AskRequest("Ship on Friday?", task.Id));
+        var request = (await asked.Content.ReadFromJsonAsync(MuthurJsonContext.Default.FounderRequestDto))!;
+
+        (await _hub.Founder().PostAsync(Routes.RequestAction(request.Id, "cancel"), null)).EnsureSuccessStatusCode();
+
+        var told = Assert.Single((await InboxAsync(agent)).Messages);
+        Assert.Contains("withdrawn", told.Body);
+        Assert.Equal(TaskState.InProgress, (await agent.GetTaskAsync(task.Id)).Task.State);
+
+        // Withdrawing your own question is not news to you.
+        var second = await agent.PostAsJsonAsync(Routes.Requests, new AskRequest("Never mind?", task.Id));
+        var own = (await second.Content.ReadFromJsonAsync(MuthurJsonContext.Default.FounderRequestDto))!;
+        (await agent.PostAsync(Routes.RequestAction(own.Id, "cancel"), null)).EnsureSuccessStatusCode();
+        Assert.Empty((await InboxAsync(agent)).Messages);
+    }
+
+    [Fact]
     public async Task Asking_about_a_task_that_is_not_in_progress_says_so()
     {
         await _hub.AddProjectAsync();
