@@ -11,6 +11,9 @@ await app.InitializeMuthurAsync();
 app.UseMiddleware<ErrorMiddleware>();
 app.UseMiddleware<CallerMiddleware>();
 app.MapSystemEndpoints();
+app.MapAgentEndpoints();
+app.MapProjectEndpoints();
+app.MapTaskEndpoints();
 
 await app.RunAsync();
 

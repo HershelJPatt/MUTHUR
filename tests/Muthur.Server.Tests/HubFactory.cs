@@ -18,6 +18,7 @@ public sealed class HubFactory : WebApplicationFactory<Program>
     protected override void ConfigureWebHost(IWebHostBuilder builder)
     {
         builder.UseSetting("Muthur:DataDir", DataDir);
+        builder.UseSetting("Muthur:BackgroundServices", "false");
         builder.ConfigureServices(services =>
         {
             services.RemoveAll<TimeProvider>();

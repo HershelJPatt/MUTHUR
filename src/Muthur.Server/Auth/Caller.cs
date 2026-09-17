@@ -2,18 +2,32 @@ using System.Security.Cryptography;
 using System.Text;
 using Muthur.Core;
 using Muthur.Server.Infrastructure;
+using Muthur.Server.Services;
 
 namespace Muthur.Server.Auth;
 
 public enum CallerKind { Anonymous, Agent, Founder }
 
 /// <summary>Who is making this request. Resolved once per request from the bearer token.</summary>
-public sealed record Caller(CallerKind Kind, Guid? AgentId = null, string Name = "anonymous")
+public sealed record Caller(CallerKind Kind, Guid? AgentId = null, string Name = "anonymous", string? Model = null)
 {
     public static readonly Caller Anonymous = new(CallerKind.Anonymous);
     public static readonly Caller Founder = new(CallerKind.Founder, null, "founder");
 
+    /// <summary>Used for work the hub does on its own behalf (lease sweeps, ingest).</summary>
+    public static readonly Caller System = new(CallerKind.Founder, null, "muthur");
+
     public bool IsFounder => Kind == CallerKind.Founder;
+    public bool IsAgent => Kind == CallerKind.Agent;
+
+    public Guid RequireAgent() =>
+        AgentId ?? throw Fail.Unauthorized("This command must be run as a registered agent (set MUTHUR_AGENT or pass --as-agent).");
+
+    public void RequireIdentified()
+    {
+        if (Kind == CallerKind.Anonymous)
+            throw Fail.Unauthorized("This command needs an identity: run as a registered agent or pass --founder.");
+    }
 }
 
 public static class Tokens
@@ -52,10 +66,17 @@ public static class CallerHttpExtensions
 
 public sealed class CallerMiddleware(RequestDelegate next)
 {
-    public async Task InvokeAsync(HttpContext http, InstanceInfo instance)
+    public async Task InvokeAsync(HttpContext http, InstanceInfo instance, AgentService agents)
     {
-        if (http.BearerToken() is { } token && Tokens.SecureEquals(token, instance.FounderToken))
-            http.SetCaller(Caller.Founder);
+        if (http.BearerToken() is { Length: > 0 } token)
+        {
+            if (Tokens.SecureEquals(token, instance.FounderToken))
+                http.SetCaller(Caller.Founder);
+            else if (await agents.AuthenticateAsync(token, http.RequestAborted) is { } caller)
+                http.SetCaller(caller);
+            else
+                throw Fail.Unauthorized("The bearer token is not recognized. Re-register the agent or check MUTHUR_AGENT.");
+        }
         await next(http);
     }
 }

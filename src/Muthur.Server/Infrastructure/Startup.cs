@@ -1,9 +1,11 @@
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Options;
 using Muthur.Contracts;
+using Muthur.Core;
 using Muthur.Core.Entities;
 using Muthur.Data;
 using Muthur.Server.Auth;
+using Muthur.Server.Services;
 
 namespace Muthur.Server.Infrastructure;
 
@@ -34,8 +36,26 @@ public static class Startup
             }
         });
 
+        builder.Services.AddSingleton(new LeasePolicy(
+            TimeSpan.FromMinutes(options.ClaimLeaseMinutes),
+            TimeSpan.FromMinutes(options.RoleLeaseMinutes),
+            TimeSpan.FromSeconds(options.AgentStaleSeconds)));
+        builder.Services.AddSingleton<EventFeed>();
+        builder.Services.AddSingleton<Ledger>();
+        builder.Services.AddSingleton<AgentService>();
+        builder.Services.AddSingleton<ProjectService>();
+        builder.Services.AddSingleton<TaskService>();
+        builder.Services.AddSingleton<EventService>();
+        if (options.BackgroundServices)
+            builder.Services.AddHostedService<LeaseSweeper>();
+
         builder.Services.ConfigureHttpJsonOptions(json =>
-            json.SerializerOptions.TypeInfoResolverChain.Insert(0, MuthurJsonContext.Default));
+        {
+            json.SerializerOptions.TypeInfoResolverChain.Insert(0, MuthurJsonContext.Default);
+            // Agents pay per token: no nulls, and no escape sequences for plain punctuation.
+            json.SerializerOptions.DefaultIgnoreCondition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull;
+            json.SerializerOptions.Encoder = System.Text.Encodings.Web.JavaScriptEncoder.UnsafeRelaxedJsonEscaping;
+        });
 
         return options;
     }

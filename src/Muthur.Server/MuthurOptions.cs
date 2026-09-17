@@ -11,6 +11,12 @@ public sealed class MuthurOptions
     /// <summary>Optional override; by default SQLite lives at {DataDir}/muthur.db.</summary>
     public string? ConnectionString { get; set; }
 
+    public int ClaimLeaseMinutes { get; set; } = 30;
+    public int RoleLeaseMinutes { get; set; } = 30;
+    public int AgentStaleSeconds { get; set; } = 180;
+    /// <summary>Off in tests so sweeps and ingest only run when a test asks for them.</summary>
+    public bool BackgroundServices { get; set; } = true;
+
     public string ResolveConnectionString() =>
         ConnectionString ?? $"Data Source={Path.Combine(DataDir, MuthurEnvironment.DatabaseFile)}";
 }

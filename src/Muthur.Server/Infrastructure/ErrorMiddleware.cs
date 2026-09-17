@@ -1,10 +1,12 @@
+using Microsoft.AspNetCore.Http.Json;
+using Microsoft.Extensions.Options;
 using Muthur.Contracts;
 using Muthur.Core;
 
 namespace Muthur.Server.Infrastructure;
 
 /// <summary>Turns <see cref="MuthurException"/> into a status code + <see cref="ErrorResponse"/> body.</summary>
-public sealed class ErrorMiddleware(RequestDelegate next, ILogger<ErrorMiddleware> logger)
+public sealed class ErrorMiddleware(RequestDelegate next, ILogger<ErrorMiddleware> logger, IOptions<JsonOptions> json)
 {
     public async Task InvokeAsync(HttpContext http)
     {
@@ -22,18 +24,18 @@ public sealed class ErrorMiddleware(RequestDelegate next, ILogger<ErrorMiddlewar
                 ErrorKind.Unauthorized => StatusCodes.Status401Unauthorized,
                 _ => StatusCodes.Status400BadRequest,
             };
-            await http.Response.WriteAsJsonAsync(new ErrorResponse(ex.Code, ex.Message), MuthurJsonContext.Default.ErrorResponse);
+            await http.Response.WriteAsJsonAsync(new ErrorResponse(ex.Code, ex.Message), json.Value.SerializerOptions);
         }
         catch (BadHttpRequestException ex) when (!http.Response.HasStarted)
         {
             http.Response.StatusCode = StatusCodes.Status400BadRequest;
-            await http.Response.WriteAsJsonAsync(new ErrorResponse("bad_request", ex.Message), MuthurJsonContext.Default.ErrorResponse);
+            await http.Response.WriteAsJsonAsync(new ErrorResponse("bad_request", ex.Message), json.Value.SerializerOptions);
         }
         catch (Exception ex) when (!http.Response.HasStarted && !http.RequestAborted.IsCancellationRequested)
         {
             logger.LogError(ex, "Unhandled error on {Method} {Path}", http.Request.Method, http.Request.Path);
             http.Response.StatusCode = StatusCodes.Status500InternalServerError;
-            await http.Response.WriteAsJsonAsync(new ErrorResponse("internal_error", ex.Message), MuthurJsonContext.Default.ErrorResponse);
+            await http.Response.WriteAsJsonAsync(new ErrorResponse("internal_error", ex.Message), json.Value.SerializerOptions);
         }
     }
 }
