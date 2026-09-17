@@ -7,10 +7,11 @@ using Muthur.Server.Auth;
 namespace Muthur.Server.Services;
 
 /// <summary>The internal bus. The inbox is every agent's single wake-up channel: peers, the founder and the hub itself all write to it.</summary>
-public sealed class MessageService(Ledger ledger, EventFeed feed, TimeProvider clock)
+public sealed class MessageService(Ledger ledger, EventFeed feed, TimeProvider clock, IHostApplicationLifetime lifetime)
 {
     public const string SentEvent = "message.sent";
     public const int MaxWaitSeconds = 900;
+    public const int MaxBodyLength = 64 * 1024;
     private const int PreviewLength = 140;
 
     public Task<MessageDto> SendAsync(Caller caller, SendMessageRequest request, CancellationToken ct = default)
@@ -18,6 +19,8 @@ public sealed class MessageService(Ledger ledger, EventFeed feed, TimeProvider c
         caller.RequireIdentified();
         if (string.IsNullOrWhiteSpace(request.Body))
             throw Fail.Rule("body_required", "A message needs a body.");
+        if (request.Body.Length > MaxBodyLength)
+            throw Fail.Rule("body_too_long", $"A message body is limited to {MaxBodyLength / 1024} KB. Put large content in a file and reference it.");
 
         return ledger.MutateAsync(caller, async m =>
         {
@@ -81,8 +84,16 @@ public sealed class MessageService(Ledger ledger, EventFeed feed, TimeProvider c
             var remaining = deadline - clock.GetUtcNow();
             if (remaining <= TimeSpan.Zero) return new InboxDto([], TimedOut: waitSeconds > 0);
 
-            await Task.WhenAny(arrived.Task, Task.Delay(remaining, clock, ct));
+            // Every idle agent sits in this wait. It must end the moment the hub stops, or shutdown stalls
+            // for the host's whole grace period with the database and binaries still locked.
+            using var stopping = CancellationTokenSource.CreateLinkedTokenSource(ct, lifetime.ApplicationStopping);
+            try
+            {
+                await Task.WhenAny(arrived.Task, Task.Delay(remaining, clock, stopping.Token));
+            }
+            catch (OperationCanceledException) { }
             ct.ThrowIfCancellationRequested();
+            if (lifetime.ApplicationStopping.IsCancellationRequested) return new InboxDto([], TimedOut: true);
         }
     }
 

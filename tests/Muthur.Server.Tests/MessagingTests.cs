@@ -1,5 +1,7 @@
 using System.Net;
 using System.Net.Http.Json;
+using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Hosting;
 using Muthur.Contracts;
 
 namespace Muthur.Server.Tests;
@@ -119,6 +121,58 @@ public sealed class MessagingTests : IDisposable
 
         var again = await _hub.Founder().PostAsJsonAsync(Routes.RequestAction(request.Id, "answer"), new AnswerRequest("changed my mind"));
         Assert.Equal(HttpStatusCode.Conflict, again.StatusCode);
+    }
+
+    [Fact]
+    public async Task A_waiting_inbox_ends_the_moment_the_hub_stops()
+    {
+        var waiter = await _hub.RegisterAgentAsync("idle");
+        var waiting = InboxAsync(waiter, wait: 900);
+        await Task.Delay(150);
+        Assert.False(waiting.IsCompleted);
+
+        _hub.Services.GetRequiredService<IHostApplicationLifetime>().StopApplication();
+
+        var inbox = await waiting.WaitAsync(TimeSpan.FromSeconds(5));
+        Assert.True(inbox.TimedOut);
+        Assert.Empty(inbox.Messages);
+    }
+
+    [Fact]
+    public async Task Oversized_bodies_are_refused()
+    {
+        var agent = await _hub.RegisterAgentAsync("verbose");
+        await _hub.RegisterAgentAsync("reader");
+        var response = await SendAsync(agent, "reader", new string('x', 64 * 1024 + 1));
+        Assert.Equal(HttpStatusCode.UnprocessableEntity, response.StatusCode);
+        Assert.Equal("body_too_long", (await response.ReadErrorAsync()).Code);
+    }
+
+    [Fact]
+    public async Task Releasing_a_blocked_task_withdraws_its_open_questions()
+    {
+        await _hub.AddProjectAsync();
+        var agent = await _hub.RegisterAgentAsync("quitter");
+        var task = await agent.AddTaskAsync("Abandoned question");
+        (await agent.ClaimAsync(task.Id)).EnsureSuccessStatusCode();
+        (await agent.PostAsJsonAsync(Routes.Requests, new AskRequest("Which way?", task.Id))).EnsureSuccessStatusCode();
+
+        (await agent.PostActionAsync(task.Id, "release", new ReleaseTaskRequest("giving up"))).EnsureSuccessStatusCode();
+
+        var open = await _hub.CreateClient().GetFromJsonAsync(Routes.Requests, MuthurJsonContext.Default.IReadOnlyListFounderRequestDto);
+        Assert.Empty(open!);
+    }
+
+    [Fact]
+    public async Task Asking_about_a_task_that_is_not_in_progress_says_so()
+    {
+        await _hub.AddProjectAsync();
+        var agent = await _hub.RegisterAgentAsync("early");
+        var task = await agent.AddTaskAsync("Still in the backlog");
+
+        var response = await agent.PostAsJsonAsync(Routes.Requests, new AskRequest("May I?", task.Id));
+
+        Assert.Equal("not_in_progress", (await response.ReadErrorAsync()).Code);
     }
 
     [Fact]

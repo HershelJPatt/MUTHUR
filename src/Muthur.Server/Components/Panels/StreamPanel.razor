@@ -1,8 +1,63 @@
+@inherits LivePanel
+@inject EventService Events
+@inject TimeProvider Clock
+
 <section class="panel">
-    <div class="panel-head"><span class="panel-title">Stream</span></div>
-    <div class="panel-body"><div class="empty">pending</div></div>
+    <div class="panel-head">
+        <span class="panel-title">Stream</span>
+        <span class="panel-sub">@_filtered.Count events</span>
+        <div class="filters">
+            <button class="filter @Active(Filter.All)" @onclick="() => Select(Filter.All)">All</button>
+            <button class="filter @Active(Filter.Tasks)" @onclick="() => Select(Filter.Tasks)">Tasks</button>
+            <button class="filter @Active(Filter.Agents)" @onclick="() => Select(Filter.Agents)">Agents</button>
+        </div>
+    </div>
+    <div class="panel-body">
+        <Virtualize Items="_filtered" Context="e" ItemSize="44" OverscanCount="10">
+            <EventRow Event="e" Now="_now" />
+        </Virtualize>
+        @if (_filtered.Count == 0)
+        {
+            <div class="empty">nothing yet</div>
+        }
+    </div>
 </section>
 
 @code {
+    private enum Filter { All, Tasks, Agents }
+
+    private IReadOnlyList<EventDto> _all = [];
+    private List<EventDto> _filtered = [];
+    private Filter _filter = Filter.All;
+    private DateTimeOffset _now;
+
+    /// <summary>Fewer events in the dashboard's narrow column than on the stream page.</summary>
     [Parameter] public bool Compact { get; set; }
+
+    // Ages tick even when nothing is written.
+    protected override TimeSpan? ClockInterval => TimeSpan.FromSeconds(30);
+
+    protected override async Task LoadAsync()
+    {
+        _now = Clock.GetUtcNow();
+        _all = (await Events.ListAsync(null, null, Compact ? 80 : 500)).Reverse().ToList();
+        Apply();
+    }
+
+    private void Select(Filter filter)
+    {
+        _filter = filter;
+        Apply();
+    }
+
+    private void Apply() => _filtered = _all.Where(Matches).ToList();
+
+    private bool Matches(EventDto e) => _filter switch
+    {
+        Filter.Tasks => e.Type.StartsWith("task.", StringComparison.Ordinal),
+        Filter.Agents => e.Type.StartsWith("agent.", StringComparison.Ordinal) || e.Type.StartsWith("role.", StringComparison.Ordinal),
+        _ => true,
+    };
+
+    private string Active(Filter filter) => _filter == filter ? "active" : "";
 }

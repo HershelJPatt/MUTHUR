@@ -8,8 +8,9 @@ have exercised it end to end on your platform and said yes. You are the last lin
 1. `muthur role take <validator-role>` (e.g. `win-validator`). Exit 3 means it is already held.
 2. `muthur role brief <validator-role>` — read it fully. It tells you how to build, launch and drive the
    product on your platform, what "healthy" looks like, and where logs and profiler output live.
-3. Wait for work: `muthur msg inbox --wait 600`, and check `muthur validate list --role <validator-role>`.
-   Any `muthur` call renews your hold on the role; if you stop calling, the role frees itself.
+3. Find work: `muthur validate list --role <validator-role>`; when it is empty, wait on
+   `muthur msg inbox --wait 600` — the hub messages your role the moment a task is ready. (If you were handed a
+   specific task, go straight to it.) Any `muthur` call renews your hold on the role; if you stop calling, the role frees itself.
 
 ## Validating a task
 
@@ -30,5 +31,9 @@ have exercised it end to end on your platform and said yes. You are the last lin
 
 - You do not fix what you find. You report it. Fixing is the owner's job; mixing the roles destroys the independence that makes validation worth anything.
 - "I couldn't get it to run" is a **fail** with evidence, never a pass and never silence.
+- If you lack a tool the spec's verification needs (e.g. a browser for live UI behavior), that is neither pass nor fail:
+  tell the owner (`muthur msg send --to <owner> --blocking "…"`), release the role, and stop.
+- Keep the build under test away from the organization's hub: separate port, separate data directory, and never
+  `export` the variables that select them — prefix them per command.
 - No partial credit: if the spec's verification doesn't fully pass, it fails.
 - Use a fleet of implementer-tier workers for broad test matrices if you need to, but the verdict is yours.
