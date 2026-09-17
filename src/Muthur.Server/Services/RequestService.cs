@@ -21,16 +21,14 @@ public sealed class RequestService(Ledger ledger, LeasePolicy leases)
             if (request.Task is { Length: > 0 } id)
             {
                 task = await TaskService.LoadAsync(m.Db, id, ct);
+                if (task.State is not (TaskState.InProgress or TaskState.Blocked))
+                    throw Fail.Rule("not_in_progress", $"{Wire.TaskId(task.Id)} is '{task.State.ToWire()}'; only in-progress work can be blocked on a founder.");
                 TaskService.RequireOwnerOrFounder(task, caller);
                 if (task.State == TaskState.InProgress)
                 {
                     task.State = TaskState.Blocked;
                     task.UpdatedAt = m.Now;
                     m.Record("task.blocked", task.Id, new { reason = "waiting on a founder" });
-                }
-                else if (task.State != TaskState.Blocked)
-                {
-                    throw Fail.Rule("not_in_progress", $"{Wire.TaskId(task.Id)} is '{task.State.ToWire()}'; only in-progress work can be blocked on a founder.");
                 }
             }
 
@@ -99,6 +97,18 @@ public sealed class RequestService(Ledger ledger, LeasePolicy leases)
             var titles = await db.Tasks.Where(t => taskIds.Contains(t.Id)).ToDictionaryAsync(t => t.Id, t => t.Title, ct);
             return rows.OrderBy(r => r.Id).Select(r => ToDto(r, r.TaskId is { } t ? titles.GetValueOrDefault(t) : null)).ToList();
         }, ct);
+
+    /// <summary>A task that leaves its owner's hands takes its open questions with it; nobody is waiting for the answer any more.</summary>
+    public static async Task WithdrawForTaskAsync(Mutation m, int taskId, string reason, CancellationToken ct)
+    {
+        var open = await m.Db.FounderRequests.Where(r => r.TaskId == taskId && r.Status == RequestStatus.Open).ToListAsync(ct);
+        foreach (var request in open)
+        {
+            request.Status = RequestStatus.Cancelled;
+            request.AnsweredAt = m.Now;
+            m.Record("request.cancelled", taskId, new { request = request.Id, reason });
+        }
+    }
 
     /// <summary>The task resumes once no open request remains on it. Returns the task title for the DTO.</summary>
     private async Task<string?> UnblockAsync(Mutation m, FounderRequest closed, CancellationToken ct)
