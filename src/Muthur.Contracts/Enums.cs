@@ -21,6 +21,13 @@ public enum LandMode
     [JsonStringEnumMemberName("pr")] Pr,
 }
 
+public enum Verdict
+{
+    [JsonStringEnumMemberName("pending")] Pending,
+    [JsonStringEnumMemberName("yes")] Yes,
+    [JsonStringEnumMemberName("no")] No,
+}
+
 public enum AgentStatus
 {
     [JsonStringEnumMemberName("live")] Live,
@@ -62,6 +69,8 @@ public static class Wire
         state = default;
         return false;
     }
+
+    public static string ToWire(this Verdict v) => v switch { Verdict.Yes => "yes", Verdict.No => "no", _ => "pending" };
 
     public static string ToWire(this LandMode m) => m == LandMode.Pr ? "pr" : "merge";
 

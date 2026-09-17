@@ -14,6 +14,9 @@ public sealed class MuthurDb(DbContextOptions<MuthurDb> options) : DbContext(opt
     public DbSet<Agent> Agents => Set<Agent>();
     public DbSet<WorkTask> Tasks => Set<WorkTask>();
     public DbSet<LedgerEvent> Events => Set<LedgerEvent>();
+    public DbSet<Role> Roles => Set<Role>();
+    public DbSet<RoleHold> RoleHolds => Set<RoleHold>();
+    public DbSet<TaskValidation> TaskValidations => Set<TaskValidation>();
 
     protected override void ConfigureConventions(ModelConfigurationBuilder configurationBuilder)
     {
@@ -60,6 +63,28 @@ public sealed class MuthurDb(DbContextOptions<MuthurDb> options) : DbContext(opt
             e.ToTable("events");
             e.HasKey(x => x.Seq);
             e.HasIndex(x => x.TaskId);
+        });
+
+        modelBuilder.Entity<Role>(e =>
+        {
+            e.ToTable("roles");
+            e.HasKey(x => x.Key);
+        });
+
+        modelBuilder.Entity<RoleHold>(e =>
+        {
+            e.ToTable("role_holds");
+            e.HasKey(x => x.RoleKey); // one holder per role
+            e.HasOne<Role>().WithOne().HasForeignKey<RoleHold>(x => x.RoleKey).OnDelete(DeleteBehavior.Cascade);
+            e.HasOne(x => x.Agent).WithMany().HasForeignKey(x => x.AgentId).OnDelete(DeleteBehavior.Cascade);
+        });
+
+        modelBuilder.Entity<TaskValidation>(e =>
+        {
+            e.ToTable("task_validations");
+            e.HasIndex(x => new { x.TaskId, x.ValidatorKey }).IsUnique();
+            e.HasOne<WorkTask>().WithMany().HasForeignKey(x => x.TaskId).OnDelete(DeleteBehavior.Cascade);
+            e.HasOne(x => x.Agent).WithMany().HasForeignKey(x => x.AgentId).OnDelete(DeleteBehavior.SetNull);
         });
 
         ApplySnakeCaseColumns(modelBuilder);
