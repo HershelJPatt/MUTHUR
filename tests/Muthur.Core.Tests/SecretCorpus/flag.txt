@@ -151,3 +151,36 @@ sqlcmd -S db01 -U sa -P Acme.Sql2026 -Q "select 1"
 net use \\server\share Welcome.2026 /user:CORP\svc
 {"name":"PAYMENTS_TOKEN","value":"stg.Qw7Lp2Rm9Xt4Zk8Nb6Ja"}
 @secure()\nparam adminPass string = 'Tr0ub4dor&3x'
+
+# --- round 9, verbatim: a word-and-number password a few words away from the password word, or in a carrier the position rules did not know
+Temporary password for the new hire: Welcome_2026 (change at first login)
+Login for the staging box: admin / Welcome.2026
+New-LocalUser deploy -Password (ConvertTo-SecureString 'Winter_2026' -AsPlainText -Force)
+CREATE USER 'app'@'%' IDENTIFIED BY 'App_User_2026';
+CREATE USER 'app'@'%' IDENTIFIED BY 'AppUser2026';
+{"name": "DB_PASSWORD", "value": "Orders.Db.2026"}
+Username\tPassword\nadmin\tAdmin_2026
+login admin / Welcome_2026
+The password for the staging admin is Winter_2026.
+| User | Password |\n|---|---|\n| admin | P@ssw0rd |
+Temporary password for the new hire: Welcome2026 (change at first login)
+Password (temporary): Welcome_2026
+ALTER USER app IDENTIFIED BY Oracle.2026;
+GRANT ALL ON shop.* TO 'app'@'%' IDENTIFIED BY 'Shop.App2026';
+CREATE USER 'app'@'%' IDENTIFIED BY 'App-User-2026';
+password for jenkins: Jenkins.2026
+password will be Summer_2025 until Friday
+New password for svc_orders -> Orders.Svc.2026
+root pw on build01 changed to Build_2026
+Temporary password for the new hire: Welcome-2026 (change at first login)
+The credentials are admin and Winter_2026.
+Login: admin / Spring.2026
+creds for staging: admin / Acme_Stage_2026
+Login for the staging box: admin / Welcome2026
+Grafana login: admin:Winter_2026
+admin/Winter_2026 is the login for grafana
+| User | Password |\n|---|---|\n| admin | Spring@2026 |
+{"name": "DB_PASSWORD", "value": "OrdersDb2026"}
+redis-cli -h cache01 -a Cache_2026 ping
+New-LocalUser deploy -Password (ConvertTo-SecureString 'Winter2026' -AsPlainText -Force)
+$cred = New-Object PSCredential('admin', (ConvertTo-SecureString 'Welcome.2026' -AsPlainText -Force))

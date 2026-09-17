@@ -125,10 +125,20 @@ public static partial class SecretScanner
         return findings;
     }
 
+    /// <summary>
+    /// Mixed case with a digit, or a symbol among letters and digits — how people build passwords — and not the name of a
+    /// product, platform or algorithm with its version (Chrome128, Server2019, Argon2id).
+    /// </summary>
+    private static bool IsPasswordShaped(string value)
+    {
+        if (!value.Any(char.IsAsciiDigit) || !value.Any(char.IsAsciiLetter) || KnownTechnicalName().IsMatch(value)) return false;
+        return CapitalizedWord().IsMatch(value) || value.Any(ch => "@!#$%&*".Contains(ch));
+    }
+
     /// <summary>A table or CSV row whose header (one or two lines up, same delimiter) names a password column.</summary>
     private static bool UnderPasswordHeader(string[] lines, int i)
     {
-        foreach (var delimiter in (char[])['|', ','])
+        foreach (var delimiter in (char[])['|', ',', '\t'])
         {
             if (!lines[i].Contains(delimiter)) continue;
             for (var h = Math.Max(0, i - 2); h < i; h++)
@@ -244,6 +254,11 @@ public static partial class SecretScanner
                 value = CleanValue(value);
                 // a token that carries the password word itself is a name (20240917_AddPasswordHashColumn, DB_PASSWORD), never the value
                 if (PasswordClassWord().IsMatch(value)) continue;
+                // product and algorithm names with a version (Chrome128, Argon2id), codes and standards (AADSTS50126, KB5031356,
+                // SP800-63B, 28P01) and branch-like paths (task/T-9-outbound-gate) are what password-related messages are full of
+                if (KnownTechnicalName().IsMatch(value) || CodeOrStandard().IsMatch(value)) continue;
+                if (value.Contains('/') && value[..value.IndexOf('/')].All(char.IsAsciiLetterLower) && !glued.Success
+                    && !value.Split('/').Skip(1).Any(IsPasswordShaped)) continue; // but not admin/Winter_2026
                 // A credential position is where a password would be written — not merely a line that mentions passwords
                 // ("Password reset was delayed on smtp02; fixed in release-2026.09" has none):
                 //   right after a password flag (-p X, -P X, -w X, --password X, glued -pX) or on a `net use … /user:` line;
@@ -255,7 +270,12 @@ public static partial class SecretScanner
                     || AfterPasswordWord().IsMatch(preceding)
                     || (i > 0 && DanglingSecretName().IsMatch(lines[i - 1]))
                     || (i > 0 && ValueLine().IsMatch(lines[i]) && StrongPasswordWord().IsMatch(lines[i - 1]))
-                    || UnderPasswordHeader(lines, i);
+                    || UnderPasswordHeader(lines, i)
+                    // …and anywhere on a line that is about a password, a login or credentials, when the token itself is shaped
+                    // like a human password (Welcome_2026, AppUser2026, P@ssw0rd) rather than like infrastructure (smtp02,
+                    // release-2026.09, PBKDF2, Chrome128): "Temporary password for the new hire: Welcome_2026",
+                    // "IDENTIFIED BY 'App_User_2026'", "login admin / Welcome.2026", {"name":"DB_PASSWORD","value":"OrdersDb2026"}
+                    || (CredentialLine().IsMatch(lines[i]) && IsPasswordShaped(value));
                 if (value.Length < minimum || value.StartsWith('@') || value.Contains('(') || IsNotACredential(value, credentialPosition)) continue;
                 if (credentialPosition && value.Any(char.IsAsciiDigit) && value.Any(char.IsAsciiLetter) && !PlainlyNotASecret().IsMatch(value) && !FileName().IsMatch(value))
                 {
@@ -323,11 +343,27 @@ public static partial class SecretScanner
 
     // In a credential position only these are plainly not the password: hex ids, UUIDs, versions, numbers, e-mail and host
     // references, mentions, issue refs and command-line flags. Words with numbers are exactly what passwords look like.
-    [GeneratedRegex(@"^(?:[0-9a-fA-F]{7,}|0x[0-9a-fA-F]+|[0-9a-fA-F]{8}-[0-9a-fA-F\-]{27}|v?\d+(?:\.\d+)+[\w.\-]*|\d[\d.,:/\-]*[A-Za-z%]{0,4}|[^@\s]+@[A-Za-z0-9.\-]+|@[\w\-]+|#\d+|[A-Z]{2,}-\d+|--?[A-Za-z][\w\-]*(?:=.*)?)$")]
+    [GeneratedRegex(@"^(?:[0-9a-fA-F]{7,}|0x[0-9a-fA-F]+|[0-9a-fA-F]{8}-[0-9a-fA-F\-]{27}|v?\d+(?:\.\d+)+[\w.\-]*|\d[\d.,:/\-]*[A-Za-z%]{0,4}|[^@\s]+@[A-Za-z0-9\-]+(?:\.[A-Za-z0-9\-]+)*\.[A-Za-z]{2,}|@[\w\-]+|#\d+|[A-Z][A-Z0-9]*(?:[-_][A-Z0-9]+)*|--?[A-Za-z][\w\-]*(?:=.*)?)$")]
     private static partial Regex PlainlyNotASecret();
 
-    // the text before a token ends with a password flag: -p X, -P X, -w X, --password X
-    [GeneratedRegex(@"(?<![A-Za-z0-9])(?:-[pPw]|--pass(?:word)?)[ \t]+[""']?$")]
+    // a capitalized word inside the value: Winter, App, Orders — not the lone capital of T-9 or x64
+    [GeneratedRegex(@"[A-Z][a-z]{2,}")]
+    private static partial Regex CapitalizedWord();
+
+    // AADSTS50126 · KB5031356 · SP800-63B · HMAC-SHA256 · 28P01 · 64MB
+    [GeneratedRegex(@"^(?:[A-Z][A-Z0-9]*(?:[-_][A-Z0-9]+)*|\d+[A-Z]+\d*)$")]
+    private static partial Regex CodeOrStandard();
+
+    // a line that is about a password, a login or credentials
+    [GeneratedRegex(@"pass(?:word|wd|phrase|code|wort)|(?<![A-Za-z])pass(?![A-Za-z])|_pass(?![A-Za-z])|(?-i:(?<=[a-z])Pass(?![a-z]))|pwd|(?<![A-Za-z])pw(?![A-Za-z])|(?<![A-Za-z])log\s?in(?![A-Za-z])|(?<![A-Za-z])creds(?![A-Za-z])|credentials?|IDENTIFIED\s+BY|SecureString|PSCredential|NetworkCredential|(?<![A-Za-z0-9])-[pPwa](?![A-Za-z0-9])", RegexOptions.IgnoreCase)]
+    private static partial Regex CredentialLine();
+
+    // products, platforms, protocols and algorithms that carry a version or a number in their name
+    [GeneratedRegex(@"^(?:Chrome|Chromium|Firefox|Safari|Edge|Opera|Windows|Win|Server|iOS|iPadOS|macOS|Android|Ubuntu|Debian|Fedora|CentOS|RHEL|Node|Deno|Python|Java|Kotlin|Swift|Go|Rust|PHP|Ruby|Rails|Django|Angular|React|Vue|Net|DotNet|NetCore|Core|Postgres|PostgreSQL|MySQL|MariaDB|Mongo|MongoDB|Redis|Oracle|SqlServer|Office|Dynamics|Exchange|SharePoint|Argon|Bcrypt|Scrypt|Sha|Md|Base|Utf|OAuth|OpenID|Http|Tls|Ssl|Ipv|Log4j|Log4Net|Ed|Rs|Hs|Es|Ps|Aes|Des|Rsa|Ecdsa|Curve|X|P|Gpt|Claude|Llama)[\-_]?\d[\w.\-]*$", RegexOptions.IgnoreCase)]
+    private static partial Regex KnownTechnicalName();
+
+    // the text before a token ends with a password flag: -p X, -P X, -w X, -a X, --password X
+    [GeneratedRegex(@"(?<![A-Za-z0-9])(?:-[pPwa]|--pass(?:word)?)[ \t]+[""']?$")]
     private static partial Regex AfterPasswordFlag();
 
     // the text before a token ends with the password word and nothing but separators: password: X · **Password:** X · password is X · Password - X

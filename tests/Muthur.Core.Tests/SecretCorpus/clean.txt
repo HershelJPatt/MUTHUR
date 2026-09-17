@@ -90,3 +90,10 @@ The password field now uses the PasswordPolicyV2 validator; see PR #431, verifie
 Password hashing: PBKDF2 with 600000 iterations of HMAC-SHA256, 16-byte salt; bcrypt cost 12 for legacy accounts.
 Change password flow: POST /api/v2/account/password returns 204; the e2e test is tests/e2e/password_change_v2.spec.ts.
 | Setting | Value |\n|---|---|\n| PasswordMinLength | 12 |\n| PasswordHistory | 5 |\n| LockoutMinutes | 15 |
+
+# --- round 9: lines that mention passwords or logins next to product names, error codes and standards
+Password hashing moved from PBKDF2 to Argon2id with memory=64MB, iterations=3, parallelism=4.
+Sign-in fails with AADSTS50126 (invalid username or password) and sometimes AADSTS700016 on the token request.
+Login loop after KB5031356 on Server2019 and Windows11; Chrome128 and Safari17 are affected, Firefox130 is not.
+The password policy follows NIST SP800-63B; failed logins return SQLSTATE 28P01 from Postgres16.
+Usage: deploy-tool login [-u, --user <name>] [-p, --password <value>] [--token <value>]
