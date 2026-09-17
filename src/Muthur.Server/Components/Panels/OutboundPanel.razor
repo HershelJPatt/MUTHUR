@@ -1,0 +1,130 @@
+@inherits LivePanel
+@inject OutboundService Outbound
+@inject TimeProvider Clock
+
+<section class="panel">
+    <div class="panel-head">
+        <span class="panel-title">Outbound</span>
+        <span class="panel-sub">@_awaiting need you · @_open in the gate</span>
+    </div>
+    <div class="panel-body">
+        @if (_messages.Count == 0)
+        {
+            <div class="empty">nothing wants to leave</div>
+        }
+        @foreach (var message in _messages)
+        {
+            <div class="request">
+                <div class="request-head">
+                    <span class="tag tag-open">@message.Id</span>
+                    <span class="pill @StatusClass(message.Status)">@(message.Status.Replace('_', ' '))</span>
+                    <span class="event-detail">→ @message.Target · @message.Channel</span>
+                    @if (message.Task is { } task)
+                    {
+                        <a class="event-task" href="/tasks/@task">@task</a>
+                    }
+                    <span class="card-age">@Format.Age(message.CreatedAt, _now)</span>
+                </div>
+                <div class="code">@message.Body</div>
+                <div class="request-head">
+                    <span class="event-actor">@message.Author</span><span class="agent-model">@message.AuthorModel</span>
+                    @if (message.Reviewer is { } reviewer)
+                    {
+                        <span class="event-detail">reviewed by @reviewer (@message.ReviewerModel)</span>
+                    }
+                    @if (!string.IsNullOrWhiteSpace(message.ReviewNote))
+                    {
+                        <span class="event-detail">@message.ReviewNote</span>
+                    }
+                    <span class="event-detail">sha256 @Short(message.Sha256)</span>
+                </div>
+                @if (message.Error is { } error)
+                {
+                    <div class="error-text">@error</div>
+                }
+                @if (message.Status == AwaitingFounder)
+                {
+                    <textarea class="textarea" placeholder="reason, if you decline…"
+                              @bind="_notes[message.Id]" @bind:event="oninput"></textarea>
+                    <div class="btn-row">
+                        <button class="btn btn-go" @onclick="() => DecideAsync(message.Id, true)">Approve</button>
+                        <button class="btn btn-stop" @onclick="() => DecideAsync(message.Id, false)">Decline</button>
+                    </div>
+                    @if (_errors.TryGetValue(message.Id, out var actionError))
+                    {
+                        <div class="error-text">@actionError</div>
+                    }
+                }
+            </div>
+        }
+    </div>
+</section>
+
+@code {
+    private const string AwaitingFounder = "awaiting_founder";
+
+    /// <summary>Still in the gate: nothing has left and nothing has been turned down for good.</summary>
+    private static readonly string[] InTheGate = ["pending_review", AwaitingFounder, "approved", "failed"];
+
+    private const int Settled = 10;
+
+    // Kept per message id, so a reload triggered by someone else's event does not wipe what the founder is typing.
+    private readonly Dictionary<string, string> _notes = [];
+    private readonly Dictionary<string, string> _errors = [];
+    private List<OutboundDto> _messages = [];
+    private int _awaiting;
+    private int _open;
+    private DateTimeOffset _now;
+
+    // Messages age in place, so refresh occasionally even when nothing is written.
+    protected override TimeSpan? ClockInterval => TimeSpan.FromSeconds(30);
+
+    protected override bool IsRelevant(Muthur.Core.Entities.LedgerEvent e) =>
+        e.Type.StartsWith("outbound.", StringComparison.Ordinal);
+
+    protected override async Task LoadAsync()
+    {
+        _now = Clock.GetUtcNow();
+        // The service answers oldest first; the gate is read newest first, with only a tail of what is already decided.
+        var newestFirst = (await Outbound.ListAsync("all", 200)).Reverse().ToList();
+        _messages =
+        [
+            .. newestFirst.Where(m => InTheGate.Contains(m.Status)),
+            .. newestFirst.Where(m => !InTheGate.Contains(m.Status)).Take(Settled),
+        ];
+        _awaiting = _messages.Count(m => m.Status == AwaitingFounder);
+        _open = _messages.Count(m => InTheGate.Contains(m.Status));
+
+        var undecided = _messages.Where(m => m.Status == AwaitingFounder).Select(m => m.Id).ToHashSet(StringComparer.Ordinal);
+        foreach (var decided in _notes.Keys.Where(id => !undecided.Contains(id)).ToList()) _notes.Remove(decided);
+        foreach (var decided in _errors.Keys.Where(id => !undecided.Contains(id)).ToList()) _errors.Remove(decided);
+        foreach (var id in undecided) _notes.TryAdd(id, "");
+    }
+
+    private static string Short(string sha256) => sha256.Length > 12 ? sha256[..12] : sha256;
+
+    private static string StatusClass(string status) => status switch
+    {
+        "pending_review" or AwaitingFounder => "pill-blocked",
+        "approved" or "sent" => "pill-verdict-yes",
+        _ => "pill-verdict-no",
+    };
+
+    private async Task DecideAsync(string id, bool approve)
+    {
+        string? note = null;
+        if (!approve && _notes.TryGetValue(id, out var typed) && !string.IsNullOrWhiteSpace(typed)) note = typed;
+        try
+        {
+            await Outbound.FounderApproveAsync(Caller.Founder, id, approve, note);
+        }
+        catch (Muthur.Core.MuthurException ex)
+        {
+            _errors[id] = ex.Message;
+            return;
+        }
+        _notes.Remove(id);
+        _errors.Remove(id);
+        await ReloadNowAsync();
+    }
+}

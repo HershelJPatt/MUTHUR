@@ -1,6 +1,7 @@
 @inherits LivePanel
 @inject RequestService Requests
 @inject MessageService Messages
+@inject OutboundService Outbound
 
 @if (_count > 0)
 {
@@ -11,11 +12,13 @@
     private int _count;
 
     protected override bool IsRelevant(Muthur.Core.Entities.LedgerEvent e) =>
-        e.Type.StartsWith("request.", StringComparison.Ordinal) || e.Type.StartsWith("message.", StringComparison.Ordinal);
+        e.Type.StartsWith("request.", StringComparison.Ordinal) || e.Type.StartsWith("message.", StringComparison.Ordinal)
+        || e.Type.StartsWith("outbound.", StringComparison.Ordinal);
 
     protected override async Task LoadAsync()
     {
         var open = await Requests.ListAsync(openOnly: true);
-        _count = open.Count + await Messages.UnreadForFounderAsync();
+        var awaiting = await Outbound.ListAsync("awaiting_founder", 500);
+        _count = open.Count + awaiting.Count + await Messages.UnreadForFounderAsync();
     }
 }

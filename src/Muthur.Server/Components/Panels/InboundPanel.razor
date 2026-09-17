@@ -1,0 +1,67 @@
+@inherits LivePanel
+@inject InboundService Inbound
+@inject TimeProvider Clock
+
+<section class="panel">
+    <div class="panel-head">
+        <span class="panel-title">Inbound</span>
+        <span class="panel-sub">@_unclaimed unclaimed · @_claimed claimed</span>
+    </div>
+    <div class="panel-body">
+        @if (_items.Count == 0)
+        {
+            <div class="empty">nothing waiting</div>
+        }
+        @foreach (var item in _items)
+        {
+            <div class="agent">
+                <div class="agent-head">
+                    <span class="@(item.Status == "claimed" ? "tag tag-held" : "tag tag-open")">@item.Id</span>
+                    <span class="agent-model">@item.Source</span>
+                    <span class="agent-age">@Format.Age(item.ReceivedAt, _now)</span>
+                </div>
+                <div class="agent-summary">@item.Title</div>
+                @if (item.Author is not null || item.ClaimedBy is not null || item.Url is not null)
+                {
+                    <div class="agent-meta">
+                        @if (item.Author is { } author)
+                        {
+                            <span class="pill">@author</span>
+                        }
+                        @if (item.ClaimedBy is { } claimedBy)
+                        {
+                            <span class="pill pill-owner"><span class="dot"></span>@claimedBy</span>
+                        }
+                        @if (item.Url is { } url)
+                        {
+                            <a class="pill pill-role" href="@url" target="_blank" rel="noopener">source</a>
+                        }
+                    </div>
+                }
+            </div>
+        }
+    </div>
+</section>
+
+@code {
+    private List<InboundDto> _items = [];
+    private int _unclaimed;
+    private int _claimed;
+    private DateTimeOffset _now;
+
+    // Items age in place, so refresh occasionally even when nothing arrives.
+    protected override TimeSpan? ClockInterval => TimeSpan.FromSeconds(30);
+
+    protected override bool IsRelevant(Muthur.Core.Entities.LedgerEvent e) =>
+        e.Type.StartsWith("inbound.", StringComparison.Ordinal);
+
+    protected override async Task LoadAsync()
+    {
+        _now = Clock.GetUtcNow();
+        var all = await Inbound.ListAsync("all", null, 300);
+        // The service answers oldest first; what just arrived matters most.
+        _items = all.Where(i => i.Status is "unclaimed" or "claimed").Reverse().ToList();
+        _unclaimed = _items.Count(i => i.Status == "unclaimed");
+        _claimed = _items.Count - _unclaimed;
+    }
+}
