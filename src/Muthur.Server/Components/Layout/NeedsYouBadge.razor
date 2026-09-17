@@ -1,0 +1,21 @@
+@inherits LivePanel
+@inject RequestService Requests
+@inject MessageService Messages
+
+@if (_count > 0)
+{
+    <span class="badge">@_count</span>
+}
+
+@code {
+    private int _count;
+
+    protected override bool IsRelevant(Muthur.Core.Entities.LedgerEvent e) =>
+        e.Type.StartsWith("request.", StringComparison.Ordinal) || e.Type.StartsWith("message.", StringComparison.Ordinal);
+
+    protected override async Task LoadAsync()
+    {
+        var open = await Requests.ListAsync(openOnly: true);
+        _count = open.Count + await Messages.UnreadForFounderAsync();
+    }
+}
