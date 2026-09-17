@@ -16,6 +16,10 @@ Task requested: $ARGUMENTS (if empty or "next", take the most urgent backlog tas
   units in a single message so they run in parallel.
 - An implementer's report names its branch. Integrate with `git merge --no-ff <branch>` **into the task
   branch only**. Merging into the project's default branch is MUTHUR's job (`muthur task land`).
+- **Cross-harness workers:** `muthur worker run --tier implementer --spec specs/T-n.md --unit "<unit>" --task T-n` runs the unit
+  headless on whichever harness and account the tier has available (another Claude, Codex, a local model) in its own
+  worktree, and returns the report and branch. Use it when your own account is near its limit, to get a second
+  vendor's take on a unit, or for utility-tier chores. Run it as a background Bash call for long units.
 - Subagents cannot spawn subagents. For a unit too big for one specialist, split it further yourself or make it
   its own ledger task for another orchestrator session.
 - The prompt you give a subagent is everything it knows. Always include: the spec path, the unit name, the

@@ -1,0 +1,11 @@
+{
+  "harness": "generic",
+  "files": [
+    { "from": "MUTHUR.md", "to": "MUTHUR.md" },
+    { "from": "../core/orchestrate.md", "to": ".muthur/procedures/orchestrate.md" },
+    { "from": "../core/implementer.md", "to": ".muthur/procedures/implementer.md" },
+    { "from": "../core/validate.md", "to": ".muthur/procedures/validate.md" },
+    { "from": "../core/oncall.md", "to": ".muthur/procedures/oncall.md" },
+    { "from": "../core/spec-template.md", "to": "specs/_TEMPLATE.md" }
+  ]
+}

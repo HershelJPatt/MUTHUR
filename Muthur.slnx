@@ -9,6 +9,7 @@
   </Folder>
   <Folder Name="/tests/">
     <Project Path="tests/Muthur.Core.Tests/Muthur.Core.Tests.csproj" />
+    <Project Path="tests/Muthur.Launch.Tests/Muthur.Launch.Tests.csproj" />
     <Project Path="tests/Muthur.Server.Tests/Muthur.Server.Tests.csproj" />
   </Folder>
 </Solution>

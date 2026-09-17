@@ -13,15 +13,16 @@ public sealed record ProcessResult(int ExitCode, string StdOut, string StdErr)
 
 public interface IProcessRunner
 {
+    /// <param name="scrubEnvironment">Variables removed from the child's environment (e.g. hub credentials a worker must not inherit).</param>
     Task<ProcessResult> RunAsync(string fileName, IReadOnlyList<string> arguments, string workingDirectory,
-        string? stdin = null, TimeSpan? timeout = null, CancellationToken ct = default);
+        string? stdin = null, TimeSpan? timeout = null, CancellationToken ct = default, IReadOnlyCollection<string>? scrubEnvironment = null);
 }
 
 /// <summary>Runs a child process to completion, capturing output. Arguments are passed as a list, never through a shell.</summary>
 public sealed class ProcessRunner : IProcessRunner
 {
     public async Task<ProcessResult> RunAsync(string fileName, IReadOnlyList<string> arguments, string workingDirectory,
-        string? stdin = null, TimeSpan? timeout = null, CancellationToken ct = default)
+        string? stdin = null, TimeSpan? timeout = null, CancellationToken ct = default, IReadOnlyCollection<string>? scrubEnvironment = null)
     {
         var info = new ProcessStartInfo(fileName)
         {
@@ -29,12 +30,14 @@ public sealed class ProcessRunner : IProcessRunner
             RedirectStandardOutput = true,
             RedirectStandardError = true,
             RedirectStandardInput = true,
+            StandardInputEncoding = new UTF8Encoding(encoderShouldEmitUTF8Identifier: false),
             UseShellExecute = false,
             CreateNoWindow = true,
             StandardOutputEncoding = Encoding.UTF8,
             StandardErrorEncoding = Encoding.UTF8,
         };
         foreach (var argument in arguments) info.ArgumentList.Add(argument);
+        foreach (var variable in scrubEnvironment ?? []) info.Environment.Remove(variable);
 
         using var process = new Process { StartInfo = info };
         try

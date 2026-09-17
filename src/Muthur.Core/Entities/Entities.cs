@@ -139,3 +139,12 @@ public sealed class FounderRequest
     public DateTimeOffset CreatedAt { get; set; }
     public DateTimeOffset? AnsweredAt { get; set; }
 }
+
+/// <summary>A subscription or API account that is out of quota until <see cref="LimitedUntil"/>. Work is routed around it.</summary>
+public sealed class AccountLimit
+{
+    public required string Account { get; set; }
+    public DateTimeOffset LimitedUntil { get; set; }
+    public required string ReportedBy { get; set; }
+    public DateTimeOffset ReportedAt { get; set; }
+}

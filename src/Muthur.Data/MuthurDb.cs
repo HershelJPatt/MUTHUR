@@ -19,6 +19,7 @@ public sealed class MuthurDb(DbContextOptions<MuthurDb> options) : DbContext(opt
     public DbSet<TaskValidation> TaskValidations => Set<TaskValidation>();
     public DbSet<Message> Messages => Set<Message>();
     public DbSet<FounderRequest> FounderRequests => Set<FounderRequest>();
+    public DbSet<AccountLimit> AccountLimits => Set<AccountLimit>();
 
     protected override void ConfigureConventions(ModelConfigurationBuilder configurationBuilder)
     {
@@ -100,6 +101,12 @@ public sealed class MuthurDb(DbContextOptions<MuthurDb> options) : DbContext(opt
             e.ToTable("founder_requests");
             e.HasIndex(x => x.Status);
             e.Property(x => x.Options).HasConversion(StringListConverter.Instance, StringListConverter.Comparer);
+        });
+
+        modelBuilder.Entity<AccountLimit>(e =>
+        {
+            e.ToTable("account_limits");
+            e.HasKey(x => x.Account);
         });
 
         ApplySnakeCaseColumns(modelBuilder);
