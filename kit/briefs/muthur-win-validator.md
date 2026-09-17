@@ -21,6 +21,10 @@ env $T ./artifacts/validate/muthur.exe status
 
 **Always pass `-Destination` to `scripts/install.ps1`.** Its default destination is the live hub's directory.
 
+**Only ever run an installed CLI (`./artifacts/<name>/muthur.exe`).** `dotnet build` also leaves a `muthur.exe` under
+`src/Muthur.Cli/bin/`; it is a build output, not an installation — never run it, and never run anything without the `env $T` prefix.
+Any port other than 7420 is fine for scratch instances; use a different one per instance.
+
 ## Before anything else
 
 Record the live hub's identity so you can prove you never touched it: `M status` → note `processId` and `startedAt`.
@@ -49,6 +53,9 @@ powershell -NoProfile -File scripts/install.ps1 -Destination ./artifacts/validat
    (env $T $X task claim T-1 --as-agent a2 >/dev/null 2>&1; echo "a2=$?") & wait      # exactly one 0, one 3
    ```
    `agent heartbeat --summary "…"` and `agent limited --minutes 45` populate the summary/limited parts of the Agents panel.
+   To exercise validation itself in scratch: `role define win-validator --founder`, `project set demo --validator win-validator --founder`,
+   then a task needs `task spec` and a real non-default branch before `task implemented` (a project without validators jumps straight to `validated`).
+   For timing use `date +%s%3N` (Git Bash here has no `bc`).
 3. Exercise what the task changed, as its spec's *Verification* section describes, then its neighbors and unhappy paths
    (HTML in titles/bodies/summaries must render escaped).
 4. Dashboard: `curl -s http://127.0.0.1:7431/<path>` shows the server-rendered HTML. Virtualized lists (board cards,
