@@ -102,6 +102,15 @@ public sealed class SecretScannerTests
         "The staging password was rotated.\nUse {0} from now on.",
         "Staging passwords:\n<li>admin: {0}</li>",
         "staging password\n=> {0}",
+        // …under a heading, a bold label, an HTML paragraph or a sentence that announces nothing
+        "## Staging credentials\n\njdoe / {0}",
+        "**Staging login:**\njdoe / {0}",
+        "**Staging login:**\n{0} (temporary)",
+        "<p>Staging login:</p>\n<p>jdoe / {0}</p>",
+        "Staging login:<br>\njdoe / {0}<br>",
+        "Here's the staging login\njdoe / {0}",
+        "Staging creds\njdoe {0}",
+        "Login: jdoe\n{0} (temporary)",
     ];
 
     /// <summary>How people build one: a word or two, a number, maybe a symbol — including the password word itself.</summary>

@@ -241,3 +241,14 @@ The new password:\nWinter_2026 (change it)
 USERNAME   PASSWORD\njdoe       Welcome.2026
 Staging logins:\n- admin: Welcome#1
 The staging password was rotated.\nUse Winter_2026 from now on.
+## Staging credentials\n\njdoe / P@ssw0rd
+**Staging login:**\njdoe / Winter_2026
+**Staging login:**\nWelcome1 (temporary)
+Here's the staging login\njdoe / Summer2025
+<p>Staging login:</p>\n<p>jdoe / Winter_2026</p>
+Login: jdoe\nWinter_2026 (temporary)
+> can you send me the login for staging?\n\nsure: jdoe / Spring@2026
+new credentials for the demo tenant\n\nadmin@acme.example\nWelcome.2026 (rotate after the demo)
+jane 10:01 AM\nwhat's the staging login?\nsam 10:02 AM\njdoe and Welcome#1
+Staging passwords:\nW3lcome1\nP4ssw0rd1
+Staging passwords:\nWELCOME123\nWINTER2026

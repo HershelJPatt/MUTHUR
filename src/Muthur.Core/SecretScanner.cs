@@ -132,6 +132,7 @@ public static partial class SecretScanner
     private static bool IsPasswordShaped(string value)
     {
         if (!value.Any(char.IsAsciiDigit) || !value.Any(char.IsAsciiLetter) || KnownTechnicalName().IsMatch(value)) return false;
+        if (VersionedIdentifier().IsMatch(value)) return false; // LoginFormV2, SessionStoreV3
         return CapitalizedWord().IsMatch(value) || value.Any(ch => "@!#$%&*".Contains(ch));
     }
 
@@ -175,7 +176,11 @@ public static partial class SecretScanner
             if (line.Length == 0 || line.StartsWith("```", StringComparison.Ordinal)) continue;
             seen++;
             if (!CredentialLine().IsMatch(line)) continue;
-            strong = StrongPasswordWord().IsMatch(line) || line.EndsWith(':'); // "Login for staging:" announces what follows
+            // "Login for staging:" announces what follows — so does the same thing as a heading, a bold label, an HTML paragraph
+            // ("## Staging credentials", "**Staging login:**", "<p>Staging login:</p>") or a label of a few words ("Staging creds")
+            var text = MarkupAround().Replace(line, "").Trim();
+            strong = StrongPasswordWord().IsMatch(line) || text.EndsWith(':') || line.StartsWith('#')
+                || text.Split(' ', StringSplitOptions.RemoveEmptyEntries).Length <= 5;
             return true;
         }
         return false;
@@ -185,6 +190,9 @@ public static partial class SecretScanner
     /// build01 / sql02, asmith2 / mbrown17: a neighbouring line holds another lone lowercase name with a number. That is a list of hosts,
     /// users or builds; a password comes alone.
     /// </summary>
+    private static bool IsPlainName(string value) =>
+        !IsPasswordShaped(value) && !value.Any(char.IsAsciiLetterUpper); // W3lcome1 and WELCOME123 are not host names
+
     private static bool IsListOfPlainNames(string[] lines, int i)
     {
         foreach (var n in (int[])[i - 1, i + 1])
@@ -193,7 +201,7 @@ public static partial class SecretScanner
             var other = AloneOnLine().Match(lines[n]);
             if (!other.Success) continue;
             var name = other.Groups["value"].Value;
-            if (name.Any(char.IsAsciiDigit) && name.Any(char.IsAsciiLetter) && !IsPasswordShaped(name)) return true;
+            if (name.Any(char.IsAsciiDigit) && name.Any(char.IsAsciiLetter) && IsPlainName(name)) return true;
         }
         return false;
     }
@@ -299,8 +307,10 @@ public static partial class SecretScanner
             var below = alone.Success && under;
             // under "Staging password:" a password is a password with company too: "jdoe / Winter_2026", "Welcome1 (temporary)"
             var underStrong = under && strongAbove;
-            var shortLine = StandaloneToken().Matches(lines[i]).Count <= 4;
-            var nearPasswordWord = below || underStrong || PasswordClassWord().IsMatch(context);
+            var words = StandaloneToken().Matches(MarkupAround().Replace(lines[i], " ")).Count; // <p>jdoe / winter2026</p> is three
+            var shortLine = words <= 4;
+            var briefLine = words <= 6;
+            var nearPasswordWord = below || underStrong || (under && briefLine) || PasswordClassWord().IsMatch(context);
             // right next to the word itself ("password = Sup3r S3cret") even a short mixed token is worth a look
             var minimum = below || StrongPasswordWord().IsMatch(lines[i]) ? 5 : 8;
             foreach (Match token in StandaloneToken().Matches(lines[i]))
@@ -328,11 +338,14 @@ public static partial class SecretScanner
                     || (i > 0 && ValueLine().IsMatch(lines[i]) && StrongPasswordWord().IsMatch(lines[i - 1]))
                     || UnderPasswordHeader(lines, i);
                 var direct = rightWhereItGoes || (CredentialLine().IsMatch(lines[i]) && AfterCredentialLead().IsMatch(preceding))
-                    || (below && token.Index + token.Length > alone.Groups["value"].Index && (IsPasswordShaped(value) || (strongAbove && !IsListOfPlainNames(lines, i))))
+                    || (below && token.Index + token.Length > alone.Groups["value"].Index && (IsPasswordShaped(value) || (strongAbove && !(IsPlainName(value) && IsListOfPlainNames(lines, i)))))
                     // …and on a short line there (a user name, a remark, a chat prefix) even a plain one: "jdoe / winter2026"
                     || (underStrong && (IsPasswordShaped(value) || (shortLine && value.Length >= 8)))
+                    // under a sentence about a login or credentials that announces nothing ("can you send me the login for staging?"),
+                    // a pair or a value with a remark still reads as the answer: "sure: jdoe / Spring@2026", "Welcome.2026 (rotate it)"
+                    || (under && briefLine && IsPasswordShaped(value))
                     || (underStrong && value.Length >= 8 && AfterUseIt().IsMatch(preceding)); // "Use winter2026 from now on."
-                if (alone.Success && !rightWhereItGoes && !IsPasswordShaped(value) && IsListOfPlainNames(lines, i)) continue;
+                if (alone.Success && !rightWhereItGoes && IsPlainName(value) && IsListOfPlainNames(lines, i)) continue;
                 // product and algorithm names with a version (Chrome128, Argon2id), codes and standards (AADSTS50126, KB5031356,
                 // SP800-63B, 28P01) and branch-like paths (task/T-9-outbound-gate) are what password-related messages are full of
                 // — except a shouted word with a number right where the password goes (-p WINTER2026)
@@ -440,7 +453,7 @@ public static partial class SecretScanner
     private static partial Regex CredentialLine();
 
     // products, platforms, protocols and algorithms that carry a version or a number in their name
-    [GeneratedRegex(@"^(?:Chrome|Chromium|Firefox|Safari|Edge|Opera|Windows|Win|Server|iOS|iPadOS|macOS|Android|Ubuntu|Debian|Fedora|CentOS|RHEL|Node|Deno|Python|Java|Kotlin|Swift|Go|Rust|PHP|Ruby|Rails|Django|Angular|React|Vue|Net|DotNet|NetCore|Core|Postgres|PostgreSQL|MySQL|MariaDB|Mongo|MongoDB|Redis|Oracle|SqlServer|Office|Dynamics|Exchange|SharePoint|Argon|Bcrypt|Scrypt|Sha|Md|Base|Utf|OAuth|OpenID|Http|Tls|Ssl|Ipv|Log4j|Log4Net|Ed|Rs|Hs|Es|Ps|Aes|Des|Rsa|Ecdsa|Curve|X|P|Gpt|Claude|Llama|AADSTS)[\-_]?\d+(?:[.\-_]\d+)*[A-Za-z]{0,3}$", RegexOptions.IgnoreCase)]
+    [GeneratedRegex(@"^(?:Chrome|Chromium|Firefox|Safari|Edge|Opera|Windows|Win|Server|iOS|iPadOS|macOS|Android|Ubuntu|Debian|Fedora|CentOS|RHEL|Node|Deno|Python|Java|Kotlin|Swift|Go|Rust|PHP|Ruby|Rails|Django|Angular|React|Vue|Net|DotNet|NetCore|Core|Postgres|PostgreSQL|MySQL|MariaDB|Mongo|MongoDB|Redis|Oracle|SqlServer|Office|Dynamics|Exchange|SharePoint|Argon|Bcrypt|Scrypt|Sha|Md|Base|Utf|OAuth|OpenID|Http|Tls|Ssl|Ipv|Log4j|Log4Net|Ed|Rs|Hs|Es|Ps|Aes|Des|Rsa|Ecdsa|Curve|X|P|Gpt|Claude|Llama|AADSTS|Sprint|Release|Pixel|Galaxy|iPhone|iPad|Outlook|Teams?|Captcha|reCaptcha|WebAuthn|Fido|Totp|Finding|Session|Wave|Phase|Customer|PR|Q)[\-_]?\d+(?:[.\-_]\d+)*[A-Za-z]{0,3}$", RegexOptions.IgnoreCase)]
     private static partial Regex KnownTechnicalName();
 
     // the text before a token ends with a password flag: -p X, -P X, -w X, -a X, --password X
@@ -466,6 +479,13 @@ public static partial class SecretScanner
 
     [GeneratedRegex(@"(?<![A-Za-z])(?:use|try|enter|type|it'?s|it\s+is)\s+[""'`]?$", RegexOptions.IgnoreCase)]
     private static partial Regex AfterUseIt();
+
+    [GeneratedRegex(@"^[A-Za-z]+[a-z]V\d{1,2}$")]
+    private static partial Regex VersionedIdentifier();
+
+    // tags and emphasis marks: <p>, </b>, <br>, **, __, `
+    [GeneratedRegex(@"</?[A-Za-z][^<>]*>|[*_`]+")]
+    private static partial Regex MarkupAround();
 
     // WINTER2026 · PASSWORD123 · ADMIN_2026!
     [GeneratedRegex(@"^[A-Z]{4,}[_.\-]?\d{2,}[^A-Za-z0-9]*$")]
