@@ -30,6 +30,12 @@ Any port other than 7420 is fine for scratch instances; use a different one per 
 Record the live hub's identity so you can prove you never touched it: `M status` → note `processId` and `startedAt`.
 Compare again when you finish; if they changed, say so in your evidence (someone else may have upgraded it).
 
+Keep your files in a per-run subdirectory of the scratchpad, throwaway git repositories **outside** `C:\src\Experiment`,
+and run the installed CLI by absolute path when a check must happen outside any repository (the CLI infers the project from the
+nearest `muthur.project.json`). Create a second project in scratch whenever a task touches projects, inbound or tasks.
+Tools: `tasklist //FI "PID eq <pid>"` (no `pgrep`), `date +%s%3N` for timing (no `bc`), `PYTHONIOENCODING=utf-8` when piping
+non-ASCII through Python; browser scripts run in the browser daemon and do not see your shell's environment.
+
 ## Build the branch
 
 Run from the repository root (`C:\src\Experiment`); never check the branch out in the main checkout.
