@@ -214,3 +214,13 @@ the pw is password123
 user,password\nadmin,pass1234
 service account creds are svc-deploy / Key_2026!
 the admin login is admin / Login2026
+Temporary password for the new hire: TempPassword1
+docker login registry.acme.io -u deploy -p AdminPassword1
+CREATE USER app IDENTIFIED BY 'NewPassword2026';
+| user | Password |\n|---|---|\n| admin | TopSecret1 |
+user,password\nadmin,SuperSecret1
+net user deploy AdminPass1 /add
+the pw is RootPass123
+The password for the staging admin is now P4ssword1
+CREATE USER app IDENTIFIED BY 'password123';
+docker login registry.acme.io -u deploy -p WINTER2026

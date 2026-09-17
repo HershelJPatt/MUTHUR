@@ -141,8 +141,11 @@ public static partial class SecretScanner
     /// </summary>
     private static bool IsPasswordWordPassword(string value)
     {
-        if (value.All(ch => char.IsAsciiLetterUpper(ch) || char.IsAsciiDigit(ch) || ch == '_')) return false;
+        if (value.All(ch => char.IsAsciiLetterUpper(ch) || char.IsAsciiDigit(ch) || ch == '_')) return ShoutedPassword().IsMatch(value);
         var rest = PasswordClassWord().Replace(value, "");
+        // TempPassword1, RootPass123, Admin.Password.2026: the word runs straight into the number that ends the token.
+        // Names put letters in between (PasswordHasherV2, TokenServiceTests2, ResetPasswordTokenV2).
+        if (WordThenNumberToTheEnd().IsMatch(value)) return true;
         if (value.Any(ch => "@!#$%&*".Contains(ch)) && value.Any(char.IsAsciiDigit)) return true; // Secret@Acme1: no name is spelled like that
         return rest.Any(char.IsAsciiDigit) && !LongLetterRun().IsMatch(rest);
     }
@@ -154,10 +157,14 @@ public static partial class SecretScanner
         {
             if (!lines[i].Contains(delimiter)) continue;
             for (var h = Math.Max(0, i - 2); h < i; h++)
-                if (lines[h].Contains(delimiter) && CredentialColumnWord().IsMatch(lines[h])) return true;
+                if (lines[h].Contains(delimiter) && lines[h].Split(delimiter).Any(IsCredentialColumn)) return true;
         }
         return false;
     }
+
+    /// <summary>"Password", "Temp password", "API Key" — not a data cell that happens to carry the word (PasswordHasherV2, password_v2_enabled).</summary>
+    private static bool IsCredentialColumn(string cell) =>
+        cell.Length <= 40 && !cell.Any(char.IsAsciiDigit) && CredentialColumnWord().IsMatch(cell);
 
     /// <summary>The whitespace-delimited token a capture sits in.</summary>
     private static string WholeToken(string text, Group capture)
@@ -227,7 +234,7 @@ public static partial class SecretScanner
     /// </summary>
     private static bool IsNotACredential(string value, bool credentialPosition)
     {
-        if (IsPlaceholder(value) || IsReference(value)) return true;
+        if (IsPlaceholder(value) || IsReference(value) || PinnedVersion().IsMatch(value)) return true;
         if (credentialPosition && value.Any(char.IsAsciiDigit)) return value.Contains('(') && CodeReference().IsMatch(value);
         if (HasOpaqueSegment(value)) return false; // stg.Qw7Lp2Rm9Xt4Zk8Nb6Ja is a token with a prefix, not a code reference
         return IsConfigurationWord(value) || IsIdentifier(value);
@@ -264,33 +271,35 @@ public static partial class SecretScanner
                 var cut = value.LastIndexOfAny([':', '=']);
                 if (cut >= 0 && cut < value.Length - 1) value = value[(cut + 1)..];
                 value = CleanValue(value);
-                // a token that carries the password word itself is a name (20240917_AddPasswordHashColumn, DB_PASSWORD), not the value —
-                // unless the word is all there is to it besides digits and symbols (Password123!, Secret_2026), which is a password
-                if (PasswordClassWord().IsMatch(value) && !IsPasswordWordPassword(value)) continue;
-                // product and algorithm names with a version (Chrome128, Argon2id), codes and standards (AADSTS50126, KB5031356,
-                // SP800-63B, 28P01) and branch-like paths (task/T-9-outbound-gate) are what password-related messages are full of
-                if (KnownTechnicalName().IsMatch(value) || CodeOrStandard().IsMatch(value)) continue;
-                if (value.Contains('/') && value[..value.IndexOf('/')].All(char.IsAsciiLetterLower) && !glued.Success
-                    && !value.Split('/').Skip(1).Any(IsPasswordShaped)) continue; // but not admin/Winter_2026
                 // A credential position is where a password would be written — not merely a line that mentions passwords
                 // ("Password reset was delayed on smtp02; fixed in release-2026.09" has none):
                 //   right after a password flag (-p X, -P X, -w X, --password X, glued -pX) or on a `net use … /user:` line;
                 //   right after the password word with only separators between (password: X, **Password:** X, password is X);
                 //   in a row under a header that names a password (tables, CSV), or under a line that is only a secret name.
                 var preceding = lines[i][..token.Index];
-                var credentialPosition = glued.Success
+                var rightWhereItGoes = glued.Success
                     || AfterPasswordFlag().IsMatch(preceding) || lines[i].Contains("/user:", StringComparison.OrdinalIgnoreCase)
                     || AfterPasswordWord().IsMatch(preceding)
                     || (i > 0 && DanglingSecretName().IsMatch(lines[i - 1]))
                     || (i > 0 && ValueLine().IsMatch(lines[i]) && StrongPasswordWord().IsMatch(lines[i - 1]))
-                    || UnderPasswordHeader(lines, i)
-                    // …and anywhere on a line that is about a password, a login or credentials, when the token itself is shaped
-                    // like a human password (Welcome_2026, AppUser2026, P@ssw0rd) rather than like infrastructure (smtp02,
-                    // release-2026.09, PBKDF2, Chrome128): "Temporary password for the new hire: Welcome_2026",
-                    // "IDENTIFIED BY 'App_User_2026'", "login admin / Welcome.2026", {"name":"DB_PASSWORD","value":"OrdersDb2026"}
-                    || (CredentialLine().IsMatch(lines[i]) && IsPasswordShaped(value));
+                    || UnderPasswordHeader(lines, i);
+                var direct = rightWhereItGoes || (CredentialLine().IsMatch(lines[i]) && AfterCredentialLead().IsMatch(preceding));
+                // product and algorithm names with a version (Chrome128, Argon2id), codes and standards (AADSTS50126, KB5031356,
+                // SP800-63B, 28P01) and branch-like paths (task/T-9-outbound-gate) are what password-related messages are full of
+                // — except a shouted word with a number right where the password goes (-p WINTER2026)
+                if (KnownTechnicalName().IsMatch(value) || (CodeOrStandard().IsMatch(value) && !(direct && ShoutedPassword().IsMatch(value)))) continue;
+                if (value.Contains('/') && value[..value.IndexOf('/')].All(char.IsAsciiLetterLower) && !glued.Success
+                    && !value.Split('/').Skip(1).Any(IsPasswordShaped)) continue; // but not admin/Winter_2026
+                // a token that carries the password word itself is a name (20240917_AddPasswordHashColumn, DB_PASSWORD), not the value —
+                // unless it sits right where the password goes, or is spelled like a password (Password123!, TempPassword1, Secret_2026)
+                if (!rightWhereItGoes && PasswordClassWord().IsMatch(value) && !IsPasswordWordPassword(value)) continue;
+                // …and anywhere on a line that is about a password, a login or credentials, when the token itself is shaped
+                // like a human password (Welcome_2026, AppUser2026, P@ssw0rd) rather than like infrastructure (smtp02,
+                // release-2026.09, PBKDF2, Chrome128): "Temporary password for the new hire: Welcome_2026",
+                // "IDENTIFIED BY 'App_User_2026'", "login admin / Welcome.2026", {"name":"DB_PASSWORD","value":"OrdersDb2026"}
+                var credentialPosition = direct || (CredentialLine().IsMatch(lines[i]) && IsPasswordShaped(value));
                 if (value.Length < minimum || value.StartsWith('@') || value.Contains('(') || IsNotACredential(value, credentialPosition)) continue;
-                if (credentialPosition && value.Any(char.IsAsciiDigit) && value.Any(char.IsAsciiLetter) && !PlainlyNotASecret().IsMatch(value) && !FileName().IsMatch(value))
+                if (credentialPosition && value.Any(char.IsAsciiDigit) && value.Any(char.IsAsciiLetter) && (!PlainlyNotASecret().IsMatch(value) || (direct && ShoutedPassword().IsMatch(value))) && !FileName().IsMatch(value))
                 {
                     // Winter_2026, Acme.Sql2026: word structure does not excuse a value sitting where a password goes
                     var m = Mask(value);
@@ -331,6 +340,9 @@ public static partial class SecretScanner
 
     [GeneratedRegex(@"pass(?:word|wd|phrase|code|wort)|kennwort|(?<![A-Za-z])pass(?![A-Za-z])|_pass(?![A-Za-z])|(?-i:(?<=[a-z])Pass(?![a-z]))|pwd|(?<![A-Za-z])pw(?![A-Za-z])", RegexOptions.IgnoreCase)]
     private static partial Regex StrongPasswordWord();
+
+    [GeneratedRegex(@"(?:pass(?:word|wd|wort)?|kennwort|pwd|secret|creds?|credentials?|token|login|key|auth)[_.\-]?\d+[^A-Za-z0-9]*$", RegexOptions.IgnoreCase)]
+    private static partial Regex WordThenNumberToTheEnd();
 
     [GeneratedRegex(@"[A-Za-z]{3,}")]
     private static partial Regex LongLetterRun();
@@ -379,7 +391,7 @@ public static partial class SecretScanner
     private static partial Regex CredentialLine();
 
     // products, platforms, protocols and algorithms that carry a version or a number in their name
-    [GeneratedRegex(@"^(?:Chrome|Chromium|Firefox|Safari|Edge|Opera|Windows|Win|Server|iOS|iPadOS|macOS|Android|Ubuntu|Debian|Fedora|CentOS|RHEL|Node|Deno|Python|Java|Kotlin|Swift|Go|Rust|PHP|Ruby|Rails|Django|Angular|React|Vue|Net|DotNet|NetCore|Core|Postgres|PostgreSQL|MySQL|MariaDB|Mongo|MongoDB|Redis|Oracle|SqlServer|Office|Dynamics|Exchange|SharePoint|Argon|Bcrypt|Scrypt|Sha|Md|Base|Utf|OAuth|OpenID|Http|Tls|Ssl|Ipv|Log4j|Log4Net|Ed|Rs|Hs|Es|Ps|Aes|Des|Rsa|Ecdsa|Curve|X|P|Gpt|Claude|Llama)[\-_]?\d[\w.\-]*$", RegexOptions.IgnoreCase)]
+    [GeneratedRegex(@"^(?:Chrome|Chromium|Firefox|Safari|Edge|Opera|Windows|Win|Server|iOS|iPadOS|macOS|Android|Ubuntu|Debian|Fedora|CentOS|RHEL|Node|Deno|Python|Java|Kotlin|Swift|Go|Rust|PHP|Ruby|Rails|Django|Angular|React|Vue|Net|DotNet|NetCore|Core|Postgres|PostgreSQL|MySQL|MariaDB|Mongo|MongoDB|Redis|Oracle|SqlServer|Office|Dynamics|Exchange|SharePoint|Argon|Bcrypt|Scrypt|Sha|Md|Base|Utf|OAuth|OpenID|Http|Tls|Ssl|Ipv|Log4j|Log4Net|Ed|Rs|Hs|Es|Ps|Aes|Des|Rsa|Ecdsa|Curve|X|P|Gpt|Claude|Llama)[\-_]?\d+(?:[.\-_]\d+)*[A-Za-z]{0,3}$", RegexOptions.IgnoreCase)]
     private static partial Regex KnownTechnicalName();
 
     // the text before a token ends with a password flag: -p X, -P X, -w X, -a X, --password X
@@ -389,6 +401,19 @@ public static partial class SecretScanner
     // the text before a token ends with the password word and nothing but separators: password: X · **Password:** X · password is X · Password - X
     [GeneratedRegex(@"(?:pass(?:word|wd|phrase|code|wort)?|pwd|(?<![A-Za-z])pw)[\s:=\-–>*_""'`|]*(?:(?:is|was)\s+)?[""'`]?$", RegexOptions.IgnoreCase)]
     private static partial Regex AfterPasswordWord();
+
+    // on a line about credentials, the lead-ins a value follows: IDENTIFIED BY 'X' · net user deploy X · admin / X · "…the new hire: X" ·
+    // "…is now X" · "…changed to X"
+    [GeneratedRegex(@"(?:IDENTIFIED\s+BY|net\s+user\s+\S+|\s/|:|(?<![A-Za-z])is(?:\s+now)?|(?:changed|reset|set|updated|rotated)\s+to)\s+[""'`]?$", RegexOptions.IgnoreCase)]
+    private static partial Regex AfterCredentialLead();
+
+    // passlib==1.7.4 reads like an assignment to "pass…"; what follows is a version
+    [GeneratedRegex(@"^=?v?\d+(?:\.\d+)+$")]
+    private static partial Regex PinnedVersion();
+
+    // WINTER2026 · PASSWORD123 · ADMIN_2026!
+    [GeneratedRegex(@"^[A-Z]{4,}[_.\-]?\d{2,}[^A-Za-z0-9]*$")]
+    private static partial Regex ShoutedPassword();
 
     // "  value: X" — the second half of a name/value pair
     [GeneratedRegex(@"^\s*[""']?value[""']?\s*[:=]", RegexOptions.IgnoreCase)]
