@@ -117,8 +117,12 @@ so rather than silently passing on a `null`.
   - `dotnet test` — green, with `Muthur.Cli.Tests` up from 9 tests to 12.
   - A JSON parser that is not the code under test agrees the file is valid, e.g.
     `python -c "import json,io; json.load(io.open('muthur.project.json',encoding='utf-8'))"` exits 0.
-  - **Reverting only the `muthur.project.json` change makes tests 1 and 3 fail.** Check this and report it
-    — a regression test that does not fail on the regression is worth nothing. Restore the fix afterwards.
+  - **Reverting only the `muthur.project.json` change makes all three tests fail.** Check this and report
+    it — a regression test that does not fail on the regression is worth nothing. Restore the fix
+    afterwards.
+
+    (This line first said "tests 1 and 3". The implementer reported that test 2 fails too, because it must
+    parse the file before it can read any field. That is unavoidable and correct; the spec was wrong.)
 
 One unit: three small edits that share one reason, and splitting them would serialize on the same test file.
 
@@ -147,3 +151,31 @@ backslash) rather than having been reworded, and that no caller of `FindKey()` w
   two should be settled together, with one stable `invalid_manifest` code and exit 2, rather than
   separately. Add it to T-8 rather than opening a third task.
 - `muthur doctor` checking every configured project's manifest belongs to T-14/T-27, not here.
+
+## Proof (run 2026-09-18, on the integrated task branch)
+
+End to end through the installed CLI, from the repository root, which is what the task is actually about —
+`muthur project show` with no key resolves the project only if the manifest can be read:
+
+```
+with the fix:        {"key":"muthur","name":"muthur","repoPath":"C:\WorkSrc\MUTHUR",...}
+manifest reverted:   {"code":"project_required","message":"Pass a project key, or run inside a
+                      repository with muthur.project.json."}
+```
+
+That second line is the two-day outage, reproduced on demand and then fixed again.
+
+The implementer's own deliberate-revert experiment agreed from the other side: with only the manifest
+reverted, `ProjectManifestTests` went 0 passed / 3 failed, test 3 reporting
+`FindKey read '(null)' from ...\muthur.project.json, which exists.`
+
+An accepted deviation: test 3 is `Assert.True(key == "muthur", "<message>")` rather than the one-line
+`Assert.Equal` this spec sketched. A bare `Assert.Equal` fails with only "Expected: muthur, Actual:
+(null)", which cannot distinguish a broken reader from a missing file — and this spec separately requires
+that a manifest which cannot be found fails with a message saying so. The implementer's shape satisfies
+both; the sketch did not.
+
+Known, out of scope, and worth a validator knowing: these tests walk up from the test binary, so run inside
+an agent worktree they assert against that worktree's copy of the manifest. The nine copies under
+`.claude/worktrees/` still hold the broken string and would fail there. They are transient and this spec
+excludes them.
