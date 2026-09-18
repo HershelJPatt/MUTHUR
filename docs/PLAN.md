@@ -1,6 +1,6 @@
 # MUTHUR — Technical Plan
 
-Status: M0–M8 built · 2026-09-17 · M9 (deployable, multi-machine) not started
+Status: M0–M8 built and landed · 2026-09-17 · M8 passed validation in round 17 (see specs/T-9.md) · M9 (deployable, multi-machine) not started
 
 A local control plane for an organization of coding agents: task ledger, roles,
 validation lifecycle, messaging, and a gated path for anything leaving the machine.

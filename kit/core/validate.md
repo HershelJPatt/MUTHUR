@@ -39,7 +39,7 @@ have exercised it end to end on your platform and said yes. You are the last lin
 ## Several tasks, one build
 
 When the queue holds a stack of tasks whose branches contain each other, build the top branch once
-(`validate-stack-<top task>`) and give each task its own verdict, judged on its own spec. A defect belongs to the task whose code it is in.
+(in a worktree named `validate-stack-<top task>`) and give each task its own verdict, judged on its own spec. A defect belongs to the task whose code it is in.
 
 ## Rules
 
