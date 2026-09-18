@@ -249,6 +249,10 @@ namespace Muthur.Data.Migrations
                         .HasColumnType("TEXT")
                         .HasColumnName("last_error");
 
+                    b.Property<long?>("LastSuccessAt")
+                        .HasColumnType("INTEGER")
+                        .HasColumnName("last_success_at");
+
                     b.Property<long>("UpdatedAt")
                         .HasColumnType("INTEGER")
                         .HasColumnName("updated_at");
@@ -659,6 +663,10 @@ namespace Muthur.Data.Migrations
                         .ValueGeneratedOnAdd()
                         .HasColumnType("INTEGER")
                         .HasColumnName("id");
+
+                    b.Property<string>("AttendedReason")
+                        .HasColumnType("TEXT")
+                        .HasColumnName("attended_reason");
 
                     b.Property<string>("Body")
                         .IsRequired()

@@ -13,6 +13,8 @@ public sealed class FileChannel(TimeProvider clock) : IOutboundChannel
     {
         if (!Path.IsPathRooted(address))
             throw Fail.Rule("invalid_address", "A file target needs an absolute path.");
+        if (Directory.Exists(address))
+            throw Fail.Rule("invalid_address", "A file target needs a path to a file, not a directory.");
     }
 
     public async Task SendAsync(string address, string body, CancellationToken ct = default)
@@ -20,6 +22,26 @@ public sealed class FileChannel(TimeProvider clock) : IOutboundChannel
         Directory.CreateDirectory(Path.GetDirectoryName(address)!);
         // The body goes out byte for byte: it is what was hashed and reviewed.
         await File.AppendAllTextAsync(address, $"--- {clock.GetUtcNow():O}\n{body}\n", ct);
+    }
+
+    public Task ProbeAsync(string address, CancellationToken ct = default)
+    {
+        try
+        {
+            Directory.CreateDirectory(Path.GetDirectoryName(address)!);
+            // A directory passes every check a send makes until the send itself, which fails with access denied.
+            if (Directory.Exists(address)) throw new ChannelException("the address is a directory, not a file");
+
+            // Prove what a send needs: that the address itself opens for append. Not a byte is written, and the
+            // file is left where it is even if this created it — deleting it could discard a message SendAsync
+            // appended in between, and it is the outbox the target names, which the next send would create anyway.
+            using (new FileStream(address, FileMode.Append, FileAccess.Write, FileShare.ReadWrite)) { }
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or NotSupportedException or ArgumentException)
+        {
+            throw new ChannelException("the address cannot be written");
+        }
+        return Task.CompletedTask;
     }
 }
 
@@ -46,6 +68,15 @@ public sealed class DiscordWebhookChannel(IHttpClientFactory http) : IOutboundCh
         if (!response.IsSuccessStatusCode)
             throw new ChannelException($"Discord answered HTTP {(int)response.StatusCode}");
     }
+
+    public async Task ProbeAsync(string address, CancellationToken ct = default)
+    {
+        using var client = http.CreateClient(nameof(DiscordWebhookChannel));
+        // A webhook URL answers a GET with the webhook's own metadata and posts nothing.
+        using var response = await client.GetAsync(address, ct);
+        if (!response.IsSuccessStatusCode)
+            throw new ChannelException($"Discord answered HTTP {(int)response.StatusCode}");
+    }
 }
 
 /// <summary>Comments on a GitHub issue or pull request. Address: "owner/repo#123". Uses the GitHub CLI's authentication.</summary>
@@ -60,6 +91,15 @@ public sealed class GitHubIssueChannel(IProcessRunner processes) : IOutboundChan
         var (repo, number) = Parse(address);
         var result = await processes.RunAsync("gh", ["api", "--method", "POST", $"repos/{repo}/issues/{number}/comments", "--input", "-"],
             Environment.CurrentDirectory, stdin: System.Text.Json.JsonSerializer.Serialize(new { body }), timeout: TimeSpan.FromSeconds(60), ct: ct);
+        if (!result.Ok) throw new ChannelException($"the GitHub CLI failed (exit {result.ExitCode}); is it logged in? gh auth status");
+    }
+
+    public async Task ProbeAsync(string address, CancellationToken ct = default)
+    {
+        var (repo, number) = Parse(address);
+        // Reading the issue proves both that gh is logged in and that the issue is still there to comment on.
+        var result = await processes.RunAsync("gh", ["api", $"repos/{repo}/issues/{number}"],
+            Environment.CurrentDirectory, timeout: TimeSpan.FromSeconds(60), ct: ct);
         if (!result.Ok) throw new ChannelException($"the GitHub CLI failed (exit {result.ExitCode}); is it logged in? gh auth status");
     }
 

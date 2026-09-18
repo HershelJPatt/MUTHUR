@@ -51,6 +51,7 @@ public static class Startup
         builder.Services.AddSingleton<LifecycleService>();
         builder.Services.AddSingleton<MessageService>();
         builder.Services.AddSingleton<RequestService>();
+        builder.Services.AddSingleton<FounderAttention>();
         builder.Services.AddSingleton<HarnessService>();
         builder.Services.AddSingleton<InboundService>();
         builder.Services.AddSingleton<OutboundService>();
@@ -66,6 +67,13 @@ public static class Startup
         builder.Services.AddSingleton<ConductorService>();
         builder.Services.AddSingleton<IPullRequestOpener, GhPullRequestOpener>();
         builder.Services.AddSingleton<ITaskLander, GitLander>();
+        builder.Services.AddSingleton<DoctorService>();
+        // Registered in the order DoctorService reports them, so the list reads like the report.
+        builder.Services.AddSingleton<IDoctorCheck, DoctorIngestCheck>();
+        builder.Services.AddSingleton<IDoctorCheck, DoctorOutboundCheck>();
+        builder.Services.AddSingleton<IDoctorCheck, DoctorProjectCheck>();
+        builder.Services.AddSingleton<IDoctorCheck, DoctorRepoCheck>();
+        builder.Services.AddSingleton<IDoctorCheck, DoctorRoleCheck>();
         if (options.BackgroundServices)
         {
             builder.Services.AddHostedService<LeaseSweeper>();

@@ -83,6 +83,23 @@ public static class TaskCommands
             Routes.TaskAction(parse.GetValue(priorityId)!, "priority"), new SetPriorityRequest(parse.GetValue(priorityValue)), MuthurJsonContext.Default.SetPriorityRequest, ct)));
         task.Subcommands.Add(setPriority);
 
+        var attendedId = Id();
+        var attendedReason = new Option<string?>("--reason") { Description = "Why a human is needed: a browser, a device, your hands. Required unless --clear." };
+        var attendedClear = new Option<bool>("--clear") { Description = "Lift the flag. The conductor staffs the task again." };
+        var attended = new Command("attended", "Say that this task needs a human validator, and why. --clear lifts it when the reason stops being true.")
+            { attendedId, attendedReason, attendedClear };
+        attended.SetAction(async (parse, ct) =>
+        {
+            var reason = parse.GetValue(attendedReason);
+            var clear = parse.GetValue(attendedClear);
+            if (AttendedRefusal(parse.GetResult(attendedReason) is not null, reason, clear) is { } refusal)
+                return Output.Error(refusal.Code, refusal.Message, ExitCodes.RuleViolation);
+            return Output.Emit(parse, await HubClient.For(parse).PostAsync(
+                Routes.TaskAction(parse.GetValue(attendedId)!, "attended"),
+                new AttendedRequest(clear ? null : reason!.Trim()), MuthurJsonContext.Default.AttendedRequest, ct));
+        });
+        task.Subcommands.Add(attended);
+
         var cancelId = Id();
         var cancelReason = new Option<string?>("--reason");
         var cancel = new Command("cancel", "Cancel a task.") { cancelId, cancelReason };
@@ -121,4 +138,19 @@ public static class TaskCommands
         });
         root.Subcommands.Add(log);
     }
+
+    /// <summary>
+    /// Why `task attended` will not be sent, or null when the flags are usable. The hub cannot tell "clear" from
+    /// "set, but the reason was left out" — both arrive as a null reason — so the refusal belongs here, before a
+    /// round trip that would silently lift the flag instead. It branches on whether --reason was *supplied*, never
+    /// on whether it has content: `--reason "   " --clear` is a contradiction to refuse, not a clear to obey.
+    /// </summary>
+    public static (string Code, string Message)? AttendedRefusal(bool reasonSupplied, string? reason, bool clear) =>
+        (reasonSupplied, clear) switch
+        {
+            (true, true) => ("reason_required", "Pass --reason or --clear, not both."),
+            (true, false) when !string.IsNullOrWhiteSpace(reason) => null,
+            (false, true) => null,
+            _ => ("reason_required", "Say why this task needs a human: --reason \"<why>\", or --clear to lift it."),
+        };
 }
