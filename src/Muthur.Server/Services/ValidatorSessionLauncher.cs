@@ -1,3 +1,5 @@
+using System.Security.Cryptography;
+using System.Text;
 using Microsoft.EntityFrameworkCore;
 using Muthur.Contracts;
 using Muthur.Launch;
@@ -111,10 +113,18 @@ public sealed class ValidatorSessionLauncher(
     /// <summary>The agent name for one staffed pair: stable across retries of that pair, distinct between pairs.</summary>
     internal static string IdentityName(string task, string role)
     {
+        const int Limit = 48;                                // agent names are 1-48 chars
+        const int HashLength = 6;
         var suffix = "-" + task.ToLowerInvariant();          // "T-3" -> "-t-3"
         var head = $"conductor-{role}";
-        // Agent names are 1-48 chars; a 48-char role key would otherwise push the pair over the limit.
-        return head.Length + suffix.Length <= 48 ? head + suffix : head[..(48 - suffix.Length)] + suffix;
+        if (head.Length + suffix.Length <= Limit) return head + suffix;
+
+        // Truncating alone would map two role keys that differ only past the cut onto one name - and one name
+        // means one token, which is the very defect this method exists to fix. Keep as much of the role as
+        // fits and append a short digest of the whole of it, so distinct roles stay distinct.
+        var digest = Convert.ToHexStringLower(SHA256.HashData(Encoding.UTF8.GetBytes(role)))[..HashLength];
+        var keep = Limit - suffix.Length - HashLength - 1 - "conductor-".Length;
+        return $"conductor-{role[..keep]}-{digest}{suffix}";
     }
 
     /// <summary>An account that could not answer leaves the rotation, exactly as `muthur agent limited` does.</summary>

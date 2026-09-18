@@ -519,6 +519,29 @@ public sealed class ConductorTests : IDisposable
     }
 
     [Fact]
+    public void Two_long_role_keys_that_differ_only_past_the_cut_are_still_two_identities()
+    {
+        // Validation's own reproduction: two legal 41-char validator roles, truncated to the same head, were given
+        // one name - so one token, and the first session's 'role take' and 'validate claim' both came back
+        // unauthorized while conductor status still said two were running. The digest is of the whole role key,
+        // so a difference the cut discards still reaches the name.
+        var first = ValidatorSessionLauncher.IdentityName("T-4", new string('v', 40) + "a");
+        var second = ValidatorSessionLauncher.IdentityName("T-4", new string('v', 40) + "b");
+
+        Assert.NotEqual(first, second);
+        // The digest and its separator have to fit inside the same budget the clamp already had.
+        Assert.Equal(48, first.Length);
+        Assert.Equal(48, second.Length);
+        Assert.EndsWith("-t-4", first);
+        Assert.EndsWith("-t-4", second);
+        Assert.StartsWith("conductor-vvv", first);
+
+        // Still stable across retries of the same pair, and still keyed to the task.
+        Assert.Equal(first, ValidatorSessionLauncher.IdentityName("T-4", new string('v', 40) + "a"));
+        Assert.NotEqual(first, ValidatorSessionLauncher.IdentityName("T-5", new string('v', 40) + "a"));
+    }
+
+    [Fact]
     public async Task Two_concurrent_sessions_for_one_role_do_not_invalidate_each_others_tokens()
     {
         await SetUpAsync("win-validator");
