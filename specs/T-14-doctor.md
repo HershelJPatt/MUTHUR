@@ -312,6 +312,12 @@ muthur doctor [--offline] [--pretty]
 - Description: `Check whether this hub can do its job: ingest, outbound, projects, repositories, roles. Exit 1 if anything failed.`
 - `--offline`: `Skip the checks that touch the network; report only what the hub already knows.` Sends `?probe=false`.
 - Prints the body exactly as `Output.Emit` does.
+- **Timeout.** Probing is slower than any other command in this CLI: the hub allows each `gh` call 60
+  seconds and each git call 30, and a hub with several sources can legitimately spend minutes. `HubClient`'s
+  default is 30 seconds, and a client-side timeout comes back as `ApiResult(0, ...)` — which the CLI reports
+  as `not_running`, exit 4. Telling a founder their hub is down because a check was slow is exactly the
+  misleading answer this task exists to remove. So: `HubClient.For(parse, TimeSpan.FromSeconds(180))` when
+  probing, and the default when `--offline` is passed, where nothing touches the network.
 - Exit code: whatever `Output.Emit` returned when the result is not a success or that code is not
   `ExitCodes.Ok`; otherwise `ExitCodes.Error` (1) when the deserialized `DoctorDto.Fail > 0`, and
   `ExitCodes.Ok` otherwise. A `warn` never changes the exit code.
@@ -438,5 +444,11 @@ What a validator should see:
 - A conductor that runs `muthur doctor` before it staffs anything and refuses to staff while something is
   `fail`. This task makes that possible; it does not do it. File it.
 - Checks for the harness catalog — which CLIs are actually on PATH. Related to T-15, not this.
+- **An overall budget for a probing run, server side.** The CLI timeout above bounds what the *caller*
+  waits; nothing bounds what the *hub* spends. A hub with many sources, each allowed 60 seconds, can hold a
+  request open for minutes, and the dashboard's `Re-check` button has no timeout at all. The honest fix is a
+  budget in `DoctorService` — probes race a deadline, and a check that does not answer in time reports
+  `warn`, "did not answer within <n>s", rather than making the whole report wait. Out of scope here because
+  it changes the `IDoctorCheck` contract; file it.
 - `LastSuccessAt` is null for every source polled before this migration. It fills in on the first successful
   poll and needs no backfill.
