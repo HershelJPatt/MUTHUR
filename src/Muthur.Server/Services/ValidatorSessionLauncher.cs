@@ -14,6 +14,12 @@ namespace Muthur.Server.Services;
 /// the product cannot be driven and report blocked instead of passing.
 /// </para>
 /// </summary>
+/// <summary>No validator session ever reached a process: an unknown harness, or a CLI that is not on PATH.</summary>
+public sealed class ValidatorLaunchException(string message) : Exception(message);
+
+/// <summary>A validator session started and produced nothing — reaped at its timeout, or it crashed.</summary>
+public sealed class ValidatorSessionException(string message) : Exception(message);
+
 public sealed class ValidatorSessionLauncher(
     Ledger ledger,
     MuthurOptions options,
@@ -61,17 +67,24 @@ public sealed class ValidatorSessionLauncher(
     }
 
     /// <summary>
-    /// A harness the build does not know, or a CLI that is not on the hub's PATH, is not an exception in
-    /// <see cref="AgentLauncher"/> — it is an attempt that records why and returns. Left unexamined, the caller
-    /// takes the success path, the stall counter is cleared, and the conductor staffs the same pair every interval
-    /// forever. Everything that means "no session ran" has to leave here the same way: by throwing.
+    /// Turns a set of attempts into the one thing the conductor needs to know: did a validator do its job.
+    /// <para>
+    /// Two different faults hide behind "not successful". A harness this build cannot run never reached a process —
+    /// nothing was spent and nothing was tried. A session that started and was reaped at its timeout held the role,
+    /// consumed the founder's quota, and hung. Telling a founder to look for a missing CLI when the real problem is
+    /// hanging sessions sends them to the wrong place, so the two leave by different doors.
+    /// </para>
     /// </summary>
     internal static void EnsureSomethingRan(string taskKey, IReadOnlyList<WorkerAttempt> attempts)
     {
+        // A session that ran and voted - either way - is the system working.
         if (attempts.Any(a => a.Outcome.Success)) return;
-        throw new InvalidOperationException(attempts.Count > 0
-            ? attempts[^1].Outcome.Report
-            : $"No validator session ran for {taskKey} and no candidate reported why.");
+
+        var last = attempts.Count > 0 ? attempts[^1] : null;
+        if (last is null || !attempts.Any(a => a.Started))
+            throw new ValidatorLaunchException(last?.Outcome.Report ?? $"No candidate reported why no validator ran for {taskKey}.");
+
+        throw new ValidatorSessionException(attempts.Last(a => a.Started).Outcome.Report);
     }
 
     /// <summary>

@@ -215,21 +215,30 @@ public sealed class ConductorService(Ledger ledger, MuthurOptions options, TimeP
                 _launchFailures[key] = stall with { Announced = stall.Announced || stalling };
             }
 
+            // A session that ran and hung is not a session that never started, and the founder must not be sent
+            // looking for a missing CLI when the real fault is sessions outliving their timeout.
+            var ranButFailed = ex is not ValidatorLaunchException;
+
             await ledger.MutateAsync(Caller.Founder, m =>
             {
-                m.Record("conductor.failed", assignment.TaskId, new { role = assignment.RoleKey, error = ex.Message, attempt = stall.Failures });
+                m.Record(ranButFailed ? "conductor.session_failed" : "conductor.failed", assignment.TaskId,
+                    new { role = assignment.RoleKey, error = ex.Message, attempt = stall.Failures });
                 if (stall.StalledAt is not null && !stall.Announced)
                 {
                     // Stop rather than degrade, and say so once: the founder's only other signal is that nothing shipped.
-                    m.Record("conductor.stalled", assignment.TaskId, new { role = assignment.RoleKey, error = ex.Message });
+                    m.Record("conductor.stalled", assignment.TaskId, new { role = assignment.RoleKey, error = ex.Message, ran = ranButFailed });
                     MessageService.PostFromHub(m, Recipient.Founder, null,
-                        $"The conductor could not start a validator for {assignment.TaskKey} ({assignment.RoleKey}) " +
-                        $"{stall.Failures} times and has stopped trying: {ex.Message}" + Environment.NewLine +
+                        (ranButFailed
+                            ? $"The conductor started a validator for {assignment.TaskKey} ({assignment.RoleKey}) " +
+                              $"{stall.Failures} times and none of them finished: {ex.Message}"
+                            : $"The conductor could not start a validator for {assignment.TaskKey} ({assignment.RoleKey}) " +
+                              $"{stall.Failures} times and has stopped trying: {ex.Message}") + Environment.NewLine +
                         $"Fix the cause and it retries by itself within {options.ConductorStallProbeMinutes} " +
                         (options.ConductorStallProbeMinutes == 1 ? "minute; " : "minutes; ") +
                         "`muthur conductor off --founder && muthur conductor on --founder` retries at once.",
                         assignment.TaskId);
-                    _lastAction = $"gave up starting {assignment.RoleKey} for {assignment.TaskKey}: {ex.Message}";
+                    _lastAction = (ranButFailed ? "gave up running " : "gave up starting ")
+                        + $"{assignment.RoleKey} for {assignment.TaskKey}: {ex.Message}";
                 }
                 return Task.CompletedTask;
             }, CancellationToken.None);

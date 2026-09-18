@@ -45,7 +45,7 @@ public sealed class AgentLauncher(IProcessRunner processes, Func<string, (string
             var clock = Stopwatch.StartNew();
             if (Harnesses.Find(candidate.Harness) is not { } adapter)
             {
-                attempts.Add(new(candidate, new WorkerOutcome(false, $"Unknown harness '{candidate.Harness}'.", false), clock.Elapsed));
+                attempts.Add(new(candidate, new WorkerOutcome(false, $"Unknown harness '{candidate.Harness}'.", false), clock.Elapsed, Started: false));
                 continue;
             }
 
@@ -53,7 +53,7 @@ public sealed class AgentLauncher(IProcessRunner processes, Func<string, (string
             var invocation = adapter.Build(request);
             if (_resolve(invocation.FileName) is not { } executable)
             {
-                attempts.Add(new(candidate, new WorkerOutcome(false, $"'{invocation.FileName}' is not installed or not on PATH.", false), clock.Elapsed));
+                attempts.Add(new(candidate, new WorkerOutcome(false, $"'{invocation.FileName}' is not installed or not on PATH.", false), clock.Elapsed, Started: false));
                 continue;
             }
 

@@ -214,7 +214,7 @@ public sealed class ConductorTests : IDisposable
         await SetUpAsync("win-validator");
         await DefineAsync("win-validator");
         await TaskInValidationAsync();
-        _hub.Validators.Throw = new InvalidOperationException("No available mastermind candidate to validate T-1.");
+        _hub.Validators.Throw = new ValidatorLaunchException("No available mastermind candidate to validate T-1.");
 
         for (var pass = 0; pass < 6; pass++) await Conductor.RunPassAsync();
 
@@ -236,7 +236,7 @@ public sealed class ConductorTests : IDisposable
         await SetUpAsync("win-validator");
         await DefineAsync("win-validator");
         await TaskInValidationAsync();
-        _hub.Validators.Throw = new InvalidOperationException("No available mastermind candidate.");
+        _hub.Validators.Throw = new ValidatorLaunchException("No available mastermind candidate.");
 
         for (var pass = 0; pass < 5; pass++) await Conductor.RunPassAsync();
         Assert.Equal(3, _hub.Validators.Started.Count);
@@ -262,7 +262,7 @@ public sealed class ConductorTests : IDisposable
         await SetUpAsync("win-validator");
         await DefineAsync("win-validator");
         await TaskInValidationAsync();
-        _hub.Validators.Throw = new InvalidOperationException("still broken");
+        _hub.Validators.Throw = new ValidatorLaunchException("still broken");
 
         for (var pass = 0; pass < 5; pass++) await Conductor.RunPassAsync();
         for (var probe = 0; probe < 3; probe++)
@@ -284,7 +284,7 @@ public sealed class ConductorTests : IDisposable
         await SetUpAsync("win-validator");
         await DefineAsync("win-validator");
         await TaskInValidationAsync();
-        _hub.Validators.Throw = new InvalidOperationException("No available mastermind candidate.");
+        _hub.Validators.Throw = new ValidatorLaunchException("No available mastermind candidate.");
 
         for (var pass = 0; pass < 5; pass++) await Conductor.RunPassAsync();
         Assert.Equal(3, _hub.Validators.Started.Count);
@@ -305,7 +305,7 @@ public sealed class ConductorTests : IDisposable
         await DefineAsync("win-validator");
         await TaskInValidationAsync();
 
-        _hub.Validators.Throw = new InvalidOperationException("claude is not installed");
+        _hub.Validators.Throw = new ValidatorLaunchException("claude is not installed");
         await Conductor.RunPassAsync();
         await Conductor.RunPassAsync();
 
@@ -360,9 +360,9 @@ public sealed class ConductorTests : IDisposable
         Assert.Equal(recorded, registered.Model);
     }
 
-    private static Muthur.Launch.WorkerAttempt Attempt(string harness, bool success, string report) =>
+    private static Muthur.Launch.WorkerAttempt Attempt(string harness, bool success, string report, bool started = true) =>
         new(new Muthur.Launch.HarnessCandidate(harness, "opus", "acct"),
-            new Muthur.Launch.WorkerOutcome(success, report, RateLimited: false), TimeSpan.Zero);
+            new Muthur.Launch.WorkerOutcome(success, report, RateLimited: false), TimeSpan.Zero, started);
 
     [Fact]
     public void A_harness_the_build_cannot_run_is_a_launch_failure_not_a_quiet_success()
@@ -372,12 +372,36 @@ public sealed class ConductorTests : IDisposable
         // every interval forever - the round-2 defect, through the door the README says is closed.
         var attempts = new[]
         {
-            Attempt("gemini", false, "Unknown harness 'gemini'."),
-            Attempt("claude", false, "'claude' is not installed or not on PATH."),
+            Attempt("gemini", false, "Unknown harness 'gemini'.", started: false),
+            Attempt("claude", false, "'claude' is not installed or not on PATH.", started: false),
         };
 
-        var thrown = Assert.Throws<InvalidOperationException>(() => ValidatorSessionLauncher.EnsureSomethingRan("T-1", attempts));
+        var thrown = Assert.Throws<ValidatorLaunchException>(() => ValidatorSessionLauncher.EnsureSomethingRan("T-1", attempts));
         Assert.Equal("'claude' is not installed or not on PATH.", thrown.Message);
+    }
+
+    [Fact]
+    public void A_session_reaped_at_its_timeout_is_not_reported_as_one_that_never_started()
+    {
+        // It held the role, spent the founder's quota, and hung. Sending them to look for a missing CLI is wrong.
+        var attempts = new[] { Attempt("claude", false, "'cmd.exe' timed out after 00:01:00.") };
+
+        var thrown = Assert.Throws<ValidatorSessionException>(() => ValidatorSessionLauncher.EnsureSomethingRan("T-1", attempts));
+        Assert.Equal("'cmd.exe' timed out after 00:01:00.", thrown.Message);
+    }
+
+    [Fact]
+    public void A_harness_that_could_not_start_is_not_blamed_for_the_one_that_ran_and_hung()
+    {
+        // Codex is not installed, so Claude ran and was reaped. The fault the founder hears is the reaping.
+        var attempts = new[]
+        {
+            Attempt("codex", false, "'codex' is not installed or not on PATH.", started: false),
+            Attempt("claude", false, "'cmd.exe' timed out after 00:45:00."),
+        };
+
+        var thrown = Assert.Throws<ValidatorSessionException>(() => ValidatorSessionLauncher.EnsureSomethingRan("T-1", attempts));
+        Assert.Equal("'cmd.exe' timed out after 00:45:00.", thrown.Message);
     }
 
     [Fact]
@@ -395,7 +419,24 @@ public sealed class ConductorTests : IDisposable
 
     [Fact]
     public void No_candidate_reported_anything_at_all_is_still_a_failure() =>
-        Assert.Throws<InvalidOperationException>(() => ValidatorSessionLauncher.EnsureSomethingRan("T-1", []));
+        Assert.Throws<ValidatorLaunchException>(() => ValidatorSessionLauncher.EnsureSomethingRan("T-1", []));
+
+    [Fact]
+    public async Task A_run_that_hangs_is_recorded_as_a_session_that_failed_not_a_launch_that_did_not_happen()
+    {
+        _hub.Settings["Muthur:ConductorMaxAttempts"] = "2";
+        await SetUpAsync("win-validator");
+        await DefineAsync("win-validator");
+        await TaskInValidationAsync();
+        _hub.Validators.Throw = new ValidatorSessionException("'cmd.exe' timed out after 00:45:00.");
+
+        for (var pass = 0; pass < 4; pass++) await Conductor.RunPassAsync();
+
+        var events = await _hub.Founder().GetFromJsonAsync(Routes.Events, MuthurJsonContext.Default.IReadOnlyListEventDto);
+        Assert.Equal(2, events!.Count(e => e.Type == "conductor.session_failed"));
+        Assert.DoesNotContain(events!, e => e.Type == "conductor.failed");
+        Assert.Contains("gave up running", (await Conductor.StatusAsync()).LastAction);
+    }
 
     [Fact]
     public async Task The_status_line_carries_the_number_a_founder_waiting_on_a_probe_needs()
