@@ -149,11 +149,13 @@ public sealed class ValidatorSessionLauncher(
 
             muthur role take {assignment.RoleKey}
             muthur role brief {assignment.RoleKey}
+            muthur validate claim {assignment.TaskKey} --as {assignment.RoleKey}
 
         Then validate {assignment.TaskKey} ("{assignment.TaskTitle}"): follow the validate procedure in this
         repository, exercise the change end to end on the real product, and give a verdict with evidence.
 
         Rules that are not yours to bend:
+        - Claim the task before you start. If the claim is refused, another validator has it: release the role and stop.
         - You did not write this task and must not fix what you find. Report it.
         - A pass says you ran the product and it worked; it never says the diff looked right.
         - If the product cannot be driven unattended, the verdict is not pass: message the task's owner, say what
