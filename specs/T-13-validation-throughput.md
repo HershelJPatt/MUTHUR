@@ -335,9 +335,14 @@ internal static string IdentityName(string task, string role)
     // Truncating alone would map two role keys that differ only past the cut onto one name - and one name
     // means one token, which is the very defect this section exists to fix. Keep as much of the role as
     // fits and append a short digest of the whole of it, so distinct roles stay distinct.
+    //
+    // The separator is '.' and that is load-bearing. Agent names allow [a-z0-9._-]; role keys allow only
+    // [a-z0-9-]. A '-' separator would let a founder craft a short role key that spells out another role's
+    // truncated name - role2[..keep] + "-" + digest(role2) - and collide with it deliberately. No legal role
+    // key can contain a '.', so the dot marks a name as truncated in a way nothing else can imitate.
     var digest = Convert.ToHexStringLower(SHA256.HashData(Encoding.UTF8.GetBytes(role)))[..HashLength];
     var keep = Limit - suffix.Length - HashLength - 1 - "conductor-".Length;
-    return $"conductor-{role[..keep]}-{digest}{suffix}";
+    return $"conductor-{role[..keep]}.{digest}{suffix}";
 }
 ```
 
@@ -439,7 +444,10 @@ No new CSS classes. Everything above uses classes that already exist in `wwwroot
   neither invalidates the other's token** — assert on `IdentityName` directly for the pair-uniqueness and the
   48-character clamp; **and that two role keys long enough to be truncated, differing only after the cut,
   still produce different names** — the failure that came back from validation was exactly this: two legal
-  41-character keys collided on one identity, and the first session's token was revoked; a task whose pair is already claimed is not planned; a role whose holds are
+  41-character keys collided on one identity, and the first session's token was revoked; **and that a role key
+  crafted to spell another role's truncated name does not collide with it** — build
+  `role2[..keep] + "." + digest(role2)`, which is what a `-` separator would have made collide, and assert
+  the two names differ; a task whose pair is already claimed is not planned; a role whose holds are
   all live at capacity is not planned; a role whose slots are filled by sessions still in `_running` — started,
   not yet holding — is not planned again on the following pass; `ConductorMaxSessions` still caps the total
   below capacity.
