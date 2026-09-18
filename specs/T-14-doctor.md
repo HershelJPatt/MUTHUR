@@ -333,7 +333,11 @@ muthur doctor [--offline] [--pretty]
 - Head: title `Doctor`; sub reads `<fail> fail · <warn> warn`, or `all ok` when both are zero.
 - Body: a `.section-label` per category, then one `.role-row` per check — a `.tag` carrying the status with
   the matching class (`check-ok` / `check-warn` / `check-fail`), the subject, and the detail in a
-  `.role-holder`. `.empty` when there are no checks.
+  `.role-holder`. Where `CheckDto.LastSuccess` is not null, the `.role-holder` ends with
+  ` · last read <age>`, using `Format.Age(lastSuccess, now)` from `Components/Shared/Format.cs` — this is
+  what the injected `TimeProvider` is for, and "when did it last succeed" is half of what the task asked of
+  the ingest check. It must not be shown as a bare timestamp.
+- `.empty` when there are no checks, reading `nothing to check`.
 - A `Re-check` `.btn` inside a `.btn-row` that awaits `Doctor.RunAsync(probe: true)`, assigns the result and
   calls `StateHasChanged()`. It must not go through `ReloadNowAsync`, which would immediately discard the
   probed result.
