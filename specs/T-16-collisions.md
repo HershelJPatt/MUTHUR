@@ -315,3 +315,47 @@ exists to avoid.
   recording: a task bounced back from a failed land goes to `in_progress`, not `blocked`, so the bounce path
   has no blind spot. The gap is only a task that reached `in_progress` with a branch and then hit a founder
   request. Known edge, not a surprise.
+
+## Proof (2026-09-18)
+
+```
+dotnet build   0 warnings, 0 errors
+dotnet test    19 + 9 + 3692 + 156, all passing
+```
+
+**Unit A, end to end on a scratch hub.** Two tasks on branches conflicting on one line, first landed, second
+bounced:
+
+```
+exit 3  merge_conflict  'task/B-beta' no longer merges cleanly into 'main' (conflicts: shared.txt)
+
+task.land_failed payload:
+  branch:       "task/B-beta"
+  target:       "main"
+  files:        ["shared.txt"]
+  landedSince:  ["T-1"]
+```
+
+That is the pairing the founder asked to be countable, produced by a real conflict rather than a fixture.
+
+**Unit B, end to end, as far as a terminal can prove it.** Both tasks in `validated` on a scratch hub,
+`GET /` returns 200, and the project repository's loose-object count grows across the request — which only
+`merge-tree --write-tree` does. So `BoardPanel` → `CollisionService` → git really runs, against the state
+that the first version of this spec was skipping.
+
+**What is *not* proven, and a validator must not assume it is:** that the pill appears on screen.
+`BoardPanel` renders inside `<Virtualize>`, which emits nothing during a prerender, so `GET /` contains
+neither `pill-collision` nor the task ids. Confirmed with curl. The markup is covered by rendering
+`TaskCard` through `HtmlRenderer` with ids from a real `Collision`, and the wiring by the object-count
+evidence above — but *on-screen* needs a browser, which this orchestrator does not have. **This is the
+second task in a row whose verification needs eyes on a page** (T-14 was the first, and its restaffing loop
+is what T-30 and T-31 exist for). Worth flagging `muthur task attended` on it.
+
+**Confirmation the indicator does not fire on shared files**, which is the whole argument of this task:
+`Two_tasks_on_the_same_file_that_still_merge_are_not_a_collision` builds a 60-line file and two branches
+editing lines 2 and 58, asserts with `git diff --name-only main...<branch>` that both really touch it, then
+asserts no collision and no `pill-collision` on `/`.
+
+Unit B's specialist did not take a passing test as proof of the `validated` fix: it reverted the filter to
+the two original states, confirmed the new test fails with `The collection was empty` and nothing else in
+the class does, then restored it. The test is precisely load-bearing for that regression.
