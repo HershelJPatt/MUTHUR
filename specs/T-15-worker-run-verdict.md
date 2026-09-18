@@ -14,7 +14,10 @@ vendors, no intervention needed in any of them.
 
 It is also, for the first time, how real work got built here: **T-5 was built entirely by workers** — Unit A
 by claude, Unit B by codex, in separate worktrees, then integrated, rebuilt and verified by the
-orchestrator. That is the M6 exit criterion, re-run and passed.
+orchestrator.
+
+**One of the four criteria is established and one is not.** See *The two criteria the first version of this
+document claimed wrongly*, below. Nothing else in this verdict changed.
 
 Three things an orchestrator must know before relying on it are in **Findings**. None of them is a reason
 not to use it; two of them will bite someone who assumes otherwise.
@@ -170,3 +173,56 @@ environment problems that stopped it — for a task that has no code in it at al
 Rebuilt from `main` carrying only its two files. The lesson generalises and is worth the next orchestrator's
 attention: **a task branch is cut from the default branch, even when the work was performed on top of
 another task's branch.** What the work was *done* on and what the task *delivers* are different things.
+
+## The two criteria the first version of this document claimed wrongly
+
+`conductor-validator` failed T-15 and was right to. It did not take this document's prose for evidence: it
+read the hub's own worker-run events and found that two of T-15's four criteria were not established by the
+runs recorded here.
+
+> T-5 events 320/322 imply non-overlap (estimated Codex start 18:51:41Z after Claude completion 18:51:18Z);
+> limit event 334 sits between failed runs 333/335.
+
+Both readings are correct. The first version of this document contained the means to disprove its own claim
+— it records, in *An orchestrator error*, that the first parallel attempt launched only one worker — and
+then let the sentence "that is the M6 exit criterion, re-run and passed" stand anyway. **A false claim in a
+verdict is worse than an unmet criterion**, because the whole value of the document is that its statements
+can be relied on without re-deriving them.
+
+### Criterion: two units, in parallel, in separate worktrees — now established
+
+Re-run properly. Wall-clock, from the orchestrator's own log, UTC:
+
+```
+A_START 22:13:43.694    claude/opus   worker/t-15-unit-a-the-hub-says-it-cbdc27   126 s   $0.68
+B_START 22:15:17.931    codex         worker/t-15-unit-b-the-dashboard-sho-f413f9 105 s   (no cost reported)
+A_END   22:15:51.382
+B_END   22:17:04.620
+```
+
+**33.45 seconds of genuine overlap** — B started while A was still running, on separate worktrees, on two
+vendors, and both returned `success: true, status: done`. Adjacency in the first attempt, concurrency in
+this one; the hub's own worker-run events for these two runs carry the same shape and are the receipt a
+validator should check rather than this table.
+
+Why the first attempt failed is worth keeping, because it recurred: a shell variable does not expand inside
+the **second** backgrounded subshell in this environment, so the codex run wrote to an unwritable path and
+never started. It happened twice, hours apart, and it is an environment behaviour rather than a slip. The
+fix is to hardcode absolute paths in every subshell. `muthur worker run` did nothing wrong on either
+occasion.
+
+### Criterion: an account limited mid-run — NOT established, and I cannot establish it
+
+What was actually done: `claude-subscription` was marked limited and a run was *then* started, so the
+candidate was filtered out of `WorkerCommands.RunAsync`'s list **before any attempt**. That proves the
+filter. It does not prove what the criterion asks for.
+
+What the criterion asks for is an account going out of quota *while a worker is running*, so
+`WorkerLauncher`'s `onRateLimited` callback fires and the launcher falls through to the next candidate
+inside a single invocation. That path is driven by a harness adapter interpreting a real rate-limit response
+from a vendor. Forcing one means genuinely exhausting a subscription; it is not reproducible for a validator
+either.
+
+This is recorded as unproven rather than quietly redefined, and the scope question — accept pre-run
+filtering as the evidence, cover the path with a fake `IProcessRunner`, or leave it open — is with the
+founder as request #9. **Until that is answered, treat mid-run fallthrough as untested.**
