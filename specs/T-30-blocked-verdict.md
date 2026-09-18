@@ -215,7 +215,26 @@ validator to send a message and release the role. They must tell it to record th
 - `kit/briefs/validator.md` line 64 says failing is cheap and normal. Add that blocking is too, and that a
   validator that cannot run must never pass.
 
-Do not restructure either document. These are edits of a few lines each, in the voice already there.
+**And this project's own brief, which is a different document.** T-12 installed the kit into MUTHUR itself, so
+`briefs/validator.md` at the repository root is the brief this organization's validators actually read — it is
+longer and more specific than the `kit/` template, and it carries its own copy of the message-and-release
+instruction, in the paragraph about the dashboard and browsers. That paragraph is the one the five looping
+validators followed. Update it and the "failing is cheap" list the same way.
+
+Editing `kit/briefs/validator.md` alone changes nothing for anyone: the kit is a template, and the installed
+copy is what this project uses.
+
+**And the brief on a running hub is a third copy.** `role brief <key>` serves what is stored in the database,
+not what is on disk, so a running organization keeps reading the old text until someone re-serves it:
+
+```
+muthur role define validator --brief-file briefs/validator.md --validator --founder
+```
+
+That is not something this task can do to the live hub — it is the founder's to run, and it belongs in the
+task's hand-over, not in a code change. Say it out loud rather than assuming the file edit is the end of it.
+
+Do not restructure any of these documents. These are edits of a few lines each, in the voice already there.
 
 **And one line of CSS.** `TaskCard.razor` and `TaskDetail.razor` render `class="pill pill-verdict-@v.Verdict"`,
 and `wwwroot/app.css` defines `pill-verdict-yes`, `-no` and `-pending` but would have no `-blocked` — so the
@@ -254,7 +273,7 @@ visible. Add it beside the others, amber, matching the existing `.pill-blocked` 
   still behave and still say what they said before.
 
 ### Unit C — the validator procedure
-- **Files:** `kit/core/validate.md`, `kit/briefs/validator.md`, `src/Muthur.Server/wwwroot/app.css`.
+- **Files:** `kit/core/validate.md`, `kit/briefs/validator.md`, `briefs/validator.md`, `src/Muthur.Server/wwwroot/app.css`.
 - **Does:** Part 3.
 - **Depends on:** nothing, but its wording must match the CLI Unit A builds.
 - **Acceptance:** `dotnet build` and `dotnet test` clean (neither file is compiled; the check is that
