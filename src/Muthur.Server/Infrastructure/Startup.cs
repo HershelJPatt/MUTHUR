@@ -67,6 +67,9 @@ public static class Startup
         builder.Services.AddSingleton<IPullRequestOpener, GhPullRequestOpener>();
         builder.Services.AddSingleton<ITaskLander, GitLander>();
         builder.Services.AddSingleton<DoctorService>();
+        builder.Services.AddSingleton<IDoctorCheck, DoctorProjectCheck>();
+        builder.Services.AddSingleton<IDoctorCheck, DoctorRepoCheck>();
+        builder.Services.AddSingleton<IDoctorCheck, DoctorRoleCheck>();
         if (options.BackgroundServices)
         {
             builder.Services.AddHostedService<LeaseSweeper>();
