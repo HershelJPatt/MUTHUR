@@ -61,3 +61,17 @@ public sealed class KitWriteModeTests : IDisposable
         Assert.Equal("updated", KitCommands.WriteKitFile(Path("procedure.md"), "two", null));
     }
 }
+
+/// <summary>
+/// A brief's filename is its role key, and the hub only infers the validator flag from a '-validator'
+/// suffix. A starter brief named `validator` therefore has to ask for the flag explicitly.
+/// </summary>
+public sealed class KitRoleCommandTests
+{
+    [Theory]
+    [InlineData("briefs/validator.md", true, "muthur role define validator --brief-file briefs/validator.md --validator --founder")]
+    [InlineData("briefs/web-validator.md", true, "muthur role define web-validator --brief-file briefs/web-validator.md --founder")]
+    [InlineData("briefs/comms-oncall.md", false, "muthur role define comms-oncall --brief-file briefs/comms-oncall.md --founder")]
+    public void The_printed_command_creates_the_role_the_brief_describes(string brief, bool validator, string expected) =>
+        Assert.Equal(expected, KitCommands.RoleDefineCommand(brief, validator));
+}

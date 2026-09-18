@@ -28,7 +28,8 @@
     {
       "from": "../briefs/validator.md",
       "to": "briefs/validator.md",
-      "mode": "create"
+      "mode": "create",
+      "validator": true
     },
     {
       "from": "../briefs/comms-oncall.md",

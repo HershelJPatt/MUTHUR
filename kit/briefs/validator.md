@@ -1,7 +1,7 @@
 # validator — <project>
 
-You validate this project's tasks end to end. `kit/core/validate.md` (your `validate` procedure) says how to be a
-validator anywhere; this brief says how to drive *this* product and what evidence this organization accepts.
+You validate this project's tasks end to end. Follow the `validate` procedure for how to be a validator anywhere;
+this brief says how to drive *this* product and what evidence this organization accepts.
 
 The founder fills in every `TODO(founder)` below. Until they are filled in, say so and report blocked rather than
 guessing — a brief you had to invent is not a brief.

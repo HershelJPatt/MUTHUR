@@ -66,7 +66,7 @@ public static partial class KitCommands
             json.WriteStartObject();
             json.WriteString("harness", harness);
             json.WriteString("repo", repo);
-            var briefs = new List<string>();
+            var briefs = new List<(string Path, bool Validator)>();
             json.WriteStartArray("files");
             foreach (var file in manifest.RootElement.GetProperty("files").EnumerateArray())
             {
@@ -76,7 +76,7 @@ public static partial class KitCommands
                 var content = Expand(File.ReadAllText(from), kitDir);
                 var status = WriteKitFile(Path.Combine(repo, to), content, mode);
                 if (to.StartsWith(BriefDirectory, StringComparison.Ordinal) && to.EndsWith(".md", StringComparison.Ordinal))
-                    briefs.Add(to);
+                    briefs.Add((to, file.TryGetProperty("validator", out var v) && v.GetBoolean()));
                 json.WriteStartObject();
                 json.WriteString("path", to);
                 json.WriteString("status", status);
@@ -118,13 +118,13 @@ public static partial class KitCommands
 
             // A brief on disk does nothing until a role exists, and only the founder may create one.
             json.WriteStartArray("roles");
-            foreach (var brief in briefs.Where(b => File.Exists(Path.Combine(repo, b))))
+            foreach (var (brief, validator) in briefs.Where(b => File.Exists(Path.Combine(repo, b.Path))))
             {
-                var role = Path.GetFileNameWithoutExtension(brief);
                 json.WriteStartObject();
-                json.WriteString("role", role);
+                json.WriteString("role", Path.GetFileNameWithoutExtension(brief));
                 json.WriteString("brief", brief);
-                json.WriteString("define", $"muthur role define {role} --brief-file {brief} --founder");
+                json.WriteBoolean("validator", validator);
+                json.WriteString("define", RoleDefineCommand(brief, validator));
                 json.WriteEndObject();
             }
             json.WriteEndArray();
@@ -138,6 +138,18 @@ public static partial class KitCommands
 
     /// <summary>Where starter briefs land in the target repository; their filenames are the role keys.</summary>
     internal const string BriefDirectory = "briefs/";
+
+    /// <summary>
+    /// The command that turns a brief into a role. The hub infers the validator flag from a '-validator' suffix
+    /// (<c>RoleService</c>), so a brief named otherwise has to ask for the flag itself or the founder ends up with
+    /// a validator role that says it is not one.
+    /// </summary>
+    internal static string RoleDefineCommand(string brief, bool validator)
+    {
+        var role = Path.GetFileNameWithoutExtension(brief);
+        var flag = validator && !role.EndsWith("-validator", StringComparison.Ordinal) ? " --validator" : "";
+        return $"muthur role define {role} --brief-file {brief}{flag} --founder";
+    }
 
     /// <summary>
     /// Applies one manifest entry. <c>create</c> exists because a brief stops being MUTHUR's the moment the
