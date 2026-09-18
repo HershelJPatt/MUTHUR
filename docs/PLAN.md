@@ -55,7 +55,7 @@ work today than it did when it was written; the milestones are cited by subject 
 **Differences from the plan below:** identity is `MUTHUR_AGENT` + a per-agent token file (environment variables do not
 survive between an agent's shell calls, so a bare `MUTHUR_TOKEN` was not enough); timestamps are unix milliseconds;
 `kit install` arrived in M2, not M6; validation throughput, not implementation, is the bottleneck — more than one
-validator session is the first thing to add when a project gets busy. Validation throughput did become the bottleneck:
+validator session is the first thing to add when a project gets busy. And it did:
 `RoleHold` is keyed on the role, so one holder blocks every task needing it, and the conductor skips a task whose
 required role is held at all. Decided, and being built rather than landed as this is written: a validator role carries
 a concurrency limit, the exclusivity moves off the role and onto a claim on the `(task, role)` pair, and the on-call
