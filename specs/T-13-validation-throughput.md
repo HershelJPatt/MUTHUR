@@ -451,8 +451,27 @@ Then, as the founder and two registered agents:
   `oldestWaitingSince` that matches when those tasks were marked implemented.
 - `muthur validate list --role win-validator` as the second validator does not list the task the first
   claimed; `--all` lists it.
-- On the dashboard, the Board page's validation-queue panel shows the same numbers live, and the header's
-  `validating` stat carries the oldest wait beside it.
+### The dashboard, without a browser
+
+**No browser is required to validate this task, and none should be used.** The dashboard is Blazor Server
+and prerenders, so the panel and the header stat are both in the HTML that `GET /` returns:
+
+```
+(Invoke-WebRequest "$env:MUTHUR_URL/" -UseBasicParsing).Content |
+    Select-String -Pattern 'Validation queue', 'win-validator', 'waiting', 'oldest'
+```
+
+With the two tasks above waiting, that response contains `Validation queue`, a `win-validator` row, its
+`2/2` capacity tag, `2 waiting`, and the header's `validating` stat followed by the oldest wait. On a hub
+with no validator roles it contains `No validator roles defined.` instead.
+
+Note that the `·` separators are HTML-encoded in the response, so match on the words either side of them
+rather than on the separator.
+
+This section is written this way because the first version of it asked for the numbers to be checked "live
+on the dashboard", and conductor-started validators have no browser. They correctly refused, repeatedly. A
+spec that cannot be validated by the sessions this organization actually starts is a defect in the spec —
+the second time I have made it, and the reason it is spelled out at length here.
 - Turn the conductor on with two tasks waiting and capacity 2: `muthur conductor status` shows two sessions
   running rather than one, and `lastAction` names the second task.
 
