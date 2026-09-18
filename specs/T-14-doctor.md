@@ -283,9 +283,23 @@ Task ProbeAsync(string location, CancellationToken ct = default);
 Task ProbeAsync(string address, CancellationToken ct = default);
 ```
 
-- `FileChannel`: `Directory.CreateDirectory(Path.GetDirectoryName(address)!)`; on `IOException`,
-  `UnauthorizedAccessException` or `NotSupportedException` →
-  `throw new ChannelException("the directory cannot be created or written")`.
+- `FileChannel`: the probe must establish what a send actually needs — that the **address itself** can be
+  appended to as a file. Ensuring its parent directory exists does not, and a target whose address is an
+  existing *directory* passes that check and then fails delivery with access denied. So:
+  1. `Directory.CreateDirectory(Path.GetDirectoryName(address)!)` as before, for the parent.
+  2. `if (Directory.Exists(address)) throw new ChannelException("the address is a directory, not a file")`.
+  3. Otherwise prove it is writable the way a send does: note whether `File.Exists(address)`, open
+     `new FileStream(address, FileMode.Append, FileAccess.Write, FileShare.ReadWrite)`, dispose it without
+     writing a byte, and — if it did not exist before — delete it again, swallowing any failure to delete
+     (another process may legitimately have created it in between). A probe leaves no message and should
+     leave no file.
+
+  On `IOException`, `UnauthorizedAccessException`, `NotSupportedException` or `ArgumentException` →
+  `throw new ChannelException("the address cannot be written")`.
+
+  `FileChannel.Validate` also gains the directory check, so such a target is refused at `muthur out target`
+  rather than accepted and then probed as healthy:
+  `if (Directory.Exists(address)) throw Fail.Rule("invalid_address", "A file target needs a path to a file, not a directory.")`
 - `DiscordWebhookChannel`: `GET` the webhook URL — a webhook URL answers with the webhook's own metadata
   and posts nothing. Not successful →
   `throw new ChannelException($"Discord answered HTTP {(int)response.StatusCode}")`.
@@ -383,6 +397,10 @@ below `<HarnessPanel />`.
   polled (`warn`); a `discord:` source with no token configured (a `secret` `fail` whose report contains
   nothing but the variable's name); and an outbound target whose channel does not exist (`fail`). At least
   one test asserts that no `CheckDto` in a report contains a configured target's address.
+  **And the case that failed validation:** a `file` target whose address is an existing directory is refused
+  by `out target` with `invalid_address`, and a target whose address has become a directory since it was
+  added probes as `fail`, not `ok`. Doctor reporting healthy about a destination a send cannot write to is
+  the exact silent misconfiguration this task exists to surface — produced by this task.
 
 ### Unit C — project, repository and role checks
 - **Files:** new `src/Muthur.Server/Services/DoctorProjectCheck.cs`, `DoctorRepoCheck.cs` and
