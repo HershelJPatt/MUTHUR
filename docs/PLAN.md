@@ -26,18 +26,19 @@ work today than it did when it was written; the milestones are cited by subject 
 
 **What the process itself taught (all found by the independent validator or by watching the organization run, none by the builders' tests):**
 
-- T-3 failed validation: a client waiting in `msg inbox --wait` kept the server alive ~30 s after `down`, database locked.
-  Every idle agent sits in that call, so it would have hit every restart. Fixed by tying the wait to `ApplicationStopping`.
-- The live hub was stopped twice by a build-under-test CLI run without its scratch environment. T-8 made `down` refuse
-  unless it can positively establish the running hub is its own installation; its first version failed validation too
-  (a CLI with no bundled server skipped the guard).
+- The long-poll inbox failed validation: a client waiting in `msg inbox --wait` kept the server alive ~30 s after `down`,
+  database locked. Every idle agent sits in that call, so it would have hit every restart. Fixed by tying the wait to
+  `ApplicationStopping`.
+- The live hub was stopped twice by a build-under-test CLI run without its scratch environment. `down` now refuses
+  unless it can positively establish the running hub is its own installation; the first version of that guard failed
+  validation too (a CLI with no bundled server skipped it).
 - The Codex sandbox keeps `.git` read-only, so its workers cannot commit; `worker run` commits on their behalf and takes
   success from the report's `STATUS:` line rather than the process exit code.
 - A validator that correctly refuses is invisible unless refusing is a verdict. A spec demanded a live browser that a
   conductor-started session does not have; five sessions in twenty-eight minutes each did what the brief says — message
-  the owner, release the role — and the conductor refilled a role nobody held, which is its whole job. Neither cap saw
-  it: the launch succeeded and no verdict was written. `blocked` is a verdict now, so the task leaves `validating`
-  instead of being refilled.
+  the owner, release the role — and the conductor, finding a role nobody held on a task in `validating`, started
+  another. Neither cap saw it: the launch succeeded and no verdict was written. `blocked` is a verdict now, so the task
+  leaves `validating` instead of being refilled.
 - A spec that cannot be validated by the sessions the organization actually starts is a defect in the spec, not in the
   validator. The same browser requirement was written twice, by the same orchestrator, after the first one had been
   diagnosed. The dashboard is Blazor Server and prerenders, so the honest check is an HTTP GET — except for cards inside
@@ -54,11 +55,11 @@ work today than it did when it was written; the milestones are cited by subject 
 **Differences from the plan below:** identity is `MUTHUR_AGENT` + a per-agent token file (environment variables do not
 survive between an agent's shell calls, so a bare `MUTHUR_TOKEN` was not enough); timestamps are unix milliseconds;
 `kit install` arrived in M2, not M6; validation throughput, not implementation, is the bottleneck — more than one
-validator session is the first thing to add when a project gets busy. That last one arrived: `RoleHold` is keyed on the
-role, so one holder blocks every task needing it, and the conductor skips a task whose required role is held at all.
-Decided, and being built rather than landed as this is written: a validator role carries a concurrency limit, the
-exclusivity moves off the role and onto a claim on the `(task, role)` pair, and the on-call roles stay single-holder —
-a validator role is a skill, not a seat, but "who is on call" must have exactly one answer.
+validator session is the first thing to add when a project gets busy. Validation throughput did become the bottleneck:
+`RoleHold` is keyed on the role, so one holder blocks every task needing it, and the conductor skips a task whose
+required role is held at all. Decided, and being built rather than landed as this is written: a validator role carries
+a concurrency limit, the exclusivity moves off the role and onto a claim on the `(task, role)` pair, and the on-call
+roles stay single-holder — a validator role is a skill, not a seat, but "who is on call" must have exactly one answer.
 
 ## 1. Constraints and what they force
 
@@ -270,11 +271,11 @@ M9 then is: bind non-loopback + TLS, swap provider, run as a service/container, 
 
 Each ends with something used for real. **Project #1 is this repo** — the hub is built by the process it implements, which keeps company-repo policy out of the way until the loop is proven.
 
-That has happened and is no longer an intention: tasks are specified, built by delegated implementers on more than one
-vendor's harness, validated by sessions that did not write the code — the conductor prefers a provider other than the
-author's — and landed by the hub rather than by anyone's judgment. The stronger claim is that the loop has caught its
-own failures: the conductor staffs validation with nobody watching, and the findings in §0 came out of the organization
-running against the repository that produces it rather than out of anybody's test suite.
+It has. Tasks are specified, built by delegated implementers on more than one vendor's harness, validated by sessions
+that did not write the code, and landed by the hub rather than by anyone's judgment — the conductor prefers a provider
+other than the author's. The stronger claim is that the loop has caught its own failures: the conductor staffs
+validation with nobody watching, and the findings in §0 came out of the organization running against the repository
+that produces it rather than out of anybody's test suite.
 
 | # | Deliverable | Done when |
 |---|---|---|
