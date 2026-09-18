@@ -137,6 +137,26 @@ when the output is non-empty. Any git failure means "not in a repository": `Desc
 `IsDirty` returns false. **Never let a git failure stop a role from being defined** — provenance is
 evidence, not a gate.
 
+**An untracked brief matches no commit either, and must be refused the same way.** A file inside a
+repository that was never `git add`ed returns nothing from `status --untracked-files=no`, so `IsDirty` is
+false and it sails through — while `Describe` still prints `Read x.md at main (abc1234)`, naming a commit
+that does not contain that file. **A provenance line that names the wrong commit is worse than none**, and
+this task exists because a silently wrong answer cost forty minutes. So:
+
+```csharp
+/// <summary>True when git cannot name a commit containing this file: modified, staged, or never added.</summary>
+public static bool IsDirty(string path);
+```
+
+`IsDirty` is true when *either* `status --porcelain --untracked-files=no -- <file>` is non-empty **or**
+`ls-files --error-unmatch -- <file>` fails. The refusal message covers both cases without naming which:
+`"<file> has no committed version, so the brief you install will match no commit. Commit it, or pass the
+text you mean."` Keep `--untracked-files=no` on the status call — it is what stops `bin/` and `obj/` failing
+every run, and the `ls-files` probe is what closes the gap it leaves.
+
+Pass `--literal-pathspecs` on both git calls. A brief filename containing `*`, `[` or `?` would otherwise be
+read as a glob and silently match the wrong thing — the same class of quiet wrong answer.
+
 In `role define`:
 
 - If `IsDirty(file)` → refuse before sending anything:
