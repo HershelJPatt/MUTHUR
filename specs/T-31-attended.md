@@ -120,8 +120,17 @@ Inside `ledger.MutateAsync`, after `LoadAsync` and `RequireOwnerOrFounder(task, 
 - `task.UpdatedAt = m.Now` whenever the value changes.
 - Return `task.ToDto(...)` the way the neighbouring methods do.
 
-There is no state rule: a task may be marked attended in any state. A backlog task whose owner already knows
-it will need a browser is exactly the case worth recording early.
+There is no state rule: a task may be marked attended in any state. A backlog task whose author already
+knows it will need a browser is exactly the case worth recording early — so use `CancelAsync`'s precedent
+rather than a bare `RequireOwnerOrFounder`:
+
+```csharp
+if (task.OwnerAgentId is not null) RequireOwnerOrFounder(task, caller); else caller.RequireIdentified();
+```
+
+An owned task is its owner's (or the founder's) to flag; an unowned backlog task may be flagged by any
+registered agent, because otherwise the case above would need the founder for something reversible and
+cheap.
 
 ### The conductor does not staff it
 
@@ -179,7 +188,11 @@ No new CSS. `pill-blocked` is the amber "a human must act" token and this is the
 - **Depends on:** nothing. T-30 is landed on `main`.
 - **Acceptance:** `dotnet build` and `dotnet test` clean, plus:
   1. Setting the flag with a reason records `task.attended`, and `task show` carries the reason.
-  2. Setting it with no reason is refused 422 `reason_required`; the task is unchanged.
+  2. The refusal for a missing reason lives in the **CLI**, not the hub, because `--clear` is exactly a
+     request with a null reason and the two cannot both be true on the wire. Cover it in
+     `tests/Muthur.Cli.Tests`: no flag and both flags each print the spec's message and exit 2 without
+     calling the hub. Add a server test that a reason-less POST *is* the clear — an unattended task is left
+     byte-identical and nothing is recorded.
   3. `--clear` lifts it, records `task.attended_cleared`, and the conductor plans it again.
   4. **The conductor does not plan an attended task**, and does plan an otherwise identical one that is not
      attended — assert both in one test so the flag is what differs. Mutation-check it: with the `continue`
@@ -209,8 +222,12 @@ $env:MUTHUR_HOME = "$PWD/artifacts/t31-home"; $env:MUTHUR_URL = "http://127.0.0.
 With a project requiring a validator, a task implemented and waiting in `validating`:
 
 - `muthur task attended T-n --reason "the spec needs a live browser"` is accepted; `muthur task show T-n`
-  carries the reason; `GET /` contains `needs a human` on that task's card; `GET /tasks/T-n` contains the
-  reason in full.
+  carries the reason; `GET /tasks/T-n` contains the reason in full.
+- **Do not look for the card's pill in `GET /`.** The board's cards are inside `<Virtualize>`
+  (`BoardPanel.razor`), which renders nothing server-side — a plain GET of `/` does not contain a task's
+  title either, for any task. That is pre-existing and not this task's to change. The pill is covered by a
+  test that renders `TaskCard` through `HtmlRenderer`, and it is really there in a browser once Blazor
+  connects. The detail page is not virtualized, so `GET /tasks/T-n` is the honest HTTP check.
 - `muthur task attended T-n` with neither flag → `reason_required`, exit 2, and the hub was not called.
 - Turn the conductor on with only that task waiting: `muthur conductor status` shows it staffing nothing,
   and no `conductor.staffing` event appears for it. Then `muthur task attended T-n --clear` and confirm the
