@@ -172,6 +172,29 @@ public sealed class ConductorTests : IDisposable
     }
 
     [Fact]
+    public async Task Sessions_on_their_way_to_a_role_occupy_its_slots_on_the_following_pass()
+    {
+        // A session that has started but has not yet taken the role holds nothing the database can see. Counting
+        // only the holds would plan straight over it on the next tick, and the extra session would start, fail to
+        // take the role, and produce nothing.
+        _hub.Settings["Muthur:ConductorMaxSessions"] = "5";   // so what says no on the second pass is the capacity
+        await SetUpAsync("win-validator");
+        await DefineAsync(2, "win-validator");
+        _hub.Validators.Block = true;   // the two sessions are still on their way when the next pass runs
+        var owner = await _hub.RegisterAgentAsync("owner");
+        await ValidatingTaskAsync(owner, "Urgent", priority: 3);
+        await ValidatingTaskAsync(owner, "Next", priority: 2);
+        await ValidatingTaskAsync(owner, "Can wait", priority: 1);
+
+        Assert.Equal(2, await Conductor.RunPassAsync());
+
+        Assert.Empty(await Conductor.PlanAsync());
+        Assert.Equal(0, await Conductor.RunPassAsync());
+
+        _hub.Validators.Finish(2);
+    }
+
+    [Fact]
     public async Task The_session_budget_still_caps_a_role_with_slots_to_spare()
     {
         _hub.Settings["Muthur:ConductorMaxSessions"] = "1";

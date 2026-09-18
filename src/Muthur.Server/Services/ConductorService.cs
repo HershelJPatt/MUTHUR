@@ -124,6 +124,16 @@ public sealed class ConductorService(Ledger ledger, MuthurOptions options, TimeP
                 .ToDictionaryAsync(x => x.Role, x => x.Count, ct);
             var capacities = await db.Roles.Where(r => r.IsValidator).ToDictionaryAsync(r => r.Key, r => r.Holders, ct);
 
+            // A slot is taken by a hold or by a session already on its way to one. A session that has started but
+            // has not yet taken the role holds nothing yet, and without this the next pass plans straight over it:
+            // the extras start, fail to take the role, and produce nothing. Read once, never per candidate.
+            lock (_running)
+                foreach (var session in _running)
+                {
+                    var role = session[(session.IndexOf('/') + 1)..];   // keys are "T-n/role"
+                    liveHolders[role] = liveHolders.GetValueOrDefault(role) + 1;
+                }
+
             // A pair a validator has already taken is not the conductor's to staff.
             var claimed = pending.Where(v => LeasePolicy.IsClaimLive(v, now))
                 .Select(v => (v.TaskId, v.ValidatorKey)).ToHashSet();
