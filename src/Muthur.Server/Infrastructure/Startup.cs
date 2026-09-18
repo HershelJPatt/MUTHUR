@@ -51,6 +51,7 @@ public static class Startup
         builder.Services.AddSingleton<LifecycleService>();
         builder.Services.AddSingleton<MessageService>();
         builder.Services.AddSingleton<RequestService>();
+        builder.Services.AddSingleton<FounderAttention>();
         builder.Services.AddSingleton<HarnessService>();
         builder.Services.AddSingleton<InboundService>();
         builder.Services.AddSingleton<OutboundService>();
