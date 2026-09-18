@@ -46,6 +46,34 @@ public sealed class ConductorTests : IDisposable
             (await _hub.Founder().PutAsJsonAsync(Routes.Roles, new DefineRoleRequest(role, $"# {role}\nDrive it."))).EnsureSuccessStatusCode();
     }
 
+    /// <summary>
+    /// A pass starts its sessions and returns; what a session records, it records afterwards. So wait on the thing a
+    /// finished session is observable by - the conductor no longer counting it as running - never on a clock.
+    /// </summary>
+    private async Task SettledAsync()
+    {
+        var deadline = Environment.TickCount64 + 30_000;
+        while (Conductor.RunningCount > 0 && Environment.TickCount64 < deadline) await Task.Yield();
+        Assert.Equal(0, Conductor.RunningCount);
+    }
+
+    private async Task<IReadOnlyList<EventDto>> EventsAsync() =>
+        (await _hub.Founder().GetFromJsonAsync(Routes.Events, MuthurJsonContext.Default.IReadOnlyListEventDto))!;
+
+    private async Task<IReadOnlyList<MessageDto>> FounderMessagesAsync() =>
+        (await _hub.Founder().GetFromJsonAsync($"{Routes.Messages}?founder=true", MuthurJsonContext.Default.IReadOnlyListMessageDto))!;
+
+    /// <summary>A session that does what the conductor hopes for: takes the role, records a verdict, releases it.</summary>
+    private sealed class VerdictSession(HttpClient validator) : IValidatorSessionLauncher
+    {
+        public async Task StartAsync(ConductorAssignment assignment, CancellationToken ct = default)
+        {
+            (await validator.PostAsync(Routes.RoleAction(assignment.RoleKey, "take"), null, ct)).EnsureSuccessStatusCode();
+            (await validator.PostActionAsync(assignment.TaskKey, "fail", new VerdictRequest(assignment.RoleKey, "the export still 500s"))).EnsureSuccessStatusCode();
+            (await validator.PostAsync(Routes.RoleAction(assignment.RoleKey, "release"), null, ct)).EnsureSuccessStatusCode();
+        }
+    }
+
     [Fact]
     public async Task A_task_waiting_on_a_role_nobody_holds_gets_a_session()
     {
@@ -54,6 +82,7 @@ public sealed class ConductorTests : IDisposable
         var id = await TaskInValidationAsync();
 
         Assert.Equal(1, await Conductor.RunPassAsync());
+        await SettledAsync();
 
         var started = Assert.Single(_hub.Validators.Started);
         Assert.Equal(id, started.TaskKey);
@@ -87,6 +116,7 @@ public sealed class ConductorTests : IDisposable
         _hub.Clock.Advance(TimeSpan.FromMinutes(31));
 
         Assert.Equal(1, await Conductor.RunPassAsync());
+        await SettledAsync();
     }
 
     [Fact]
@@ -120,6 +150,7 @@ public sealed class ConductorTests : IDisposable
         Assert.Single(_hub.Validators.Started);
 
         _hub.Validators.Finish();
+        await SettledAsync();
     }
 
     [Fact]
@@ -198,6 +229,7 @@ public sealed class ConductorTests : IDisposable
 
         Assert.Null((await Conductor.StatusAsync()).LastPass);
         await Conductor.RunPassAsync();
+        await SettledAsync();
 
         var status = await Conductor.StatusAsync();
         Assert.Equal(_hub.Clock.GetUtcNow(), status.LastPass);
@@ -216,14 +248,24 @@ public sealed class ConductorTests : IDisposable
         await TaskInValidationAsync();
         _hub.Validators.Throw = new ValidatorLaunchException("No available mastermind candidate to validate T-1.");
 
-        for (var pass = 0; pass < 6; pass++) await Conductor.RunPassAsync();
+        for (var pass = 0; pass < 6; pass++)
+        {
+            await Conductor.RunPassAsync();
+            await SettledAsync();
+        }
 
         Assert.Equal(3, _hub.Validators.Started.Count);
 
-        var events = await _hub.Founder().GetFromJsonAsync(Routes.Events, MuthurJsonContext.Default.IReadOnlyListEventDto);
-        Assert.Equal(3, events!.Count(e => e.Type == "conductor.failed"));
-        Assert.Single(events!, e => e.Type == "conductor.stalled");
+        var events = await EventsAsync();
+        Assert.Equal(3, events.Count(e => e.Type == "conductor.failed"));
+        Assert.Single(events, e => e.Type == "conductor.stalled");
         Assert.Contains("gave up starting", (await Conductor.StatusAsync()).LastAction);
+
+        // A third kind of nothing joined this one; what the founder is told about this kind did not change.
+        Assert.StartsWith(
+            "The conductor could not start a validator for T-1 (win-validator) 3 times and has stopped trying: " +
+            "No available mastermind candidate to validate T-1.",
+            Assert.Single(await FounderMessagesAsync()).Body);
     }
 
     [Fact]
@@ -238,7 +280,11 @@ public sealed class ConductorTests : IDisposable
         await TaskInValidationAsync();
         _hub.Validators.Throw = new ValidatorLaunchException("No available mastermind candidate.");
 
-        for (var pass = 0; pass < 5; pass++) await Conductor.RunPassAsync();
+        for (var pass = 0; pass < 5; pass++)
+        {
+            await Conductor.RunPassAsync();
+            await SettledAsync();
+        }
         Assert.Equal(3, _hub.Validators.Started.Count);
 
         // Still stalled a minute later.
@@ -250,6 +296,7 @@ public sealed class ConductorTests : IDisposable
         _hub.Validators.Throw = null;
         _hub.Clock.Advance(TimeSpan.FromMinutes(31));
         await Conductor.RunPassAsync();
+        await SettledAsync();
 
         Assert.Equal(4, _hub.Validators.Started.Count);
     }
@@ -264,17 +311,21 @@ public sealed class ConductorTests : IDisposable
         await TaskInValidationAsync();
         _hub.Validators.Throw = new ValidatorLaunchException("still broken");
 
-        for (var pass = 0; pass < 5; pass++) await Conductor.RunPassAsync();
+        for (var pass = 0; pass < 5; pass++)
+        {
+            await Conductor.RunPassAsync();
+            await SettledAsync();
+        }
         for (var probe = 0; probe < 3; probe++)
         {
             _hub.Clock.Advance(TimeSpan.FromMinutes(31));
             await Conductor.RunPassAsync();
+            await SettledAsync();
         }
 
         Assert.Equal(6, _hub.Validators.Started.Count);   // 3 before the stall, then one probe per cooldown
 
-        var events = await _hub.Founder().GetFromJsonAsync(Routes.Events, MuthurJsonContext.Default.IReadOnlyListEventDto);
-        Assert.Single(events!, e => e.Type == "conductor.stalled");   // the founder is told once, not every cooldown
+        Assert.Single(await EventsAsync(), e => e.Type == "conductor.stalled");   // told once, not every cooldown
     }
 
     [Fact]
@@ -286,7 +337,11 @@ public sealed class ConductorTests : IDisposable
         await TaskInValidationAsync();
         _hub.Validators.Throw = new ValidatorLaunchException("No available mastermind candidate.");
 
-        for (var pass = 0; pass < 5; pass++) await Conductor.RunPassAsync();
+        for (var pass = 0; pass < 5; pass++)
+        {
+            await Conductor.RunPassAsync();
+            await SettledAsync();
+        }
         Assert.Equal(3, _hub.Validators.Started.Count);
 
         _hub.Validators.Throw = null;
@@ -295,27 +350,118 @@ public sealed class ConductorTests : IDisposable
         (await founder.PostAsJsonAsync(Routes.Conductor, new ConductorSwitch(true))).EnsureSuccessStatusCode();
 
         Assert.Equal(1, await Conductor.RunPassAsync());
+        await SettledAsync();
     }
 
     [Fact]
-    public async Task A_session_that_starts_again_clears_the_failures_behind_it()
+    public async Task A_session_that_reaches_a_verdict_clears_the_failures_behind_it()
+    {
+        // Reaching a verdict is the only thing that counts as the pair working, so it is the only thing that clears
+        // the count. A pair that recovers must not be left one strike from a stall.
+        _hub.Settings["Muthur:ConductorMaxAttempts"] = "3";
+        await SetUpAsync("win-validator");
+        await DefineAsync("win-validator");
+        var (owner, id) = await OwnedTaskInValidationAsync();
+        var checker = await _hub.RegisterAgentAsync("checker");
+
+        _hub.Validators.Throw = new ValidatorLaunchException("claude is not installed");
+        await Conductor.RunPassAsync();
+        await SettledAsync();
+        await Conductor.RunPassAsync();
+        await SettledAsync();
+
+        _hub.Validators.Throw = null;         // the harness came back, and this session votes
+        _hub.Validators.Delegate = new VerdictSession(checker);
+        await Conductor.RunPassAsync();
+        await SettledAsync();
+        _hub.Validators.Delegate = null;
+
+        // The verdict sent it back to its owner; they resubmit, and the count starts from one rather than from three.
+        (await owner.PostActionAsync(id, "implemented", new ImplementedRequest("task/T-1-feature"))).EnsureSuccessStatusCode();
+        await Conductor.RunPassAsync();
+        await SettledAsync();
+
+        Assert.Equal(4, _hub.Validators.Started.Count);
+        Assert.DoesNotContain(await EventsAsync(), e => e.Type == "conductor.stalled");
+    }
+
+    [Fact]
+    public async Task A_session_that_ends_without_a_verdict_is_not_mistaken_for_progress()
+    {
+        // The incident this cap exists for: the session ran, refused correctly, released the role and exited 0.
+        // Nothing was recorded, so nothing counted, so the conductor staffed it again. And again.
+        await SetUpAsync("win-validator");
+        await DefineAsync("win-validator");
+        var id = await TaskInValidationAsync();
+
+        Assert.Equal(1, await Conductor.RunPassAsync());
+        await SettledAsync();
+
+        var events = await EventsAsync();
+        var recorded = Assert.Single(events, e => e.Type == "conductor.no_verdict");
+        Assert.Equal(id, recorded.TaskId);
+        Assert.Equal("win-validator", recorded.Payload.GetProperty("role").GetString());
+        Assert.Equal(1, recorded.Payload.GetProperty("attempt").GetInt32());
+        Assert.DoesNotContain(events, e => e.Type is "conductor.failed" or "conductor.session_failed");
+    }
+
+    [Fact]
+    public async Task After_three_sessions_that_reach_no_verdict_the_pair_stops_and_the_founder_is_told_once()
     {
         _hub.Settings["Muthur:ConductorMaxAttempts"] = "3";
         await SetUpAsync("win-validator");
         await DefineAsync("win-validator");
         await TaskInValidationAsync();
 
-        _hub.Validators.Throw = new ValidatorLaunchException("claude is not installed");
-        await Conductor.RunPassAsync();
-        await Conductor.RunPassAsync();
+        for (var pass = 0; pass < 6; pass++)
+        {
+            await Conductor.RunPassAsync();
+            await SettledAsync();
+        }
 
-        _hub.Validators.Throw = null;   // the harness came back
-        await Conductor.RunPassAsync();
-        await Conductor.RunPassAsync();
+        Assert.Equal(3, _hub.Validators.Started.Count);
 
-        Assert.Equal(4, _hub.Validators.Started.Count);
-        var events = await _hub.Founder().GetFromJsonAsync(Routes.Events, MuthurJsonContext.Default.IReadOnlyListEventDto);
-        Assert.DoesNotContain(events!, e => e.Type == "conductor.stalled");
+        var events = await EventsAsync();
+        Assert.Equal(3, events.Count(e => e.Type == "conductor.no_verdict"));
+        Assert.Single(events, e => e.Type == "conductor.stalled");
+
+        var told = Assert.Single(await FounderMessagesAsync(), m => m.Body.Contains("reached a verdict"));
+        Assert.StartsWith(
+            "The conductor started 3 validators for T-1 (win-validator) and none of them reached a verdict. " +
+            "They ran and exited cleanly, so something is stopping them from validating at all rather than failing. " +
+            "Look at the bus for what they said, then re-spec the task, validate it yourself, or raise Muthur:ConductorMaxAttempts.",
+            told.Body);
+        Assert.Contains("retries by itself within", told.Body);   // the half-open probe, on this message too
+        Assert.Equal("gave up on win-validator for T-1: 3 sessions, no verdict", (await Conductor.StatusAsync()).LastAction);
+    }
+
+    [Fact]
+    public async Task A_pair_that_reached_no_verdict_is_left_alone_until_the_cooldown_has_passed()
+    {
+        _hub.Settings["Muthur:ConductorMaxAttempts"] = "2";
+        _hub.Settings["Muthur:ConductorStallProbeMinutes"] = "30";
+        await SetUpAsync("win-validator");
+        await DefineAsync("win-validator");
+        await TaskInValidationAsync();
+
+        for (var pass = 0; pass < 4; pass++)
+        {
+            await Conductor.RunPassAsync();
+            await SettledAsync();
+        }
+        Assert.Equal(2, _hub.Validators.Started.Count);
+
+        _hub.Clock.Advance(TimeSpan.FromMinutes(29));
+        Assert.Equal(0, await Conductor.RunPassAsync());
+        Assert.Equal(2, _hub.Validators.Started.Count);
+
+        // Half-open, like the other two: the spec may have been rewritten while it waited.
+        _hub.Clock.Advance(TimeSpan.FromMinutes(2));
+        Assert.Equal(1, await Conductor.RunPassAsync());
+        await SettledAsync();
+
+        Assert.Equal(3, _hub.Validators.Started.Count);
+        Assert.Single(await EventsAsync(), e => e.Type == "conductor.stalled");   // still told once, not per probe
     }
 
     [Theory]
@@ -430,12 +576,22 @@ public sealed class ConductorTests : IDisposable
         await TaskInValidationAsync();
         _hub.Validators.Throw = new ValidatorSessionException("'cmd.exe' timed out after 00:45:00.");
 
-        for (var pass = 0; pass < 4; pass++) await Conductor.RunPassAsync();
+        for (var pass = 0; pass < 4; pass++)
+        {
+            await Conductor.RunPassAsync();
+            await SettledAsync();
+        }
 
-        var events = await _hub.Founder().GetFromJsonAsync(Routes.Events, MuthurJsonContext.Default.IReadOnlyListEventDto);
-        Assert.Equal(2, events!.Count(e => e.Type == "conductor.session_failed"));
-        Assert.DoesNotContain(events!, e => e.Type == "conductor.failed");
+        var events = await EventsAsync();
+        Assert.Equal(2, events.Count(e => e.Type == "conductor.session_failed"));
+        Assert.DoesNotContain(events, e => e.Type == "conductor.failed");
+        Assert.DoesNotContain(events, e => e.Type == "conductor.no_verdict");   // it threw; it is not the quiet kind
         Assert.Contains("gave up running", (await Conductor.StatusAsync()).LastAction);
+
+        Assert.StartsWith(
+            "The conductor started a validator for T-1 (win-validator) 2 times and none of them finished: " +
+            "'cmd.exe' timed out after 00:45:00.",
+            Assert.Single(await FounderMessagesAsync()).Body);
     }
 
     /// <summary>
@@ -484,11 +640,15 @@ public sealed class ConductorTests : IDisposable
             (await founder.PostAsJsonAsync(Routes.AccountLimits, new AccountLimitRequest(account, _hub.Clock.GetUtcNow().AddHours(2)))).EnsureSuccessStatusCode();
         _hub.Validators.Delegate = RealLauncher();
 
-        for (var pass = 0; pass < 4; pass++) await Conductor.RunPassAsync();
+        for (var pass = 0; pass < 4; pass++)
+        {
+            await Conductor.RunPassAsync();
+            await SettledAsync();
+        }
 
-        var events = await founder.GetFromJsonAsync(Routes.Events, MuthurJsonContext.Default.IReadOnlyListEventDto);
-        Assert.Equal(2, events!.Count(e => e.Type == "conductor.failed"));
-        Assert.DoesNotContain(events!, e => e.Type == "conductor.session_failed");
+        var events = await EventsAsync();
+        Assert.Equal(2, events.Count(e => e.Type == "conductor.failed"));
+        Assert.DoesNotContain(events, e => e.Type == "conductor.session_failed");
         Assert.Contains("gave up starting", (await Conductor.StatusAsync()).LastAction);
     }
 
@@ -503,10 +663,11 @@ public sealed class ConductorTests : IDisposable
         _hub.Validators.Throw = new InvalidOperationException("something nobody thought of");
 
         await Conductor.RunPassAsync();
+        await SettledAsync();
 
-        var events = await _hub.Founder().GetFromJsonAsync(Routes.Events, MuthurJsonContext.Default.IReadOnlyListEventDto);
-        Assert.Single(events!, e => e.Type == "conductor.failed");
-        Assert.DoesNotContain(events!, e => e.Type == "conductor.session_failed");
+        var events = await EventsAsync();
+        Assert.Single(events, e => e.Type == "conductor.failed");
+        Assert.DoesNotContain(events, e => e.Type == "conductor.session_failed");
     }
 
     [Fact]
