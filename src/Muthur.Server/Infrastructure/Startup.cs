@@ -64,6 +64,7 @@ public static class Startup
         builder.Services.AddSingleton<IProcessRunner, ProcessRunner>();
         builder.Services.AddSingleton<IValidatorSessionLauncher, ValidatorSessionLauncher>();
         builder.Services.AddSingleton<ConductorService>();
+        builder.Services.AddSingleton<CollisionService>();
         builder.Services.AddSingleton<IPullRequestOpener, GhPullRequestOpener>();
         builder.Services.AddSingleton<ITaskLander, GitLander>();
         if (options.BackgroundServices)
