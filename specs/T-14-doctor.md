@@ -462,6 +462,10 @@ What a validator should see:
   is `1`.
 - `doctor --offline` returns the same report without touching the network, with `"probed": false`.
 - Nowhere in the output — JSON, panel or hub log — is a secret's value or an outbound target's address.
+- **Expect a zero-byte outbox file.** Probing a `file` target opens its address for append, so running
+  `muthur doctor` (or the panel's `Re-check`) against a target nothing has been sent to yet leaves an empty
+  file at that path. It is the same file the next send would create, it has length 0, and it is not a
+  defect. The panel's own timer calls `RunAsync(probe: false)`, so an idling dashboard creates nothing.
 
 ### The dashboard, without a browser
 
