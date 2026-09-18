@@ -446,22 +446,25 @@ No new CSS classes. Everything above uses classes that already exist in `wwwroot
 - **Acceptance:** `dotnet build` and `dotnet test` clean. Tests: with a capacity-2 role and three tasks in
   `validating`, one pass plans exactly two assignments, on the two highest-priority tasks; with capacity 1 it
   plans exactly one, as today; **two concurrent sessions for one role get different agent identities and
-  neither invalidates the other's token** — assert on `IdentityName` directly for the pair-uniqueness and the
-  48-character clamp; **and that two role keys long enough to be truncated, differing only after the cut,
-  still produce different names** — the failure that came back from validation was exactly this: two legal
-  41-character keys collided on one identity, and the first session's token was revoked; **and that no name is ever
-  truncated** — assert the worst case (a 48-character role key and a 10-digit task id) is at most 80
-  characters and contains the whole role key; **and that a role key crafted to spell another role's name
-  does not collide with it** — build
-  `role2[..keep] + "-" + digest(role2)`, **with a dash**, which is the shape that collided under the old
-  separator and is a legal role key. Written with a dot it is neither: `RoleService.KeyPattern` forbids `.`,
-  so the hub would never accept it, and it would still collide — a test written that way pins nothing.
+  neither invalidates the other's token**; **no name is ever truncated** — put a 48-character role key and a
+  10-digit task id through the real `AgentService.RegisterAsync`, not through the arithmetic, and assert the
+  whole role key survives in the registered name; **no two pairs the hub accepts share an identity** —
+  enumerate legal role keys over `{a, t, -, 1}`, the characters `-t-<id>` is itself built from, cross them
+  with several task ids, and assert every name is distinct **and** matches `AgentService.NamePattern`; and
+  **a role key that spells out another pair's task suffix does not take its identity**.
 
-  Which is the real shape of the guarantee, and worth saying plainly: **`IdentityName` is not injective over
-  arbitrary strings. It is injective over the strings the hub accepts.** The dot is safe only because
-  `RoleService` rejects dots, and that is a cross-module invariant rather than a local one — so it needs its
-  own test asserting `role define win.validator` is refused with `invalid_key`. Nothing tested
-  `RoleService.KeyPattern` before this task; a task whose pair is already claimed is not planned; a role whose holds are
+  The real shape of the guarantee, worth saying plainly: **`IdentityName` is not injective over arbitrary
+  strings. It is injective over the strings the hub accepts.** Two gates enforce that domain —
+  `RoleService.KeyPattern` on the way in, and `ConductorService` planning only validations whose key names a
+  real `Role`. So `RoleService.KeyPattern` needs its own test: `role define win.validator` refused with
+  `invalid_key`, and a 49-character key refused too. What that test protects is now the **length bound and
+  the character set**, not the dot — under plain concatenation a dotted role key would break neither
+  injectivity nor name legality, and a comment claiming otherwise would mislead the next round.
+
+  One relationship holds the whole thing up and is worth writing down here because it is asserted nowhere in
+  code: **role-key max (48) + `"conductor-"` and `"-t-"` and a 10-digit id (23) ≤ agent-name max (80)**.
+  Nine characters of slack. Raising `RoleService.KeyPattern` past 57 would silently start producing agent
+  names the hub refuses; a task whose pair is already claimed is not planned; a role whose holds are
   all live at capacity is not planned; a role whose slots are filled by sessions still in `_running` — started,
   not yet holding — is not planned again on the following pass; `ConductorMaxSessions` still caps the total
   below capacity.
