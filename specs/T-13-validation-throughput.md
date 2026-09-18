@@ -446,8 +446,15 @@ No new CSS classes. Everything above uses classes that already exist in `wwwroot
   still produce different names** — the failure that came back from validation was exactly this: two legal
   41-character keys collided on one identity, and the first session's token was revoked; **and that a role key
   crafted to spell another role's truncated name does not collide with it** — build
-  `role2[..keep] + "." + digest(role2)`, which is what a `-` separator would have made collide, and assert
-  the two names differ; a task whose pair is already claimed is not planned; a role whose holds are
+  `role2[..keep] + "-" + digest(role2)`, **with a dash**, which is the shape that collided under the old
+  separator and is a legal role key. Written with a dot it is neither: `RoleService.KeyPattern` forbids `.`,
+  so the hub would never accept it, and it would still collide — a test written that way pins nothing.
+
+  Which is the real shape of the guarantee, and worth saying plainly: **`IdentityName` is not injective over
+  arbitrary strings. It is injective over the strings the hub accepts.** The dot is safe only because
+  `RoleService` rejects dots, and that is a cross-module invariant rather than a local one — so it needs its
+  own test asserting `role define win.validator` is refused with `invalid_key`. Nothing tested
+  `RoleService.KeyPattern` before this task; a task whose pair is already claimed is not planned; a role whose holds are
   all live at capacity is not planned; a role whose slots are filled by sessions still in `_running` — started,
   not yet holding — is not planned again on the following pass; `ConductorMaxSessions` still caps the total
   below capacity.
