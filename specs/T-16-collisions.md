@@ -310,6 +310,26 @@ exists to avoid.
   is worth showing — and what it would cost to test every branch against a moving target — is the first
   thing the revisit should weigh, ahead of any rule about prevention.
 
+- **The indicator cannot see a semantic collision, and one broke `main` the same afternoon.** This is the
+  most important limit of the instrument and it was found by the instrument's own author being wrong about
+  what it measures.
+
+  T-25 landed a rule requiring a task's spec file to exist on disk. T-31 and T-14 landed fixtures that pass
+  a path to a file that does not exist. All three were validated green in isolation; `git merge-tree` exits
+  0 for every pair, at every moment before and after each landed; T-16's board would have shown nothing,
+  correctly, right up until `main` went red with three failing tests (T-38).
+
+  So the measurement this task rests on — 28 in-flight pairs, 11 sharing a file, zero conflicting — was
+  measuring **textual** conflict, and the class that actually broke the build that day was invisible to it.
+  `corner` put the correction precisely: *a clean `merge-tree` means "these will merge", not "these will
+  pass".*
+
+  The honest upgrade is to dry-run the merge and then run the tests against the merged tree. That is far too
+  expensive per pair on a board refresh — N-squared merges and N-squared test runs — but it is cheap at
+  **land** time, where it is one merge and one test run, and where a red result is exactly what a land
+  should refuse. That is the concrete thing the founder's scheduled revisit should weigh, and it changes the
+  question from "do these branches conflict" to "does one task's new rule invalidate another's assumptions".
+
 - **A `blocked` task that carries a branch is invisible to the indicator.** Flagged by Unit B's specialist
   rather than left to be discovered. The exclusion is deliberate and mostly safe, for a reason worth
   recording: a task bounced back from a failed land goes to `in_progress`, not `blocked`, so the bounce path
