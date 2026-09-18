@@ -131,8 +131,12 @@ New file `src/Muthur.Server/Services/CollisionService.cs`.
 public sealed record Collision(string TaskA, string TaskB, IReadOnlyList<string> Files);
 ```
 
-`CollisionService(ITaskLander lander, IProcessRunner processes, Ledger ledger, TimeProvider clock, MuthurOptions options)`
+`CollisionService(ITaskLander lander, IProcessRunner processes, Ledger ledger, TimeProvider clock)`
 exposes one method:
+
+(This signature first also took `MuthurOptions`. Every bound in the service is a constant, so the parameter
+was unread and `CS9113` failed the build — warnings are errors. Corrected; add it back the day a bound
+becomes configurable.)
 
 ```csharp
 /// <summary>Pairs of in-flight tasks that would conflict, recomputed at most once per cache window.</summary>
@@ -145,21 +149,40 @@ Behaviour, exactly:
   Only pairs within the same project are compared. Read through `Ledger.ReadAsync`, never `MuthurDb`
   directly from a component.
 - **The test.** For each pair, in that project's `RepoPath`:
-  `git merge-tree --write-tree --name-only <branchA> <branchB>`. **Exit non-zero means they conflict**;
-  the conflicting paths are the lines of stdout that name files. Exit zero means clean. A branch that does
-  not exist is skipped, not an error.
+  `git merge-tree --write-tree --name-only <branchA> <branchB>`. **Exit 1 means they conflict**; the
+  conflicting paths are the lines of stdout that name files. Exit 0 means clean. **Any other exit code means
+  git could not answer** — a missing ref, unrelated histories, a git too old for `--name-only`, or
+  `IProcessRunner`'s own 124 (timeout) and 127 (could not start) — and the pair is skipped, showing nothing.
+  A branch that does not exist is skipped, not an error.
+
+  (This first said "exit non-zero means they conflict", contradicting the Method section above, which said
+  `exit 1 = conflict`. Unit B's specialist caught it and built the precise reading. The loose one is
+  dangerous, not merely imprecise: on a hub where `git` is not on PATH every pair would exit 127 and the
+  board would paint a red `collides:` pill on every in-flight task — exactly the false positive this whole
+  task exists to avoid. `GitLander` already tests `ExitCode == 1` in the same place.)
 - **Cost control**, because a dashboard must never be able to hold the hub open:
   - Results are cached for **60 seconds** on the injected `TimeProvider`. A call inside that window returns
     the cached list without running git.
   - A `SemaphoreSlim(1,1)` guards recomputation: concurrent callers get the current cached value rather
     than queueing behind a second computation.
-  - At most **12 in-flight branches** are considered (66 pairs). Beyond that, return the empty list. Order
-    by task id so the selection is stable.
+  - At most **12 in-flight branches** are considered (66 pairs): ordered by task id, tasks past the twelfth
+    are not compared. The cap is global, not per project, so the ceiling holds however many projects exist.
+
+    (This first read "beyond that, return the empty list", which taken literally switches the indicator off
+    at thirteen in-flight tasks — when the organization is busiest, and plausibly soon, since eight were in
+    flight when the measurement was taken. Unit B's specialist read it as a stable `LIMIT 12` and said so;
+    that is the intent, and the "order by task id so the selection is stable" sentence only means anything
+    under that reading.)
   - The whole computation is bounded by a **10 second** budget; when it expires, return what was computed
     so far. Each git call gets `TimeSpan.FromSeconds(5)` through `IProcessRunner`, matching `GitLander`'s
     existing use of a timeout.
-  - On any failure, return the previous cached value if there is one, otherwise empty. A collision panel
-    that cannot compute shows nothing; it never shows an error and never throws into a render.
+  - On any failure, return the previous cached value if there is one, otherwise empty, **and stamp the
+    cache with that answer**. A collision panel that cannot compute shows nothing; it never shows an error
+    and never throws into a render.
+
+    (The stamping was added by Unit B's specialist and is not optional: without it, a repeatable failure —
+    a failing database read, say — is retried on *every* render, which is a dashboard holding the hub open.
+    That is the one thing this design exists to prevent.)
 
 Register it in `Startup.AddMuthur` as a singleton, beside `ConductorService`.
 
@@ -217,8 +240,18 @@ The two units share no file and neither depends on the other.
 - **Acceptance:**
   - `dotnet build` clean, `dotnet test` green.
   - Two in-flight tasks on branches that really conflict (via `TestRepo`): `CurrentAsync` returns one
-    `Collision` naming both task ids and the conflicting file, and `/` renders `pill-collision` on both
-    cards.
+    `Collision` naming both task ids and the conflicting file, and the card markup rendered with those ids
+    carries `pill-collision`.
+
+    **The "`/` renders `pill-collision`" half of this cannot be asserted in a test, and a validator must not
+    treat it as covered.** `BoardPanel` renders its cards inside `<Virtualize>`, which emits no items during
+    a prerender because it sizes its window from a JS measurement the test harness never makes — so `GET /`
+    contains neither the pill nor the task ids at all. (No existing test asserts card content on `/`
+    either, which is consistent.) Assert the two ends instead: `CurrentAsync`'s result, and `TaskCard`
+    rendered through `HtmlRenderer` with the ids from that real `Collision`. Loading `GET /` in both the
+    colliding and non-colliding tests still exercises `BoardPanel.LoadAsync` → `CollisionService` and the
+    id-mapping for real, since wrong wiring would 500. **Whether the pill is genuinely on screen is proven
+    only by step 1 of the end-to-end Verification below.**
   - Two in-flight tasks that touch the *same file* without conflicting return **no** collision. This is the
     assertion that matters most — it is the whole finding this task is built on.
   - A second call inside the cache window runs no further git commands. Prove it by counting invocations on
