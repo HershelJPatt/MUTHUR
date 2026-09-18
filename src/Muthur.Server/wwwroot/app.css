@@ -92,6 +92,7 @@ b { font-weight: 600; }
 .pill-verdict-no { color: var(--red); border-color: rgba(229, 96, 90, .4); background: var(--red-bg); }
 .pill-verdict-pending { color: var(--dim); }
 .pill-verdict-blocked { color: var(--amber); border-color: rgba(226, 166, 68, .4); background: var(--amber-bg); }
+.pill-collision { color: var(--red); border-color: rgba(229, 96, 90, .4); background: var(--red-bg); }
 .badge { font: 700 10px var(--mono); padding: 1px 6px; border-radius: 999px; background: var(--red); color: #fff; }
 .badge-quiet { background: var(--line-strong); color: var(--text); }
 .tag { font: 700 9.5px var(--mono); letter-spacing: .1em; text-transform: uppercase; padding: 1px 5px; border-radius: 3px; background: var(--line); color: var(--dim); }
