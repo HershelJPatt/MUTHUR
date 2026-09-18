@@ -40,10 +40,31 @@ public sealed class ConductorTests : IDisposable
 
     private Task SetUpAsync(params string[] validators) => _hub.AddProjectAsync(repoPath: _repo.Path, validators: validators);
 
-    private async Task DefineAsync(params string[] roles)
+    private Task DefineAsync(params string[] roles) => DefineAsync(1, roles);
+
+    private async Task DefineAsync(int holders, params string[] roles)
     {
         foreach (var role in roles)
-            (await _hub.Founder().PutAsJsonAsync(Routes.Roles, new DefineRoleRequest(role, $"# {role}\nDrive it."))).EnsureSuccessStatusCode();
+            (await _hub.Founder().PutAsJsonAsync(Routes.Roles, new DefineRoleRequest(role, $"# {role}\nDrive it.", Holders: holders))).EnsureSuccessStatusCode();
+    }
+
+    /// <summary>A task of this owner's, on a branch of its own, waiting in 'validating' at the given priority.</summary>
+    private async Task<string> ValidatingTaskAsync(HttpClient owner, string title, int priority)
+    {
+        var task = await owner.AddTaskAsync(title, priority: priority);
+        (await owner.ClaimAsync(task.Id)).EnsureSuccessStatusCode();
+        (await owner.PostActionAsync(task.Id, "spec", new SetSpecRequest($"specs/{task.Id}.md"))).EnsureSuccessStatusCode();
+        var branch = $"task/{task.Id}-work";
+        _repo.BranchWithFile(branch, $"{task.Id}.txt", $"{task.Id}\n");
+        (await owner.PostActionAsync(task.Id, "implemented", new ImplementedRequest(branch))).EnsureSuccessStatusCode();
+        return task.Id;
+    }
+
+    private async Task<HttpClient> ValidatorAsync(string name, string role)
+    {
+        var client = await _hub.RegisterAgentAsync(name);
+        (await client.PostAsync(Routes.RoleAction(role, "take"), null)).EnsureSuccessStatusCode();
+        return client;
     }
 
     [Fact]
@@ -87,6 +108,108 @@ public sealed class ConductorTests : IDisposable
         _hub.Clock.Advance(TimeSpan.FromMinutes(31));
 
         Assert.Equal(1, await Conductor.RunPassAsync());
+    }
+
+    [Fact]
+    public async Task A_role_with_room_for_two_plans_two_of_three_waiting_tasks_in_one_pass()
+    {
+        // The whole point of the capacity: N tasks no longer wait on one another. The counter has to come down as
+        // the plan is built, or three waiting tasks become three sessions for a role with two slots.
+        _hub.Settings["Muthur:ConductorMaxSessions"] = "5";   // so what limits the pass is the capacity, not the budget
+        await SetUpAsync("win-validator");
+        await DefineAsync(2, "win-validator");
+        var owner = await _hub.RegisterAgentAsync("owner");
+        var urgent = await ValidatingTaskAsync(owner, "Urgent", priority: 3);
+        var next = await ValidatingTaskAsync(owner, "Next", priority: 2);
+        await ValidatingTaskAsync(owner, "Can wait", priority: 1);
+
+        Assert.Equal([urgent, next], (await Conductor.PlanAsync()).Select(a => a.TaskKey));
+        Assert.Equal(2, await Conductor.RunPassAsync());
+    }
+
+    [Fact]
+    public async Task A_role_with_room_for_one_plans_exactly_one_as_it_always_did()
+    {
+        await SetUpAsync("win-validator");
+        await DefineAsync("win-validator");
+        var owner = await _hub.RegisterAgentAsync("owner");
+        var urgent = await ValidatingTaskAsync(owner, "Urgent", priority: 3);
+        await ValidatingTaskAsync(owner, "Next", priority: 2);
+        await ValidatingTaskAsync(owner, "Can wait", priority: 1);
+
+        var assignment = Assert.Single(await Conductor.PlanAsync());
+        Assert.Equal(urgent, assignment.TaskKey);
+    }
+
+    [Fact]
+    public async Task A_pair_a_validator_has_already_claimed_is_not_staffed_again()
+    {
+        // A free slot is not permission to start a second session on work somebody is already doing.
+        await SetUpAsync("win-validator");
+        await DefineAsync(2, "win-validator");
+        var owner = await _hub.RegisterAgentAsync("owner");
+        var checker = await ValidatorAsync("checker", "win-validator");
+        var taken = await ValidatingTaskAsync(owner, "Being checked", priority: 3);
+        var open = await ValidatingTaskAsync(owner, "Nobody on it", priority: 2);
+        (await checker.PostActionAsync(taken, "validate-claim", new ClaimValidationRequest("win-validator"))).EnsureSuccessStatusCode();
+
+        var assignment = Assert.Single(await Conductor.PlanAsync());
+        Assert.Equal(open, assignment.TaskKey);
+    }
+
+    [Fact]
+    public async Task A_role_whose_slots_are_all_held_is_left_alone()
+    {
+        await SetUpAsync("win-validator");
+        await DefineAsync(2, "win-validator");
+        var owner = await _hub.RegisterAgentAsync("owner");
+        await ValidatorAsync("one", "win-validator");
+        await ValidatorAsync("two", "win-validator");
+        await ValidatingTaskAsync(owner, "Waiting", priority: 1);
+
+        Assert.Equal(0, await Conductor.RunPassAsync());
+        Assert.Empty(_hub.Validators.Started);
+    }
+
+    [Fact]
+    public async Task Sessions_on_their_way_to_a_role_occupy_its_slots_on_the_following_pass()
+    {
+        // A session that has started but has not yet taken the role holds nothing the database can see. Counting
+        // only the holds would plan straight over it on the next tick, and the extra session would start, fail to
+        // take the role, and produce nothing.
+        _hub.Settings["Muthur:ConductorMaxSessions"] = "5";   // so what says no on the second pass is the capacity
+        await SetUpAsync("win-validator");
+        await DefineAsync(2, "win-validator");
+        _hub.Validators.Block = true;   // the two sessions are still on their way when the next pass runs
+        var owner = await _hub.RegisterAgentAsync("owner");
+        await ValidatingTaskAsync(owner, "Urgent", priority: 3);
+        await ValidatingTaskAsync(owner, "Next", priority: 2);
+        await ValidatingTaskAsync(owner, "Can wait", priority: 1);
+
+        Assert.Equal(2, await Conductor.RunPassAsync());
+
+        Assert.Empty(await Conductor.PlanAsync());
+        Assert.Equal(0, await Conductor.RunPassAsync());
+
+        _hub.Validators.Finish(2);
+    }
+
+    [Fact]
+    public async Task The_session_budget_still_caps_a_role_with_slots_to_spare()
+    {
+        _hub.Settings["Muthur:ConductorMaxSessions"] = "1";
+        await SetUpAsync("win-validator");
+        await DefineAsync(3, "win-validator");
+        _hub.Validators.Block = true;   // hold the one session open across the pass
+        var owner = await _hub.RegisterAgentAsync("owner");
+        await ValidatingTaskAsync(owner, "First", priority: 3);
+        await ValidatingTaskAsync(owner, "Second", priority: 2);
+
+        Assert.Equal(2, (await Conductor.PlanAsync()).Count);   // the role has room for both
+        Assert.Equal(1, await Conductor.RunPassAsync());        // the budget is what says no, and it still does
+        Assert.Single(_hub.Validators.Started);
+
+        _hub.Validators.Finish();
     }
 
     [Fact]
