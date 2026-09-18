@@ -12,6 +12,15 @@ public static class SystemCommands
         status.SetAction(async (parse, ct) => Output.Emit(parse, await HubClient.For(parse).GetAsync(Routes.Status, ct)));
         root.Subcommands.Add(status);
 
+        var offline = new Option<bool>("--offline") { Description = "Skip the checks that touch the network; report only what the hub already knows." };
+        var doctor = new Command("doctor", "Check whether this hub can do its job: ingest, outbound, projects, repositories, roles. Exit 1 if anything failed.") { offline };
+        doctor.SetAction(async (parse, ct) =>
+        {
+            var result = await HubClient.For(parse).GetAsync(Routes.Doctor + (parse.GetValue(offline) ? "?probe=false" : ""), ct);
+            return DoctorExitCode(result, Output.Emit(parse, result));
+        });
+        root.Subcommands.Add(doctor);
+
         var up = new Command("up", "Start the hub server in the background (no-op if already running).");
         up.SetAction(UpAsync);
         root.Subcommands.Add(up);
@@ -60,6 +69,14 @@ public static class SystemCommands
             return Output.Error("stop_timeout", "The server accepted the shutdown but is still answering after 10s.");
         });
         root.Subcommands.Add(down);
+    }
+
+    /// <summary>A report that reached us and contains a failed check is exit 1; a warning never is.</summary>
+    internal static int DoctorExitCode(ApiResult result, int emitted)
+    {
+        if (!result.IsSuccess || emitted != ExitCodes.Ok) return emitted;
+        var report = System.Text.Json.JsonSerializer.Deserialize(result.Body, MuthurJsonContext.Default.DoctorDto)!;
+        return report.Fail > 0 ? ExitCodes.Error : ExitCodes.Ok;
     }
 
     private static async Task<int> UpAsync(ParseResult parse, CancellationToken ct)
