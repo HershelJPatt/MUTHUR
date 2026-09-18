@@ -288,14 +288,20 @@ Task ProbeAsync(string address, CancellationToken ct = default);
   existing *directory* passes that check and then fails delivery with access denied. So:
   1. `Directory.CreateDirectory(Path.GetDirectoryName(address)!)` as before, for the parent.
   2. `if (Directory.Exists(address)) throw new ChannelException("the address is a directory, not a file")`.
-  3. Otherwise prove it is writable the way a send does: note whether `File.Exists(address)`, open
-     `new FileStream(address, FileMode.Append, FileAccess.Write, FileShare.ReadWrite)`, dispose it without
-     writing a byte, and — if it did not exist before — delete it again, swallowing any failure to delete
-     (another process may legitimately have created it in between). A probe leaves no message and should
-     leave no file.
+  3. Otherwise prove it is writable the way a send does: open
+     `new FileStream(address, FileMode.Append, FileAccess.Write, FileShare.ReadWrite)` and dispose it
+     without writing a byte.
 
-  On `IOException`, `UnauthorizedAccessException`, `NotSupportedException` or `ArgumentException` →
-  `throw new ChannelException("the address cannot be written")`.
+  **The probe does not delete the file afterwards, even when it created it.** An earlier version of this
+  bullet did, and it was wrong: between the dispose and the delete, `OutboundService.SendAsync` can append a
+  real message — sends are serialised behind `_sending`, which a probe does not take — and the delete would
+  discard it. Losing a reviewed, gated, founder-approved message to a health check is far worse than leaving
+  a zero-byte file behind, and that file is the outbox the target names, which the next send would create
+  anyway. A probe must still never *write* a byte.
+
+  The whole probe body, all three steps, maps `IOException`, `UnauthorizedAccessException`,
+  `NotSupportedException` and `ArgumentException` → `throw new ChannelException("the address cannot be written")`.
+  The directory `ChannelException` from step 2 passes through unchanged.
 
   `FileChannel.Validate` also gains the directory check, so such a target is refused at `muthur out target`
   rather than accepted and then probed as healthy:
