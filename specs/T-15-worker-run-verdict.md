@@ -282,6 +282,16 @@ sentence was true.
 crash-and-retry would look like; the order of the processes actually started is what distinguishes them.
 Change nothing else about that test.
 
+**4. `A_missing_cli_is_skipped` on `AgentLauncher`.** The diagnosis above names four untested paths and the
+work section originally specified three: the missing-CLI skip was dropped between them. That is an error in
+this amendment, caught by its implementer, and the fourth test is wanted. Mirror
+`A_missing_cli_is_skipped_and_workers_never_inherit_hub_identity`, minus its identity half: a resolver that
+returns null for the first candidate and installed for the second; assert the first attempt reports "not
+installed", that its `Started` is false, that the second candidate ran and succeeded, and that **exactly one
+process was started**. Note — and this is why it is a different test from `WorkerLauncher`'s —
+`identityFor` is invoked only for candidates that reach the process launch, so a skipped candidate must
+resolve no identity at all. Assert that too: `identityFor` was called once, for the second candidate.
+
 **3. Neither launcher's production code changes.** `git diff --stat src/` must be empty. If a test cannot be
 written without changing `src/`, stop and report — that would be a finding about the design, not a licence.
 
