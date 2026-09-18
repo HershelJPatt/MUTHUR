@@ -145,9 +145,15 @@ public Task<IReadOnlyList<Collision>> CurrentAsync(CancellationToken ct = defaul
 
 Behaviour, exactly:
 
-- **Which tasks.** Tasks in `in_progress` or `validating` with a non-empty `Branch`, grouped by project.
-  Only pairs within the same project are compared. Read through `Ledger.ReadAsync`, never `MuthurDb`
-  directly from a component.
+- **Which tasks.** Tasks in `in_progress`, `validating` **or `validated`** with a non-empty `Branch`,
+  grouped by project. Only pairs within the same project are compared. Read through `Ledger.ReadAsync`,
+  never `MuthurDb` directly from a component.
+
+  (`validated` was missing from the first version of this spec and was found in the end-to-end run, where
+  both colliding tasks sat in `validated` and were therefore never compared. It is the **highest-stakes**
+  state of the three: a validated task is queued to land, so two conflicting ones are not a future risk but
+  a bounce that is about to happen — which is exactly the moment the board should say so. `blocked` stays
+  out on purpose: it waits on a human and rarely has a branch yet.)
 - **The test.** For each pair, in that project's `RepoPath`:
   `git merge-tree --write-tree --name-only <branchA> <branchB>`. **Exit 1 means they conflict**; the
   conflicting paths are the lines of stdout that name files. Exit 0 means clean. **Any other exit code means
