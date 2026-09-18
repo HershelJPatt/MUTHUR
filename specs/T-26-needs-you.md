@@ -180,8 +180,23 @@ dotnet test
 
 Both clean.
 
-End to end, against an installed build and a scratch home, never the live hub. No browser is required —
-the dashboard is Blazor Server and prerenders, so `GET` of each page carries what it shows:
+End to end, against an installed build and a scratch home, never the live hub. **No browser is required, and
+a validator without one should give a verdict rather than block.** The reasoning, because "no browser
+required" on its own is not enough to act on:
+
+- **What a GET does cover.** The dashboard is Blazor Server and prerenders, so `GET /needs-you` carries the
+  panels, the items, the waiting times and the Approve/Decline controls with the message's id. That is
+  everything this task changed about what the page *shows*.
+- **What a click would add, and why it is already covered.** The Approve button calls
+  `OutboundService.FounderApproveAsync`. The acceptance drives that same method over
+  `POST /outbound/{id}/approve` and asserts the control is rendered beforehand, so the handler's target and
+  the control's presence are both pinned. A click would re-test one service call through a slower seam.
+- **What genuinely needs a browser, and is not this task's.** `CommsPanel.OnAfterRenderAsync` marks founder
+  messages read when a human actually looks at the page. That is pre-existing behaviour, unchanged here, and
+  it is listed in this spec's follow-ups as a question for T-18.
+
+So: exercise the CLI and the HTTP responses, and pass or fail on those. If something in this list turns out
+to be untrue, that is a defect worth blocking on — but the absence of a browser by itself is not.
 
 ```
 pwsh ./scripts/install.ps1 -Destination ./artifacts/t26
