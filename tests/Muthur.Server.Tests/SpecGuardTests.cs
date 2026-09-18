@@ -119,4 +119,20 @@ public sealed class SpecGuardTests : IDisposable
 
         Assert.Equal("spec_id_mismatch", error.Code);
     }
+
+    /// <summary>
+    /// The check reads at most 8192 characters, so a heading pushed past that is never seen. Two of its
+    /// requirements meet here — "the first non-blank line" and the cap — and the conservative resolution is to
+    /// accept: refusing would mean claiming the file is another task's spec without having read a line of it.
+    /// </summary>
+    [Fact]
+    public async Task A_heading_buried_past_the_read_cap_is_accepted_rather_than_blamed_on_another_task()
+    {
+        var (owner, id) = await ClaimedTaskAsync();
+        _repo.Write("specs/T-9-buried-heading.md", new string(' ', 8193) + "\n# T-9 — The outbound gate\n");
+
+        var task = await (await owner.PostActionAsync(id, "spec", new SetSpecRequest("specs/T-9-buried-heading.md"))).ReadTaskAsync();
+
+        Assert.Equal("specs/T-9-buried-heading.md", task.SpecPath);
+    }
 }
