@@ -57,9 +57,6 @@ public sealed class ConductorTests : IDisposable
         Assert.Equal(0, Conductor.RunningCount);
     }
 
-    private async Task<IReadOnlyList<EventDto>> EventsAsync() =>
-        (await _hub.Founder().GetFromJsonAsync(Routes.Events, MuthurJsonContext.Default.IReadOnlyListEventDto))!;
-
     private async Task<IReadOnlyList<MessageDto>> FounderMessagesAsync() =>
         (await _hub.Founder().GetFromJsonAsync($"{Routes.Messages}?founder=true", MuthurJsonContext.Default.IReadOnlyListMessageDto))!;
 
