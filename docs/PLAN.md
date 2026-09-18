@@ -1,6 +1,6 @@
 # MUTHUR — Technical Plan
 
-Status: M0–M8 built and landed · 2026-09-17 · M8 passed validation in round 17 (see specs/T-9.md) · M9 (deployable, multi-machine) not started
+Status: M0–M8 built and landed · 2026-09-18 · M9 (deployable, multi-machine) not started · the organization has since been running on itself, and §0 records what that taught
 
 A local control plane for an organization of coding agents: task ledger, roles,
 validation lifecycle, messaging, and a gated path for anything leaving the machine.
@@ -12,16 +12,19 @@ CLI for agents, web dashboard for humans. The [README](../README.md) is the user
 |---|---|---|
 | M0 skeleton | done | solution, AOT CLI, `up/down/status` |
 | M1 tasks, leases, ledger | done | single-writer `Ledger`, append-only `events` (DB triggers) |
-| M2 kit + orchestrated work | done | `kit/core` procedures, Claude adapter; T-1 was the first task run through the loop |
-| M3 dashboard | done (T-1) | three implementer units from one frozen spec, reviewed and integrated by the orchestrator |
-| M4 roles, validation, landing | done (T-2) | `GitLander`: merge in the checkout, plumbing merge without one, PR mode |
-| M5 bus, inbox, founder requests | done (T-3, T-4) | long-poll inbox is the single wake-up channel; the hub notifies validators and owners |
-| M6 multi-harness | done (T-6) | `Muthur.Launch`, tier catalog, account limits, `worker run`; same spec built by Claude and by Codex workers |
-| M7 ingest | done (T-7) | cursor polling, GitHub issues via `gh`, push API, claim/convert/dismiss. Azure DevOps adapter: not yet |
-| M8 outbound gate | done (T-9, T-10) | allowlist, secret scan, sha-bound peer review, founder approval, file/Discord/GitHub channels |
+| M2 kit + orchestrated work | done | `kit/core` procedures, Claude adapter; the dashboard's first panel was the first task run through the loop |
+| M3 dashboard | done | three implementer units from one frozen spec, reviewed and integrated by the orchestrator |
+| M4 roles, validation, landing | done | `GitLander`: merge in the checkout, plumbing merge without one, PR mode |
+| M5 bus, inbox, founder requests | done | long-poll inbox is the single wake-up channel; the hub notifies validators and owners |
+| M6 multi-harness | done | `Muthur.Launch`, tier catalog, account limits, `worker run`; same spec built by Claude and by Codex workers |
+| M7 ingest | done | cursor polling, push API, claim/convert/dismiss; `IInboundSource` implemented twice (GitHub issues via `gh`, then Discord), so the seam is proven and each further channel is contained work rather than a design question. Azure DevOps adapter: not yet |
+| M8 outbound gate | done | allowlist, secret scan, sha-bound peer review, founder approval, file/Discord/GitHub channels |
 | M9 deployable | not started | the rules in §9 were followed throughout |
 
-**What the process itself taught (all found by the independent validator, none by the builders' tests):**
+The ledger was rebuilt once and its task numbers reused, so a task id in this document would name different
+work today than it did when it was written; the milestones are cited by subject instead.
+
+**What the process itself taught (all found by the independent validator or by watching the organization run, none by the builders' tests):**
 
 - T-3 failed validation: a client waiting in `msg inbox --wait` kept the server alive ~30 s after `down`, database locked.
   Every idle agent sits in that call, so it would have hit every restart. Fixed by tying the wait to `ApplicationStopping`.
@@ -30,11 +33,32 @@ CLI for agents, web dashboard for humans. The [README](../README.md) is the user
   (a CLI with no bundled server skipped the guard).
 - The Codex sandbox keeps `.git` read-only, so its workers cannot commit; `worker run` commits on their behalf and takes
   success from the report's `STATUS:` line rather than the process exit code.
+- A validator that correctly refuses is invisible unless refusing is a verdict. A spec demanded a live browser that a
+  conductor-started session does not have; five sessions in twenty-eight minutes each did what the brief says — message
+  the owner, release the role — and the conductor refilled a role nobody held, which is its whole job. Neither cap saw
+  it: the launch succeeded and no verdict was written. `blocked` is a verdict now, so the task leaves `validating`
+  instead of being refilled.
+- A spec that cannot be validated by the sessions the organization actually starts is a defect in the spec, not in the
+  validator. The same browser requirement was written twice, by the same orchestrator, after the first one had been
+  diagnosed. The dashboard is Blazor Server and prerenders, so the honest check is an HTTP GET — except for cards inside
+  `<Virtualize>`, which render nothing server-side.
+- A file the tooling reads without complaint is the most expensive kind of wrong. Three in one day: `muthur.project.json`
+  failed to parse and had therefore never been read; a spec was attached to a task whose id had been reused; and
+  `install.ps1` publishes whatever working tree it is run from, which agents move between constantly, so a reinstall can
+  silently hand back the previous build. Each succeeded and said nothing.
+- The brief on a running hub is a copy. `role brief` serves what is in the database, not what is on disk, so editing a
+  brief changes nothing for a running organization until it is re-served — and re-serving from a moving checkout can
+  serve the old text back. The fix for the looping validators above landed in `kit/` and missed the installed copy those
+  validators were reading.
 
 **Differences from the plan below:** identity is `MUTHUR_AGENT` + a per-agent token file (environment variables do not
 survive between an agent's shell calls, so a bare `MUTHUR_TOKEN` was not enough); timestamps are unix milliseconds;
 `kit install` arrived in M2, not M6; validation throughput, not implementation, is the bottleneck — more than one
-validator session is the first thing to add when a project gets busy.
+validator session is the first thing to add when a project gets busy. That last one arrived: `RoleHold` is keyed on the
+role, so one holder blocks every task needing it, and the conductor skips a task whose required role is held at all.
+Decided, and being built rather than landed as this is written: a validator role carries a concurrency limit, the
+exclusivity moves off the role and onto a claim on the `(task, role)` pair, and the on-call roles stay single-holder —
+a validator role is a skill, not a seat, but "who is on call" must have exactly one answer.
 
 ## 1. Constraints and what they force
 
@@ -246,6 +270,12 @@ M9 then is: bind non-loopback + TLS, swap provider, run as a service/container, 
 
 Each ends with something used for real. **Project #1 is this repo** — the hub is built by the process it implements, which keeps company-repo policy out of the way until the loop is proven.
 
+That has happened and is no longer an intention: tasks are specified, built by delegated implementers on more than one
+vendor's harness, validated by sessions that did not write the code — the conductor prefers a provider other than the
+author's — and landed by the hub rather than by anyone's judgment. The stronger claim is that the loop has caught its
+own failures: the conductor staffs validation with nobody watching, and the findings in §0 came out of the organization
+running against the repository that produces it rather than out of anybody's test suite.
+
 | # | Deliverable | Done when |
 |---|---|---|
 | **M0** | Solution skeleton, build/test script, `muthur up/down/status`, empty DB + migrations | `muthur status` returns JSON from a running server; AOT publish of `muthur.exe` works |
@@ -267,4 +297,4 @@ launch code and adapters, not schema surgery. M6 can move ahead of M3–M5 if su
 
 1. **First external project after the hub itself** — a personal project or the monorepo? Determines whether `land_mode=pr` + Azure DevOps ingest move up from M6.
 2. **What "validation" means for that project** — which platforms/validators are required, and can an agent already build, run, and drive the app unattended? If not, that harness is the real M4 work.
-3. **Answer channel** — browser "Needs you" page only, or also Discord/WhatsApp so you can unblock agents from your phone (pulls part of M7 forward).
+3. **Answer channel** — browser "Needs you" page only, or also Discord/WhatsApp so you can unblock agents from your phone (pulls part of M7 forward). **Decided: both**, because being able to unblock an agent from a phone is the difference between an organization that runs while the founder is away and one that does not. `discord:` ingest and a `discord-webhook` outbound target. What it cost: ingest is a firehose — every message in the watched channel becomes an inbound item, and mentions arrive as raw ids rather than names. Filed, unfixed.
