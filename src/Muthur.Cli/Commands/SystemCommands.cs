@@ -16,7 +16,9 @@ public static class SystemCommands
         var doctor = new Command("doctor", "Check whether this hub can do its job: ingest, outbound, projects, repositories, roles. Exit 1 if anything failed.") { offline };
         doctor.SetAction(async (parse, ct) =>
         {
-            var result = await HubClient.For(parse).GetAsync(Routes.Doctor + (parse.GetValue(offline) ? "?probe=false" : ""), ct);
+            var skipProbes = parse.GetValue(offline);
+            var result = await HubClient.For(parse, DoctorTimeout(skipProbes))
+                .GetAsync(Routes.Doctor + (skipProbes ? "?probe=false" : ""), ct);
             return DoctorExitCode(result, Output.Emit(parse, result));
         });
         root.Subcommands.Add(doctor);
@@ -70,6 +72,13 @@ public static class SystemCommands
         });
         root.Subcommands.Add(down);
     }
+
+    /// <summary>
+    /// A probing run waits on the hub's own probes — 60s per gh call, 30s per git call — and HubClient's
+    /// default of 30s would come back as ApiResult(0), reporting a healthy hub as not_running. Offline
+    /// touches nothing and keeps the default.
+    /// </summary>
+    internal static TimeSpan? DoctorTimeout(bool offline) => offline ? null : TimeSpan.FromSeconds(180);
 
     /// <summary>A report that reached us and contains a failed check is exit 1; a warning never is.</summary>
     internal static int DoctorExitCode(ApiResult result, int emitted)

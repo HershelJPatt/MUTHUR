@@ -7,7 +7,8 @@ namespace Muthur.Cli.Tests;
 
 /// <summary>
 /// The whole point of `muthur doctor` is its exit code: a conductor runs it before it staffs anything.
-/// Only a failed check turns it red — a warning is worth reading, not worth stopping for.
+/// Only a failed check turns it red — a warning is worth reading, not worth stopping for. And a run that
+/// waits less than the probes do reports exit 4, not_running, about a hub that is perfectly well.
 /// </summary>
 public sealed class DoctorExitCodeTests
 {
@@ -73,5 +74,22 @@ public sealed class DoctorExitCodeTests
         // Emit owns the exit code whenever it returns one of its own; the report is only consulted past that.
         var result = Report(Check(CheckStatus.Ok));
         Assert.Equal(ExitCodes.Unauthorized, SystemCommands.DoctorExitCode(result, ExitCodes.Unauthorized));
+    }
+
+    [Fact]
+    public void A_probing_run_waits_longer_than_the_probes_it_waits_on()
+    {
+        // The hub allows each gh probe 60s; anything at or under HubClient's own 30s default would come
+        // back as ApiResult(0) and report a healthy hub as not_running.
+        var timeout = SystemCommands.DoctorTimeout(offline: false);
+        Assert.NotNull(timeout);
+        Assert.True(timeout.Value > TimeSpan.FromSeconds(60));
+    }
+
+    [Fact]
+    public void Offline_keeps_the_ordinary_timeout()
+    {
+        // Null is how HubClient is asked for its default, which is right when nothing touches the network.
+        Assert.Null(SystemCommands.DoctorTimeout(offline: true));
     }
 }
