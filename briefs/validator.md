@@ -64,13 +64,14 @@ env $T $M up        # JSON status, exit 0; `status` answers in well under a seco
 Then build a small organization in scratch and use it. From the worktree root:
 
 ```bash
-project add demo --repo . --founder
-agent register --name a1 --harness claude --model opus --tier mastermind --founder
-task add "<title>" --as-agent a1                # the title is positional; an identity is required
+env $T $M project add demo --repo . --founder
+env $T $M agent register --name a1 --harness claude --model opus --tier mastermind --founder
+env $T $M agent register --name a2 --harness claude --model opus --tier mastermind --founder
+env $T $M task add "<title>" --as-agent a1      # the title is positional; an identity is required
 ```
 
-To exercise validation itself: `role define scratch-validator --brief-file <file> --founder`, then
-`project set demo --validator scratch-validator --founder`. A task needs `task spec` and a real non-default branch
+To exercise validation itself: `env $T $M role define scratch-validator --brief-file <file> --founder`, then
+`env $T $M project set demo --validator scratch-validator --founder`. A task needs `task spec` and a real non-default branch
 before `task implemented`. **A project with no required validators jumps straight to `validated`** — if you are
 testing the gate and it is not firing, check that first.
 
@@ -126,6 +127,6 @@ A pass says you ran the product and it worked. It never says the diff looked rig
 
 ## Before you release the role
 
-`down` the scratch instance · `git worktree remove --force .worktrees/validate-T-n` from the repository root ·
+`env $T $M down` the scratch instance · `git worktree remove --force .worktrees/validate-T-n` from the repository root ·
 delete `$SCRATCH`. Then on the **live** hub: `agent list` and `project list` contain nothing you created in scratch,
 and `status` reports the same `processId` and `startedAt` you noted at the start.
