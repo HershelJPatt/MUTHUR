@@ -65,12 +65,11 @@ public sealed class MessagingTests : IDisposable
         var sender = await _hub.RegisterAgentAsync("sender");
 
         var waiting = InboxAsync(waiter, wait: 600);
-        await Task.Delay(150);
         Assert.False(waiting.IsCompleted, "nothing to deliver yet, so the call must still be blocked");
 
         (await SendAsync(sender, "waiter", "wake up")).EnsureSuccessStatusCode();
 
-        var inbox = await waiting.WaitAsync(TimeSpan.FromSeconds(10));
+        var inbox = await Eventually.CompletesAsync(waiting, "the inbox never woke for the message that was sent");
         Assert.False(inbox.TimedOut);
         Assert.Equal("wake up", Assert.Single(inbox.Messages).Body);
     }
@@ -81,10 +80,9 @@ public sealed class MessagingTests : IDisposable
         var waiter = await _hub.RegisterAgentAsync("patient");
 
         var waiting = InboxAsync(waiter, wait: 60);
-        await Task.Delay(150);
-        _hub.Clock.Advance(TimeSpan.FromSeconds(61));
 
-        var inbox = await waiting.WaitAsync(TimeSpan.FromSeconds(10));
+        var inbox = await Eventually.AfterAdvancingAsync(waiting, _hub.Clock, TimeSpan.FromSeconds(61),
+            "the inbox never timed out, however far the clock was pushed");
         Assert.True(inbox.TimedOut);
         Assert.Empty(inbox.Messages);
     }
@@ -113,7 +111,7 @@ public sealed class MessagingTests : IDisposable
         var waiting = InboxAsync(agent, wait: 600);
         (await _hub.Founder().PostAsJsonAsync(Routes.RequestAction(request.Id, "answer"), new AnswerRequest("monthly"))).EnsureSuccessStatusCode();
 
-        var inbox = await waiting.WaitAsync(TimeSpan.FromSeconds(10));
+        var inbox = await Eventually.CompletesAsync(waiting, "the asker was never woken by the founder's answer");
         Assert.Contains("monthly", Assert.Single(inbox.Messages).Body);
         var resumed = (await agent.GetTaskAsync(task.Id)).Task;
         Assert.Equal(TaskState.InProgress, resumed.State);
@@ -128,12 +126,14 @@ public sealed class MessagingTests : IDisposable
     {
         var waiter = await _hub.RegisterAgentAsync("idle");
         var waiting = InboxAsync(waiter, wait: 900);
+        // NOT a barrier this test can drop: a request that arrives after StopApplication() finds the host's
+        // service provider disposed and answers 500, so it must reach the pipeline before the hub is told to stop.
         await Task.Delay(150);
         Assert.False(waiting.IsCompleted);
 
         _hub.Services.GetRequiredService<IHostApplicationLifetime>().StopApplication();
 
-        var inbox = await waiting.WaitAsync(TimeSpan.FromSeconds(5));
+        var inbox = await Eventually.CompletesAsync(waiting, "the inbox did not end when the hub stopped");
         Assert.True(inbox.TimedOut);
         Assert.Empty(inbox.Messages);
     }
