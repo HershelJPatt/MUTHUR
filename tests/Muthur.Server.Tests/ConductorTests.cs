@@ -325,7 +325,7 @@ public sealed class ConductorTests : IDisposable
     [InlineData("""{"validator":"win-validator","by":"checker"}""", "(no evidence)")]
     [InlineData("not json at all", "(no evidence)")]
     public void A_founder_notification_carries_a_line_of_evidence_not_a_report(string payload, string expected) =>
-        Assert.Equal(expected, ConductorService.FirstLineOfEvidence(payload));
+        Assert.Equal(expected, Evidence.FirstLineOfEvidence(payload));
 
     [Fact]
     public void A_long_verdict_is_cut_short_rather_than_pasted_whole()
@@ -333,7 +333,7 @@ public sealed class ConductorTests : IDisposable
         var evidence = new string('x', 4000);
         var payload = $$"""{"validator":"win-validator","by":"checker","evidence":"{{evidence}}"}""";
 
-        var line = ConductorService.FirstLineOfEvidence(payload);
+        var line = Evidence.FirstLineOfEvidence(payload);
 
         Assert.Equal(140, line.Length);
         Assert.EndsWith("…", line);

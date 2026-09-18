@@ -253,29 +253,6 @@ public sealed class ConductorService(Ledger ledger, MuthurOptions options, TimeP
         }
     }
 
-    /// <summary>
-    /// The first line of a failed verdict's evidence, capped. A founder's notification says which validator said no
-    /// and roughly why; the evidence in full is one command away and belongs there, not in a message body.
-    /// </summary>
-    internal static string FirstLineOfEvidence(string payloadJson)
-    {
-        const int Limit = 140;
-        string? evidence = null;
-        try
-        {
-            using var doc = System.Text.Json.JsonDocument.Parse(payloadJson);
-            if (doc.RootElement.TryGetProperty("evidence", out var value) && value.ValueKind == System.Text.Json.JsonValueKind.String)
-                evidence = value.GetString();
-        }
-        catch (System.Text.Json.JsonException) { }
-
-        var line = (evidence ?? "").ReplaceLineEndings("\n").Split('\n')
-            .Select(l => l.Trim().TrimStart('#').Trim())
-            .FirstOrDefault(l => l.Length > 0);
-        if (string.IsNullOrEmpty(line)) return "(no evidence)";
-        return line.Length <= Limit ? line : line[..(Limit - 1)].TrimEnd() + "…";
-    }
-
     /// <summary>A task that keeps failing stops being restaffed and becomes a question for the founder, once.</summary>
     private Task EscalateExhaustedAsync(CancellationToken ct) =>
         ledger.MutateAsync(Caller.Founder, async m =>
@@ -298,7 +275,7 @@ public sealed class ConductorService(Ledger ledger, MuthurOptions options, TimeP
                 var events = await m.Db.Events
                     .Where(e => e.Type == "validation.failed" && e.TaskId == task.Id)
                     .OrderBy(e => e.Seq).Select(e => new { e.At, e.Actor, e.PayloadJson }).ToListAsync(ct);
-                var verdicts = events.Select(e => $"- {e.At:yyyy-MM-dd HH:mm} {e.Actor}: {FirstLineOfEvidence(e.PayloadJson)}");
+                var verdicts = events.Select(e => $"- {e.At:yyyy-MM-dd HH:mm} {e.Actor}: {Evidence.FirstLineOfEvidence(e.PayloadJson)}");
 
                 // One line per verdict. The founder reads this on a card; the evidence itself is whole in
                 // `muthur task show`, and pasting it here turns a notification into kilobytes of escaped JSON.

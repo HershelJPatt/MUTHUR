@@ -26,6 +26,8 @@ public enum Verdict
     [JsonStringEnumMemberName("pending")] Pending,
     [JsonStringEnumMemberName("yes")] Yes,
     [JsonStringEnumMemberName("no")] No,
+    /// <summary>The validator could not do the job at all: it is not a judgement on the work.</summary>
+    [JsonStringEnumMemberName("blocked")] Blocked,
 }
 
 public enum AgentStatus
@@ -70,7 +72,13 @@ public static class Wire
         return false;
     }
 
-    public static string ToWire(this Verdict v) => v switch { Verdict.Yes => "yes", Verdict.No => "no", _ => "pending" };
+    public static string ToWire(this Verdict v) => v switch
+    {
+        Verdict.Yes => "yes",
+        Verdict.No => "no",
+        Verdict.Blocked => "blocked",
+        _ => "pending",
+    };
 
     public static string ToWire(this LandMode m) => m == LandMode.Pr ? "pr" : "merge";
 
