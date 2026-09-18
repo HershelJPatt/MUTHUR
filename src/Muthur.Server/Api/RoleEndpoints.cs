@@ -36,9 +36,18 @@ public static class RoleEndpoints
         app.MapPost(Routes.Tasks + "/{id}/fail", (HttpContext http, string id, VerdictRequest request, LifecycleService lifecycle, CancellationToken ct) =>
             lifecycle.VerdictAsync(http.GetCaller(), id, request, pass: false, ct));
 
+        app.MapPost(Routes.Tasks + "/{id}/validate-claim", (HttpContext http, string id, ClaimValidationRequest request, LifecycleService lifecycle, CancellationToken ct) =>
+            lifecycle.ClaimValidationAsync(http.GetCaller(), id, request, ct));
+
+        app.MapPost(Routes.Tasks + "/{id}/validate-release", (HttpContext http, string id, ClaimValidationRequest request, LifecycleService lifecycle, CancellationToken ct) =>
+            lifecycle.ReleaseValidationAsync(http.GetCaller(), id, request, ct));
+
         app.MapPost(Routes.Tasks + "/{id}/land", (HttpContext http, string id, LifecycleService lifecycle, CancellationToken ct) =>
             lifecycle.LandAsync(http.GetCaller(), id, ct));
 
-        app.MapGet(Routes.Validations, (string? role, LifecycleService lifecycle, CancellationToken ct) => lifecycle.PendingAsync(role, ct));
+        app.MapGet(Routes.Validations, (HttpContext http, string? role, bool? all, LifecycleService lifecycle, CancellationToken ct) =>
+            lifecycle.PendingAsync(http.GetCaller(), role, all == true, ct));
+
+        app.MapGet(Routes.ValidationQueue, (LifecycleService lifecycle, CancellationToken ct) => lifecycle.QueueAsync(ct));
     }
 }

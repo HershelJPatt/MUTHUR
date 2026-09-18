@@ -104,6 +104,12 @@ public sealed class TaskValidation
     public Guid? AgentId { get; set; }
     public Agent? Agent { get; set; }
     public DateTimeOffset? At { get; set; }
+    /// <summary>When this row started waiting — set when the round opens, never moved by a verdict.</summary>
+    public DateTimeOffset WaitingSince { get; set; }
+    /// <summary>The validator who has taken this (task, role) pair. Nobody else may spend a session on it.</summary>
+    public Guid? ClaimedByAgentId { get; set; }
+    public Agent? ClaimedBy { get; set; }
+    public DateTimeOffset? ClaimExpires { get; set; }
 }
 
 public enum Recipient { Agent, Role, Founder }

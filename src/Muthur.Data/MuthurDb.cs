@@ -93,6 +93,7 @@ public sealed class MuthurDb(DbContextOptions<MuthurDb> options) : DbContext(opt
             e.HasIndex(x => new { x.TaskId, x.ValidatorKey }).IsUnique();
             e.HasOne<WorkTask>().WithMany().HasForeignKey(x => x.TaskId).OnDelete(DeleteBehavior.Cascade);
             e.HasOne(x => x.Agent).WithMany().HasForeignKey(x => x.AgentId).OnDelete(DeleteBehavior.SetNull);
+            e.HasOne(x => x.ClaimedBy).WithMany().HasForeignKey(x => x.ClaimedByAgentId).OnDelete(DeleteBehavior.SetNull);
         });
 
         modelBuilder.Entity<Message>(e =>

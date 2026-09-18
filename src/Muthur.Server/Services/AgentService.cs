@@ -85,6 +85,13 @@ public sealed partial class AgentService(Ledger ledger, LeasePolicy leases, Time
             foreach (var task in owned.Where(t => t.ClaimExpires is null || t.ClaimExpires < renewTo))
                 task.ClaimExpires = renewTo;
 
+            // A validator that is working and reporting in keeps the pairs it took. Only live claims: one that
+            // already lapsed belongs to whoever takes it next, not to whoever comes back first.
+            var claimed = await m.Db.TaskValidations
+                .Where(v => v.ClaimedByAgentId == agentId && v.ClaimExpires > m.Now && v.ClaimExpires < renewTo)
+                .ToListAsync(ct);
+            foreach (var row in claimed) row.ClaimExpires = renewTo;
+
             await RoleLeases.RenewAsync(m, agentId, leases, ct);
         }, ct);
     }
