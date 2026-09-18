@@ -154,7 +154,10 @@ public sealed class TaskService(Ledger ledger, LeasePolicy leases)
         ledger.MutateAsync(caller, async m =>
         {
             var task = await LoadAsync(m.Db, id, ct);
-            RequireOwnerOrFounder(task, caller);
+            // An owned task is its owner's to flag; an unowned one is anyone's, because the case worth recording
+            // early - a backlog task whose author already knows it needs a browser - has no owner to be.
+            if (task.OwnerAgentId is not null) RequireOwnerOrFounder(task, caller);
+            else caller.RequireIdentified();
             var was = task.AttendedReason;
             var reason = string.IsNullOrWhiteSpace(request.Reason) ? null : request.Reason.Trim();
             if (reason == was) return task.ToDto();

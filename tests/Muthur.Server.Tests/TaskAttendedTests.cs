@@ -127,23 +127,32 @@ public sealed class TaskAttendedTests : IDisposable
     }
 
     [Fact]
-    public async Task Another_agent_may_neither_set_it_nor_lift_it()
+    public async Task An_owned_task_is_its_owners_to_flag_and_an_unowned_one_is_anyones()
     {
+        // Two tasks alike but for having an owner, and one stranger refused the first and allowed the second. An
+        // unowned backlog task is exactly the case worth recording early - the author who already knows it will
+        // need a browser has not claimed it yet - and the flag is reversible and cheap, so it is not the founder's.
         await SetUpAsync();
         var owner = await _hub.RegisterAgentAsync("owner");
-        var task = await ClaimedTaskAsync(owner, "Mine to say so about");
+        var owned = await ClaimedTaskAsync(owner, "Export the report");
+        var unowned = await owner.AddTaskAsync("Export the report");
         var stranger = await _hub.RegisterAgentAsync("stranger");
 
-        var refused = await AttendedAsync(stranger, task.Id, "I think it needs eyes");
+        var refused = await AttendedAsync(stranger, owned.Id, "I think it needs eyes");
         Assert.Equal(HttpStatusCode.UnprocessableEntity, refused.StatusCode);
         Assert.Equal("not_owner", (await refused.ReadErrorAsync()).Code);
 
-        (await AttendedAsync(owner, task.Id, "a device has to be held")).EnsureSuccessStatusCode();
-        Assert.Equal(HttpStatusCode.UnprocessableEntity, (await AttendedAsync(stranger, task.Id, null)).StatusCode);
+        var flagged = await (await AttendedAsync(stranger, unowned.Id, "the importer needs a real file dialog")).ReadTaskAsync();
+        Assert.Equal("the importer needs a real file dialog", flagged.AttendedReason);
 
-        // The founder may, on any task.
-        (await AttendedAsync(_hub.Founder(), task.Id, null)).EnsureSuccessStatusCode();
-        Assert.Null((await owner.GetTaskAsync(task.Id)).Task.AttendedReason);
+        // Loosened for registered agents, not for the anonymous.
+        Assert.Equal(HttpStatusCode.Unauthorized, (await AttendedAsync(_hub.CreateClient(), unowned.Id, "whoever I am")).StatusCode);
+
+        // On the owned one, its owner and the founder both may.
+        (await AttendedAsync(owner, owned.Id, "a device has to be held")).EnsureSuccessStatusCode();
+        Assert.Equal(HttpStatusCode.UnprocessableEntity, (await AttendedAsync(stranger, owned.Id, null)).StatusCode);
+        (await AttendedAsync(_hub.Founder(), owned.Id, null)).EnsureSuccessStatusCode();
+        Assert.Null((await owner.GetTaskAsync(owned.Id)).Task.AttendedReason);
     }
 
     [Fact]
