@@ -100,3 +100,33 @@ dotnet test tests/Muthur.Server.Tests/Muthur.Server.Tests.csproj    # alone: thi
   every pair. T-16's board indicator would have shown nothing, correctly, right up until main went red. That
   limit belongs in T-16's record — a clean merge means "these will merge", not "these will pass" — and it is
   the first concrete case for the revisit the founder scheduled.
+
+## Proof (2026-09-18)
+
+```
+dotnet test tests/Muthur.Server.Tests  (alone)   Failed: 0, Passed: 196
+dotnet test  (whole solution)                    Failed: 0, Passed: 3939
+dotnet build                                     0 warnings, 0 errors
+git diff --stat src/                             empty
+```
+
+The server suite **alone** is the one that matters: that is how these three failed, so a green run there is
+the evidence, not the full-solution run. The implementer also ran the three named tests under an explicit
+filter — 3 passed — to rule out ordering luck.
+
+`grep -rn '"spec", new SetSpecRequest' tests/` leaves no hardcoded path outside `SpecGuardTests.cs`, which
+passes literals deliberately because it is the guard's own test — including `specs/typo.md`, which is
+absent on purpose so the `spec_missing` refusal has something to refuse.
+
+One accepted deviation, and it is a strengthening: in `DoctorRoleTests` the spec allowed a bare
+`_repo.WriteSpec()` once the id turned out to be `T-1`. The implementer passed `task.Id` instead — by
+definition the id that task actually has, it cannot drift if that class gains a test or ids renumber, and
+it makes the two call sites read identically.
+
+### A sharp edge left in place, deliberately
+
+`TestRepo.WriteSpec(string taskId = "T-1")` has a default. A future fixture that calls `WriteSpec()` for a
+task that is not `T-1` gets a call that looks right and fails only through the heading check — which is
+half of what happened here. Making the parameter required would force the question at every call site.
+That is a design change to shared test infrastructure and it is not this task's business; raised by the
+implementer, recorded here, not actioned.
