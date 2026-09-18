@@ -1,0 +1,118 @@
+using Microsoft.EntityFrameworkCore;
+using Muthur.Contracts;
+using Muthur.Launch;
+using Muthur.Server.Auth;
+
+namespace Muthur.Server.Services;
+
+/// <summary>
+/// Starts a real validator session through <see cref="AgentLauncher"/>.
+/// <para>
+/// The session is an ordinary registered agent with an ordinary token: nothing the conductor starts has authority
+/// a founder-started terminal would not. It is told which role to take and which task is waiting, and then it
+/// follows the same validate procedure a human-started session follows — including the part where it may decide
+/// the product cannot be driven and report blocked instead of passing.
+/// </para>
+/// </summary>
+public sealed class ValidatorSessionLauncher(
+    Ledger ledger,
+    MuthurOptions options,
+    AgentService agents,
+    HarnessService harnesses,
+    IProcessRunner processes,
+    ILogger<ValidatorSessionLauncher> logger) : IValidatorSessionLauncher
+{
+    private const string Tier = "mastermind";
+
+    public async Task StartAsync(ConductorAssignment assignment, CancellationToken ct = default)
+    {
+        var repo = await RepositoryPathAsync(assignment.Project, ct);
+        if (repo is null || !Directory.Exists(repo))
+            throw new InvalidOperationException($"Project '{assignment.Project}' has no repository on disk.");
+
+        var candidates = await CandidatesAsync(assignment.AvoidHarness, ct);
+        if (candidates.Count == 0)
+            throw new InvalidOperationException($"No available {Tier} candidate to validate {assignment.TaskKey}.");
+
+        // One agent per role, reused across sessions, so the ledger shows a stable name rather than a new
+        // stranger every night. Registering again re-issues its token, which is what we want: the previous
+        // session is over.
+        var name = $"conductor-{assignment.RoleKey}";
+        var registration = await agents.RegisterAsync(Caller.Founder,
+            new RegisterAgentRequest(name, candidates[0].Harness, candidates[0].Model, Tier, candidates[0].Account), ct);
+
+        var scratch = Path.Combine(options.DataDir, "conductor", $"{assignment.TaskKey}-{assignment.RoleKey}");
+        Directory.CreateDirectory(scratch);
+
+        var launcher = new AgentLauncher(processes);
+        var attempts = await launcher.RunAsync(
+            candidates,
+            candidate => new WorkerRequest(
+                WorkingDirectory: repo,
+                Prompt: Prompt(assignment, candidate),
+                Model: candidate.Model,
+                GitCommonDirectory: null,
+                AllowedCommands: Allowed,
+                DeniedCommands: Denied,
+                ScratchDirectory: scratch),
+            new AgentIdentity(name, registration.Token),
+            TimeSpan.FromMinutes(options.ConductorSessionMinutes),
+            candidate => MarkLimitedAsync(candidate.Account, ct),
+            ct);
+
+        var last = attempts.LastOrDefault();
+        logger.LogInformation("Validator session for {Task}/{Role} finished on {Harness}: {Outcome}",
+            assignment.TaskKey, assignment.RoleKey, last?.Candidate.Harness, last?.Outcome.Success == true ? "ok" : "failed");
+    }
+
+    /// <summary>An account that could not answer leaves the rotation, exactly as `muthur agent limited` does.</summary>
+    private Task MarkLimitedAsync(string? account, CancellationToken ct) =>
+        account is { Length: > 0 }
+            ? ledger.MutateAsync(Caller.Founder, m => HarnessService.ApplyAsync(m, account, null, ct), ct)
+            : Task.CompletedTask;
+
+    /// <summary>A validator drives the product and talks to the hub; it does not push, merge, or touch the default branch.</summary>
+    private static readonly string[] Allowed = ["muthur*", "git*", "dotnet*", "pwsh*", "powershell*"];
+
+    private static readonly string[] Denied = ["git push*", "git merge*", "git rebase*", "git checkout main*", "git switch main*", "gh*"];
+
+    /// <summary>
+    /// Candidates for the tier, with the harness that built the task moved to the back rather than removed:
+    /// a different vendor checking the work is a preference, and validating beats not validating.
+    /// </summary>
+    private async Task<IReadOnlyList<HarnessCandidate>> CandidatesAsync(string? avoid, CancellationToken ct)
+    {
+        var tiers = await harnesses.TiersAsync(Tier, ct);
+        var available = tiers.SelectMany(t => t.Candidates).Where(c => !c.Limited)
+            .Select(c => new HarnessCandidate(c.Harness, c.Model, c.Account)).ToList();
+        return avoid is { Length: > 0 }
+            ? [.. available.Where(c => c.Harness != avoid), .. available.Where(c => c.Harness == avoid)]
+            : available;
+    }
+
+    private Task<string?> RepositoryPathAsync(string projectKey, CancellationToken ct) =>
+        ledger.ReadAsync((db, _) => db.Projects.Where(p => p.Key == projectKey).Select(p => p.RepoPath).SingleOrDefaultAsync(ct), ct);
+
+    private static string Prompt(ConductorAssignment assignment, HarnessCandidate candidate) =>
+        $"""
+        You are a validator on call in this MUTHUR organization, acting as the agent in $MUTHUR_AGENT.
+
+        Take the role `{assignment.RoleKey}` and read its brief — it is your job description:
+
+            muthur role take {assignment.RoleKey}
+            muthur role brief {assignment.RoleKey}
+
+        Then validate {assignment.TaskKey} ("{assignment.TaskTitle}"): follow the validate procedure in this
+        repository, exercise the change end to end on the real product, and give a verdict with evidence.
+
+        Rules that are not yours to bend:
+        - You did not write this task and must not fix what you find. Report it.
+        - A pass says you ran the product and it worked; it never says the diff looked right.
+        - If the product cannot be driven unattended, the verdict is not pass: message the task's owner, say what
+          stopped you, and release the role.
+        - Never push, merge, or check out the default branch. Work in a worktree of your own and remove it after.
+
+        When you are done, release the role. You are running unattended on {candidate.Harness}, so leave nothing
+        behind that a person would have to clean up.
+        """;
+}

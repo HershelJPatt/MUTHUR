@@ -129,7 +129,7 @@ public sealed class WorkerLauncherTests : IDisposable
         public List<(string FileName, IReadOnlyCollection<string>? Scrubbed)> Started { get; } = [];
 
         public Task<ProcessResult> RunAsync(string fileName, IReadOnlyList<string> arguments, string workingDirectory, string? stdin = null,
-            TimeSpan? timeout = null, CancellationToken ct = default, IReadOnlyCollection<string>? scrubEnvironment = null)
+            TimeSpan? timeout = null, CancellationToken ct = default, IReadOnlyCollection<string>? scrubEnvironment = null, IReadOnlyDictionary<string, string>? environment = null)
         {
             Started.Add((fileName, scrubEnvironment));
             return Task.FromResult(_results.Dequeue());
@@ -196,4 +196,28 @@ public sealed class WorkerReportTests
     [InlineData("status: spec-problem", "spec-problem")]
     [InlineData("all good, no report", null)]
     public void The_status_line_decides(string report, string? expected) => Assert.Equal(expected, WorkerReport.Status(report));
+}
+
+/// <summary>
+/// The line between a worker and an agent session is authority, and it is asserted in both directions here so
+/// the two launchers can never quietly converge.
+/// </summary>
+public sealed class AgentLauncherTests
+{
+    [Fact]
+    public void An_agent_session_is_given_the_identity_a_worker_is_denied()
+    {
+        var environment = AgentLauncher.EnvironmentFor(new AgentIdentity("conductor-win-validator", "tok_abc"));
+
+        Assert.Equal("conductor-win-validator", environment["MUTHUR_AGENT"]);
+        Assert.Equal("tok_abc", environment["MUTHUR_TOKEN"]);
+    }
+
+    [Fact]
+    public void The_identity_is_exactly_the_two_variables_the_cli_reads()
+    {
+        var environment = AgentLauncher.EnvironmentFor(new AgentIdentity("a", "b"));
+
+        Assert.Equal(["MUTHUR_AGENT", "MUTHUR_TOKEN"], environment.Keys.Order());
+    }
 }

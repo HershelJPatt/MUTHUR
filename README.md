@@ -104,6 +104,25 @@ muthur ask "Monthly or annual billing first?" --task T-12 --option monthly --opt
 Questions and messages for you appear on the dashboard's **Needs you** page (one-click answers); answering unblocks the
 task and wakes the agent.
 
+## The conductor
+
+A task that reaches `validating` waits for a validator to take the role. The conductor starts one, so a task that
+passes needs nobody awake:
+
+```bash
+muthur conductor on --founder      # off by default: upgrading a hub never starts spending on its own
+muthur conductor status            # running sessions, and the limits it staffs within
+```
+
+Each pass it looks for a task in `validating` whose required role nobody holds, and starts a session that takes
+that role — an ordinary registered agent with an ordinary token, no more authority than a terminal you open
+yourself. It prefers a harness *different* from the one that built the task, so one vendor checks another's work.
+It never staffs a `blocked` task, never contends for a held role, and after three failed verdicts on one task it
+stops and asks you instead.
+
+Workers have their hub credentials scrubbed because they have no authority; a validator is given an identity
+because its verdict decides whether work ships. Those are two launchers on purpose.
+
 ## Any model, any vendor
 
 `%LOCALAPPDATA%\Muthur\harnesses.json` maps tiers to an ordered list of `{harness, model, account}`. `muthur worker run`
@@ -146,6 +165,8 @@ on a different vendor than the author.
 | `Muthur:ClaimLeaseMinutes` / `RoleLeaseMinutes` | 30 / 30 | appsettings or `Muthur__…` environment variables |
 | `Muthur:IngestIntervalSeconds` | 180 | |
 | `Muthur:RequireCrossProviderReview` | false | |
+| `Muthur:ConductorEnabled` | false | staff validator sessions unattended; `muthur conductor on --founder` |
+| `Muthur:ConductorMaxSessions` / `SessionMinutes` / `MaxAttempts` | 2 / 45 / 3 | concurrency, session timeout, failures before it asks you |
 | `Muthur:DiscordBotToken` | — | bot token for `discord:` ingest; set it as `Muthur__DiscordBotToken`, never in a file |
 
 A build under test must never share the live hub's port or data: prefix **every** command with its own

@@ -21,6 +21,7 @@ public sealed class HubFactory : WebApplicationFactory<Program>
 
     public FakePullRequestOpener PullRequests { get; } = new();
     public FakeInboundSource Source { get; } = new();
+    public FakeValidatorSessions Validators { get; } = new();
 
     protected override void ConfigureWebHost(IWebHostBuilder builder)
     {
@@ -34,6 +35,8 @@ public sealed class HubFactory : WebApplicationFactory<Program>
             services.RemoveAll<IPullRequestOpener>();
             services.AddSingleton<IPullRequestOpener>(PullRequests);
             services.AddSingleton<IInboundSource>(Source);
+            services.RemoveAll<IValidatorSessionLauncher>();
+            services.AddSingleton<IValidatorSessionLauncher>(Validators);
         });
     }
 
@@ -96,4 +99,24 @@ public sealed class FakeInboundSource : IInboundSource
         var newest = matching.Count > 0 ? matching[^1].UpdatedAt : cursor;
         return Task.FromResult(new SourceFetch(matching.Select(i => i.Item).ToList(), newest));
     }
+}
+
+/// <summary>Records what the conductor asked to start, without starting anything.</summary>
+public sealed class FakeValidatorSessions : IValidatorSessionLauncher
+{
+    private readonly List<ConductorAssignment> _started = [];
+    private readonly SemaphoreSlim _release = new(0);
+
+    /// <summary>When true, a started session blocks until <see cref="Finish"/>, so a test can hold the budget full.</summary>
+    public bool Block { get; set; }
+
+    public IReadOnlyList<ConductorAssignment> Started { get { lock (_started) return [.. _started]; } }
+
+    public async Task StartAsync(ConductorAssignment assignment, CancellationToken ct = default)
+    {
+        lock (_started) _started.Add(assignment);
+        if (Block) await _release.WaitAsync(ct);
+    }
+
+    public void Finish(int count = 1) => _release.Release(count);
 }

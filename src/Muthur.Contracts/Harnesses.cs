@@ -18,3 +18,8 @@ public sealed record WorkerRunReport(
     bool Success,
     int DurationSeconds,
     decimal? CostUsd);
+
+/// <summary>Whether the conductor is staffing validation, and the limits it is staffing within.</summary>
+public sealed record ConductorStatusDto(bool Enabled, int Running, int MaxSessions, int SessionMinutes, int MaxAttempts);
+
+public sealed record ConductorSwitch(bool Enabled);
