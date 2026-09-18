@@ -315,8 +315,11 @@ and one sentence in the rules: `- Claim the task before you start. If the claim 
 
 - `role define` gains `--holders <n>`:
   `"How many agents may hold this role at once (default 1). Only a validator role may exceed 1."`
-- `validate list` gains `--all`: `"Include tasks another validator has already claimed."` Sends
-  `&all=true`.
+- `validate list` gains `--all`: `"Include tasks another validator has already claimed."` It adds
+  `all=true` to the query. Build the query the way `TaskCommands.list` and `InboundCommands.list` already do
+  — a list of `key=value` joined with `&` and prefixed with `?` only when non-empty — so `--all` alone
+  yields `?all=true` and not a query beginning with `&`. `--role` is escaped with `Uri.EscapeDataString`,
+  as it is today.
 - New `validate claim <id> --as <role>`:
   `"Take a task for validation so no other validator spends a session on it. Exit 3 if someone already has it."`
 - New `validate release <id> --as <role>`: `"Give back a task you claimed but will not validate."`
