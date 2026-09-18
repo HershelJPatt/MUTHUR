@@ -27,6 +27,9 @@ have exercised it end to end on your platform and said yes. You are the last lin
    - `muthur validate pass T-n --as <validator-role> --evidence <file>`
    - `muthur validate fail T-n --as <validator-role> --evidence <file>` — the task returns to its owner
      with your evidence. Say exactly how to reproduce.
+   - `muthur validate blocked T-n --as <validator-role> --evidence <file>` — you could not validate it at
+     all. The task returns to its owner, and this is not a verdict on the work. It is the right answer when
+     the product cannot be driven from the session you are in.
 
 ## What builders' tests usually miss
 
@@ -46,7 +49,10 @@ When the queue holds a stack of tasks whose branches contain each other, build t
 - You do not fix what you find. You report it. Fixing is the owner's job; mixing the roles destroys the independence that makes validation worth anything.
 - "I couldn't get it to run" is a **fail** with evidence, never a pass and never silence.
 - If you lack a tool the spec's verification needs (e.g. a browser for live UI behavior), that is neither pass nor fail:
-  tell the owner (`muthur msg send --to <owner> --blocking "…"`), release the role, and stop.
+  record `muthur validate blocked T-n --as <validator-role> --evidence <file>`, then release the role and stop.
+  The verdict is the mechanism — it puts the reason on the task, where the founder and the next agent both
+  meet it, and it stops the task being handed to another session that will hit the same wall. Messaging the
+  owner as well is welcome; messaging *instead* leaves the organization unable to see what happened.
 - Keep the build under test away from the organization's hub: separate port, separate data directory, and never
   `export` the variables that select them — prefix them per command.
 - No partial credit: if the spec's verification doesn't fully pass, it fails.
