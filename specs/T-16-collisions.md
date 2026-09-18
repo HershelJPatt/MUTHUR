@@ -251,6 +251,14 @@ exists to avoid.
 
 - **The revisit.** Once the conductor staffs several orchestrators at once, query `task.land_failed` for the
   collision rate and decide whether a rule is now worth its cost. That is a new task, and it is expected.
+
+  **Read `landedSince` knowing its bias**, found by Unit A's implementer while building it. It is derived
+  from merge subjects matching `^Land (T-\d+):`, which is the subject `MergeAsync` writes — so it only sees
+  tasks landed by MUTHUR in `Merge` mode. A project on `LandMode.Pr` lands through a human merge on the
+  forge, whose subject will not match, and `landedSince` there will be empty even when a collision really
+  happened. `files`, `branch` and `target` are unaffected, so the *rate* stays sound; it is the *pairing*
+  that is blind to PR-mode projects. Inherent to the method frozen above, not a defect in the build, and
+  worth knowing before the revisit reads a low number for a PR-mode repository as an absence of collisions.
 - `git merge-tree --write-tree` writes loose objects into the project's object store. Harmless and collected
   by `git gc`, but worth knowing before someone is surprised by it in a repository under inspection.
 - A collision between a task branch and the default branch (rather than between two task branches) is not
