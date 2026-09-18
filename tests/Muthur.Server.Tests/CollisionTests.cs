@@ -99,6 +99,27 @@ public sealed class CollisionTests : IDisposable
     }
 
     [Fact]
+    public async Task Two_validated_tasks_that_do_not_merge_collide_that_being_the_moment_it_matters_most()
+    {
+        // No required validators, so 'implemented' validates outright — the shape the end-to-end run hit,
+        // where both tasks were queued to land and the board said nothing. Validated is the highest-stakes
+        // of the three states: the bounce is not a future risk, it is one land away.
+        await ProjectAsync();
+        _repo.BranchWithFile("task/T-1-left", "shared.txt", "left\n");
+        _repo.BranchWithFile("task/T-2-right", "shared.txt", "right\n");
+        var (_, left) = await InFlightAsync("first", "Rewrite the header", "task/T-1-left");
+        var (_, right) = await InFlightAsync("second", "Rewrite the footer", "task/T-2-right");
+        Assert.Equal(TaskState.Validated, left.State);
+        Assert.Equal(TaskState.Validated, right.State);
+
+        var collision = Assert.Single(await Service().CurrentAsync());
+
+        Assert.Equal(left.Id, collision.TaskA);
+        Assert.Equal(right.Id, collision.TaskB);
+        Assert.Contains("shared.txt", collision.Files);
+    }
+
+    [Fact]
     public async Task Two_tasks_on_the_same_file_that_still_merge_are_not_a_collision()
     {
         await ProjectAsync("qa");
@@ -169,9 +190,10 @@ public sealed class CollisionTests : IDisposable
     [Fact]
     public async Task Tasks_that_are_not_in_flight_or_have_no_branch_are_never_compared()
     {
+        // Both branches conflict, so anything wrongly left in the filter shows up as a collision.
         await ProjectAsync();   // no required validators: 'implemented' validates, so the task can land
         _repo.BranchWithFile("task/T-1-left", "shared.txt", "left\n");
-        _repo.BranchWithFile("task/T-3-right", "shared.txt", "right\n");
+        _repo.BranchWithFile("task/T-2-right", "shared.txt", "right\n");
 
         var (owner, landed) = await InFlightAsync("first", "Rewrite the header", "task/T-1-left");
         Assert.Equal(TaskState.Validated, landed.State);
@@ -179,11 +201,17 @@ public sealed class CollisionTests : IDisposable
         Assert.Equal(TaskState.Done, done.State);
         Assert.Equal("task/T-1-left", done.Branch);   // a done task keeps its branch, and must still be ignored
 
-        var claimed = await _hub.RegisterAgentAsync("second");
+        var (second, validated) = await InFlightAsync("second", "Rewrite the footer", "task/T-2-right");
+        Assert.Equal(TaskState.Validated, validated.State);
+        var cancelled = await (await second.PostActionAsync(validated.Id, "cancel", new CancelTaskRequest("superseded"))).ReadTaskAsync();
+        Assert.Equal(TaskState.Cancelled, cancelled.State);
+        Assert.Equal("task/T-2-right", cancelled.Branch);   // validated is compared now, cancelled still is not
+
+        var claimed = await _hub.RegisterAgentAsync("third");
         var noBranch = await claimed.AddTaskAsync("Still thinking");
         (await claimed.ClaimAsync(noBranch.Id)).EnsureSuccessStatusCode();
 
-        var backlog = await _hub.RegisterAgentAsync("third");
+        var backlog = await _hub.RegisterAgentAsync("fourth");
         await backlog.AddTaskAsync("Not started");
 
         Assert.Empty(await Service().CurrentAsync());
