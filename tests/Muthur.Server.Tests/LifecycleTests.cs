@@ -30,7 +30,7 @@ public sealed class LifecycleTests : IDisposable
         var owner = await _hub.RegisterAgentAsync("owner");
         var task = await owner.AddTaskAsync("Build the feature");
         (await owner.ClaimAsync(task.Id)).EnsureSuccessStatusCode();
-        (await owner.PostActionAsync(task.Id, "spec", new SetSpecRequest("specs/T-1.md"))).EnsureSuccessStatusCode();
+        (await owner.PostActionAsync(task.Id, "spec", new SetSpecRequest(_repo.WriteSpec()))).EnsureSuccessStatusCode();
         _repo.BranchWithFile(branch, file, content);
         return (owner, task.Id);
     }
@@ -133,7 +133,7 @@ public sealed class LifecycleTests : IDisposable
         var noSpec = await owner.PostActionAsync(task.Id, "implemented", new ImplementedRequest("task/T-1-x"));
         Assert.Equal("spec_required", (await noSpec.ReadErrorAsync()).Code);
 
-        (await owner.PostActionAsync(task.Id, "spec", new SetSpecRequest("specs/T-1.md"))).EnsureSuccessStatusCode();
+        (await owner.PostActionAsync(task.Id, "spec", new SetSpecRequest(_repo.WriteSpec()))).EnsureSuccessStatusCode();
         var ok = await (await owner.PostActionAsync(task.Id, "implemented", new ImplementedRequest("task/T-1-x"))).ReadTaskAsync();
         Assert.Equal(TaskState.Validated, ok.State); // the project requires no validators
     }
