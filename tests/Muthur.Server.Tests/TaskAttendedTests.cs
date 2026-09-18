@@ -52,7 +52,7 @@ public sealed class TaskAttendedTests : IDisposable
     private async Task<string> ValidatingTaskAsync(HttpClient owner, string title, string branch, string file)
     {
         var task = await ClaimedTaskAsync(owner, title);
-        (await owner.PostActionAsync(task.Id, "spec", new SetSpecRequest($"specs/{task.Id}.md"))).EnsureSuccessStatusCode();
+        (await owner.PostActionAsync(task.Id, "spec", new SetSpecRequest(_repo.WriteSpec(task.Id)))).EnsureSuccessStatusCode();
         _repo.BranchWithFile(branch, file, "feature\n");
         (await owner.PostActionAsync(task.Id, "implemented", new ImplementedRequest(branch))).EnsureSuccessStatusCode();
         return task.Id;

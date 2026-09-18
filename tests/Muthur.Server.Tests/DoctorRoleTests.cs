@@ -60,7 +60,7 @@ public sealed class DoctorRoleTests : IDisposable
         var owner = await _hub.RegisterAgentAsync("owner");
         var task = await owner.AddTaskAsync("Build the feature");
         (await owner.ClaimAsync(task.Id)).EnsureSuccessStatusCode();
-        (await owner.PostActionAsync(task.Id, "spec", new SetSpecRequest("specs/T-1.md"))).EnsureSuccessStatusCode();
+        (await owner.PostActionAsync(task.Id, "spec", new SetSpecRequest(_repo.WriteSpec(task.Id)))).EnsureSuccessStatusCode();
         _repo.BranchWithFile("task/T-1-feature", "feature.txt", "feature\n");
         (await owner.PostActionAsync(task.Id, "implemented", new ImplementedRequest("task/T-1-feature"))).EnsureSuccessStatusCode();
 
