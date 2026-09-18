@@ -91,11 +91,12 @@ public static class TaskCommands
         attended.SetAction(async (parse, ct) =>
         {
             var reason = parse.GetValue(attendedReason);
-            if (AttendedRefusal(reason, parse.GetValue(attendedClear)) is { } refusal)
+            var clear = parse.GetValue(attendedClear);
+            if (AttendedRefusal(parse.GetResult(attendedReason) is not null, reason, clear) is { } refusal)
                 return Output.Error(refusal.Code, refusal.Message, ExitCodes.RuleViolation);
             return Output.Emit(parse, await HubClient.For(parse).PostAsync(
                 Routes.TaskAction(parse.GetValue(attendedId)!, "attended"),
-                new AttendedRequest(parse.GetValue(attendedClear) ? null : reason), MuthurJsonContext.Default.AttendedRequest, ct));
+                new AttendedRequest(clear ? null : reason!.Trim()), MuthurJsonContext.Default.AttendedRequest, ct));
         });
         task.Subcommands.Add(attended);
 
@@ -141,13 +142,15 @@ public static class TaskCommands
     /// <summary>
     /// Why `task attended` will not be sent, or null when the flags are usable. The hub cannot tell "clear" from
     /// "set, but the reason was left out" — both arrive as a null reason — so the refusal belongs here, before a
-    /// round trip that would silently lift the flag instead.
+    /// round trip that would silently lift the flag instead. It branches on whether --reason was *supplied*, never
+    /// on whether it has content: `--reason "   " --clear` is a contradiction to refuse, not a clear to obey.
     /// </summary>
-    public static (string Code, string Message)? AttendedRefusal(string? reason, bool clear) =>
-        (string.IsNullOrWhiteSpace(reason), clear) switch
+    public static (string Code, string Message)? AttendedRefusal(bool reasonSupplied, string? reason, bool clear) =>
+        (reasonSupplied, clear) switch
         {
-            (true, false) => ("reason_required", "Say why this task needs a human: --reason \"<why>\", or --clear to lift it."),
-            (false, true) => ("reason_required", "Pass --reason or --clear, not both."),
-            _ => null,
+            (true, true) => ("reason_required", "Pass --reason or --clear, not both."),
+            (true, false) when !string.IsNullOrWhiteSpace(reason) => null,
+            (false, true) => null,
+            _ => ("reason_required", "Say why this task needs a human: --reason \"<why>\", or --clear to lift it."),
         };
 }
