@@ -36,20 +36,24 @@ public sealed class ConductorService(Ledger ledger, MuthurOptions options, TimeP
     private string? _lastAction;
 
     /// <summary>
-    /// Consecutive failures to <em>start</em> a session, per task and role, and when that pair last gave up.
+    /// Consecutive unproductive sessions, per task and role, and when that pair last gave up.
     /// <para>
-    /// A validator that ran and said no is progress; a session that could not start at all is the organization
-    /// wedged, and retrying it every interval all night writes thousands of ledger events while `status` reads
+    /// A validator that ran and said no is progress; a session that could not start, one that started and never
+    /// finished, and one that ran to a clean exit having recorded nothing are all the organization wedged, and
+    /// retrying any of them every interval all night writes thousands of ledger events while `status` reads
     /// perfectly healthy. So a pair stops after <c>ConductorMaxAttempts</c> — but it stops <em>half-open</em>:
     /// one probe is let through every <c>ConductorStallProbeMinutes</c>. Whatever was wrong is usually fixed from
-    /// outside the hub — a quota cleared, a harness installed, a repository remounted — and the founder should not
-    /// have to know an incantation to resume. A probe that starts clears the count; one that fails re-arms the
-    /// cooldown without saying anything further.
+    /// outside the hub — a quota cleared, a harness installed, a repository remounted, a spec rewritten — and the
+    /// founder should not have to know an incantation to resume. A probe that reaches a verdict clears the count;
+    /// one that does not re-arms the cooldown without saying anything further.
     /// </para>
     /// </summary>
-    private readonly Dictionary<string, Stall> _launchFailures = [];
+    private readonly Dictionary<string, Stall> _stalls = [];
 
-    private sealed record Stall(int Failures, DateTimeOffset? StalledAt, bool Announced);
+    /// <summary>Why a session produced nothing. The founder is sent to a different place for each.</summary>
+    private enum Unproductive { NeverStarted, RanAndFailed, NoVerdict }
+
+    private sealed record Stall(int Failures, DateTimeOffset? StalledAt, bool Announced, Unproductive Last);
 
     /// <summary>
     /// Whether staffing is on. The hub is a local process that is off for hours, so this lives in the database:
@@ -86,7 +90,7 @@ public sealed class ConductorService(Ledger ledger, MuthurOptions options, TimeP
             if (was != enabled)
                 m.Record(enabled ? "conductor.on" : "conductor.off", payload: new { maxSessions = options.ConductorMaxSessions });
             // Turning it on is the founder saying "try again"; a stall from before that is not their answer.
-            if (enabled) lock (_launchFailures) _launchFailures.Clear();
+            if (enabled) lock (_stalls) _stalls.Clear();
         }, ct);
         return await StatusAsync(ct);
     }
@@ -145,8 +149,8 @@ public sealed class ConductorService(Ledger ledger, MuthurOptions options, TimeP
                     var key = $"{Wire.TaskId(task.Id)}/{validation.ValidatorKey}";
                     lock (_running)
                         if (_running.Contains(key)) continue;
-                    lock (_launchFailures)
-                        if (_launchFailures.GetValueOrDefault(key) is { StalledAt: { } stalled } &&
+                    lock (_stalls)
+                        if (_stalls.GetValueOrDefault(key) is { StalledAt: { } stalled } &&
                             stalled + TimeSpan.FromMinutes(options.ConductorStallProbeMinutes) > now)
                             continue;
 
@@ -200,20 +204,9 @@ public sealed class ConductorService(Ledger ledger, MuthurOptions options, TimeP
     {
         try
         {
-            await launcher.StartAsync(assignment, CancellationToken.None);
-            lock (_launchFailures) _launchFailures.Remove(key);   // including a probe: the pair is working again
-        }
-        catch (Exception ex)
-        {
-            Stall stall;
-            lock (_launchFailures)
-            {
-                var previous = _launchFailures.GetValueOrDefault(key);
-                var failures = previous is null ? 1 : previous.Failures + 1;
-                var stalling = failures >= options.ConductorMaxAttempts;
-                stall = new Stall(failures, stalling ? clock.GetUtcNow() : null, previous?.Announced == true);
-                _launchFailures[key] = stall with { Announced = stall.Announced || stalling };
-            }
+            Exception? failure = null;
+            try { await launcher.StartAsync(assignment, CancellationToken.None); }
+            catch (Exception thrown) { failure = thrown; }
 
             // A session that ran and hung is not a session that never started, and the founder must not be sent
             // looking for a missing CLI when the real fault is sessions outliving their timeout.
@@ -221,36 +214,95 @@ public sealed class ConductorService(Ledger ledger, MuthurOptions options, TimeP
             // Classified on what is known, never on the absence of one type: an exception nobody anticipated is
             // far likelier to mean the session never began than that it ran, and this wording is the only thing
             // telling the founder where to look.
-            var ranButFailed = ex is ValidatorSessionException;
-
-            await ledger.MutateAsync(Caller.Founder, m =>
+            if (failure is { } ex)
             {
-                m.Record(ranButFailed ? "conductor.session_failed" : "conductor.failed", assignment.TaskId,
-                    new { role = assignment.RoleKey, error = ex.Message, attempt = stall.Failures });
-                if (stall.StalledAt is not null && !stall.Announced)
-                {
-                    // Stop rather than degrade, and say so once: the founder's only other signal is that nothing shipped.
-                    m.Record("conductor.stalled", assignment.TaskId, new { role = assignment.RoleKey, error = ex.Message, ran = ranButFailed });
-                    MessageService.PostFromHub(m, Recipient.Founder, null,
-                        (ranButFailed
-                            ? $"The conductor started a validator for {assignment.TaskKey} ({assignment.RoleKey}) " +
-                              $"{stall.Failures} times and none of them finished: {ex.Message}"
-                            : $"The conductor could not start a validator for {assignment.TaskKey} ({assignment.RoleKey}) " +
-                              $"{stall.Failures} times and has stopped trying: {ex.Message}") + Environment.NewLine +
-                        $"Fix the cause and it retries by itself within {options.ConductorStallProbeMinutes} " +
-                        (options.ConductorStallProbeMinutes == 1 ? "minute; " : "minutes; ") +
-                        "`muthur conductor off --founder && muthur conductor on --founder` retries at once.",
-                        assignment.TaskId);
-                    _lastAction = (ranButFailed ? "gave up running " : "gave up starting ")
-                        + $"{assignment.RoleKey} for {assignment.TaskKey}: {ex.Message}";
-                }
-                return Task.CompletedTask;
-            }, CancellationToken.None);
+                await UnproductiveAsync(assignment, key,
+                    ex is ValidatorSessionException ? Unproductive.RanAndFailed : Unproductive.NeverStarted, ex.Message);
+            }
+            else if (await ReachedAVerdictAsync(assignment))
+            {
+                lock (_stalls) _stalls.Remove(key);   // including a probe: the pair is working again
+            }
+            else
+            {
+                // It started, it exited cleanly, and it recorded nothing. That is not progress: it is the loop that
+                // spent five harness sessions in twenty-eight minutes on a task no unattended validator could do.
+                await UnproductiveAsync(assignment, key, Unproductive.NoVerdict, null);
+            }
         }
         finally
         {
             lock (_running) _running.Remove(key);
         }
+    }
+
+    /// <summary>Whether the session left a verdict behind for its pair — the only evidence that it did its job.</summary>
+    private Task<bool> ReachedAVerdictAsync(ConductorAssignment assignment) =>
+        ledger.ReadAsync(async (db, _) =>
+            !await db.TaskValidations.AnyAsync(v =>
+                v.TaskId == assignment.TaskId && v.ValidatorKey == assignment.RoleKey && v.Verdict == Verdict.Pending,
+                CancellationToken.None),
+            CancellationToken.None);
+
+    /// <summary>
+    /// One session produced nothing: count it, and when the pair has run out of attempts stall it half-open and tell
+    /// the founder once, in the words that send them to the right place for this kind of nothing.
+    /// </summary>
+    private Task UnproductiveAsync(ConductorAssignment assignment, string key, Unproductive outcome, string? error)
+    {
+        Stall stall;
+        lock (_stalls)
+        {
+            var previous = _stalls.GetValueOrDefault(key);
+            var failures = previous is null ? 1 : previous.Failures + 1;
+            var stalling = failures >= options.ConductorMaxAttempts;
+            stall = new Stall(failures, stalling ? clock.GetUtcNow() : null, previous?.Announced == true, outcome);
+            _stalls[key] = stall with { Announced = stall.Announced || stalling };
+        }
+
+        return ledger.MutateAsync(Caller.Founder, m =>
+        {
+            m.Record(outcome switch
+            {
+                Unproductive.RanAndFailed => "conductor.session_failed",
+                Unproductive.NoVerdict => "conductor.no_verdict",
+                _ => "conductor.failed",
+            }, assignment.TaskId, outcome == Unproductive.NoVerdict
+                ? new { role = assignment.RoleKey, attempt = stall.Failures }
+                : (object)new { role = assignment.RoleKey, error, attempt = stall.Failures });
+
+            if (stall.StalledAt is null || stall.Announced) return Task.CompletedTask;
+
+            // Stop rather than degrade, and say so once: the founder's only other signal is that nothing shipped.
+            m.Record("conductor.stalled", assignment.TaskId,
+                new { role = assignment.RoleKey, error, ran = outcome != Unproductive.NeverStarted });
+            MessageService.PostFromHub(m, Recipient.Founder, null,
+                (outcome switch
+                {
+                    Unproductive.RanAndFailed =>
+                        $"The conductor started a validator for {assignment.TaskKey} ({assignment.RoleKey}) " +
+                        $"{stall.Failures} times and none of them finished: {error}",
+                    Unproductive.NoVerdict =>
+                        $"The conductor started {stall.Failures} validators for {assignment.TaskKey} ({assignment.RoleKey}) " +
+                        "and none of them reached a verdict. They ran and exited cleanly, so something is stopping them " +
+                        "from validating at all rather than failing. Look at the bus for what they said, then re-spec " +
+                        "the task, validate it yourself, or raise Muthur:ConductorMaxAttempts.",
+                    _ =>
+                        $"The conductor could not start a validator for {assignment.TaskKey} ({assignment.RoleKey}) " +
+                        $"{stall.Failures} times and has stopped trying: {error}",
+                }) + Environment.NewLine +
+                $"Fix the cause and it retries by itself within {options.ConductorStallProbeMinutes} " +
+                (options.ConductorStallProbeMinutes == 1 ? "minute; " : "minutes; ") +
+                "`muthur conductor off --founder && muthur conductor on --founder` retries at once.",
+                assignment.TaskId);
+            _lastAction = outcome switch
+            {
+                Unproductive.RanAndFailed => $"gave up running {assignment.RoleKey} for {assignment.TaskKey}: {error}",
+                Unproductive.NoVerdict => $"gave up on {assignment.RoleKey} for {assignment.TaskKey}: {stall.Failures} sessions, no verdict",
+                _ => $"gave up starting {assignment.RoleKey} for {assignment.TaskKey}: {error}",
+            };
+            return Task.CompletedTask;
+        }, CancellationToken.None);
     }
 
     /// <summary>
