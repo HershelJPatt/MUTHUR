@@ -125,7 +125,7 @@ muthur inbound add "Customer: export is broken" --source email --external-id msg
 muthur inbound claim I-7 --as-task                                  # one winner; becomes a backlog task linking to its source
 
 muthur out target news --channel discord-webhook --address https://discord.com/api/webhooks/… --founder
-muthur out draft --target news --file announce.md      # unknown target or a credential in the text → refused, not stored
+muthur out draft --target news --file announce.md      # unknown target → refused. A credential → drafted, flagged, only you can send it
 muthur out show O-3 ; muthur out review O-3 --approve --sha <sha256>      # a DIFFERENT agent, naming the bytes it read
 muthur out send O-3                                    # the hub re-checks hash + secrets and transmits
 ```
