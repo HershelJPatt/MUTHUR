@@ -26,6 +26,10 @@ public sealed record LeasePolicy(TimeSpan ClaimLease, TimeSpan RoleLease, TimeSp
     public static bool IsLapsed(WorkTask task, DateTimeOffset now) =>
         task.State == TaskState.InProgress && (task.ClaimExpires is null || task.ClaimExpires <= now);
 
+    /// <summary>A validator's hold on one (task, role) pair. A claim without a live lease is as good as none.</summary>
+    public static bool IsClaimLive(TaskValidation row, DateTimeOffset now) =>
+        row.ClaimedByAgentId is not null && row.ClaimExpires > now;
+
     public AgentStatus StatusOf(Agent agent, DateTimeOffset now)
     {
         if (agent.LimitedUntil is { } until && until > now) return AgentStatus.Limited;

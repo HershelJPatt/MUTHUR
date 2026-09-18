@@ -19,3 +19,5 @@ public sealed record RoleBriefDto(string Key, bool IsValidator, string Brief, Da
 public sealed record ImplementedRequest(string Branch);
 
 public sealed record VerdictRequest(string Validator, string? Evidence = null);
+
+public sealed record ClaimValidationRequest(string Validator);
