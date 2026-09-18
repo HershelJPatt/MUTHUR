@@ -97,6 +97,7 @@ public sealed class IngestService(Ledger ledger, IEnumerable<IInboundSource> sou
         row.Cursor = cursor;
         row.LastError = error;
         row.UpdatedAt = m.Now;
+        if (error is null) row.LastSuccessAt = m.Now;
     }
 
     private static (string Scheme, string Location) Split(string source)
