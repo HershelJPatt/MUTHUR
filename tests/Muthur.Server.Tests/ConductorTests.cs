@@ -32,7 +32,7 @@ public sealed class ConductorTests : IDisposable
         var owner = await _hub.RegisterAgentAsync("owner");
         var task = await owner.AddTaskAsync(title);
         (await owner.ClaimAsync(task.Id)).EnsureSuccessStatusCode();
-        (await owner.PostActionAsync(task.Id, "spec", new SetSpecRequest("specs/T-1.md"))).EnsureSuccessStatusCode();
+        (await owner.PostActionAsync(task.Id, "spec", new SetSpecRequest(_repo.WriteSpec()))).EnsureSuccessStatusCode();
         _repo.BranchWithFile(branch, file, "feature\n");
         (await owner.PostActionAsync(task.Id, "implemented", new ImplementedRequest(branch))).EnsureSuccessStatusCode();
         return (owner, task.Id);
@@ -130,7 +130,7 @@ public sealed class ConductorTests : IDisposable
         var owner = await _hub.RegisterAgentAsync("builder", harness: "claude", model: "opus");
         var task = await owner.AddTaskAsync("Built by Claude");
         (await owner.ClaimAsync(task.Id)).EnsureSuccessStatusCode();
-        (await owner.PostActionAsync(task.Id, "spec", new SetSpecRequest("specs/T-1.md"))).EnsureSuccessStatusCode();
+        (await owner.PostActionAsync(task.Id, "spec", new SetSpecRequest(_repo.WriteSpec()))).EnsureSuccessStatusCode();
         _repo.BranchWithFile("task/T-1-feature", "feature.txt", "feature\n");
         (await owner.PostActionAsync(task.Id, "implemented", new ImplementedRequest("task/T-1-feature"))).EnsureSuccessStatusCode();
 

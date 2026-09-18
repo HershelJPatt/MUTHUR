@@ -19,7 +19,20 @@ public sealed class TestRepo : IDisposable
         Commit("initial");
     }
 
-    public void Write(string file, string content) => File.WriteAllText(System.IO.Path.Combine(Path, file), content);
+    public void Write(string file, string content)
+    {
+        var target = System.IO.Path.Combine(Path, file);
+        Directory.CreateDirectory(System.IO.Path.GetDirectoryName(target)!);
+        File.WriteAllText(target, content);
+    }
+
+    /// <summary>Writes `specs/&lt;id&gt;.md` with a heading naming that task, which `task spec` requires.</summary>
+    public string WriteSpec(string taskId = "T-1")
+    {
+        var file = $"specs/{taskId}.md";
+        Write(file, $"# {taskId} — a spec for the test\n");
+        return file;
+    }
 
     public void Commit(string message)
     {

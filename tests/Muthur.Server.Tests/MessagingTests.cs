@@ -209,7 +209,7 @@ public sealed class MessagingTests : IDisposable
         (await validator.PostAsync(Routes.RoleAction("win-validator", "take"), null)).EnsureSuccessStatusCode();
         var task = await owner.AddTaskAsync("Notify me");
         (await owner.ClaimAsync(task.Id)).EnsureSuccessStatusCode();
-        (await owner.PostActionAsync(task.Id, "spec", new SetSpecRequest("specs/T-1.md"))).EnsureSuccessStatusCode();
+        (await owner.PostActionAsync(task.Id, "spec", new SetSpecRequest(repo.WriteSpec()))).EnsureSuccessStatusCode();
         repo.BranchWithFile("task/T-1-notify", "n.txt", "n\n");
 
         (await owner.PostActionAsync(task.Id, "implemented", new ImplementedRequest("task/T-1-notify"))).EnsureSuccessStatusCode();
