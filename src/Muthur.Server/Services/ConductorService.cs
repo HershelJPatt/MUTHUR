@@ -36,11 +36,20 @@ public sealed class ConductorService(Ledger ledger, MuthurOptions options, TimeP
     private string? _lastAction;
 
     /// <summary>
-    /// Consecutive failures to <em>start</em> a session, per task and role. A validator that ran and said no is
-    /// progress; a session that could not start at all is the organization wedged, and retrying it every interval
-    /// all night writes thousands of ledger events while `status` reads perfectly healthy.
+    /// Consecutive failures to <em>start</em> a session, per task and role, and when that pair last gave up.
+    /// <para>
+    /// A validator that ran and said no is progress; a session that could not start at all is the organization
+    /// wedged, and retrying it every interval all night writes thousands of ledger events while `status` reads
+    /// perfectly healthy. So a pair stops after <c>ConductorMaxAttempts</c> — but it stops <em>half-open</em>:
+    /// one probe is let through every <c>ConductorStallProbeMinutes</c>. Whatever was wrong is usually fixed from
+    /// outside the hub — a quota cleared, a harness installed, a repository remounted — and the founder should not
+    /// have to know an incantation to resume. A probe that starts clears the count; one that fails re-arms the
+    /// cooldown without saying anything further.
+    /// </para>
     /// </summary>
-    private readonly Dictionary<string, int> _launchFailures = [];
+    private readonly Dictionary<string, Stall> _launchFailures = [];
+
+    private sealed record Stall(int Failures, DateTimeOffset? StalledAt, bool Announced);
 
     /// <summary>
     /// Whether staffing is on. The hub is a local process that is off for hours, so this lives in the database:
@@ -75,6 +84,8 @@ public sealed class ConductorService(Ledger ledger, MuthurOptions options, TimeP
             else row.Value = enabled ? "true" : "false";
             if (was != enabled)
                 m.Record(enabled ? "conductor.on" : "conductor.off", payload: new { maxSessions = options.ConductorMaxSessions });
+            // Turning it on is the founder saying "try again"; a stall from before that is not their answer.
+            if (enabled) lock (_launchFailures) _launchFailures.Clear();
         }, ct);
         return await StatusAsync(ct);
     }
@@ -134,7 +145,9 @@ public sealed class ConductorService(Ledger ledger, MuthurOptions options, TimeP
                     lock (_running)
                         if (_running.Contains(key)) continue;
                     lock (_launchFailures)
-                        if (_launchFailures.GetValueOrDefault(key) >= options.ConductorMaxAttempts) continue;
+                        if (_launchFailures.GetValueOrDefault(key) is { StalledAt: { } stalled } &&
+                            stalled + TimeSpan.FromMinutes(options.ConductorStallProbeMinutes) > now)
+                            continue;
 
                     plan.Add(new ConductorAssignment(
                         task.Id, Wire.TaskId(task.Id), task.Title, task.Project?.Key ?? "",
@@ -187,23 +200,33 @@ public sealed class ConductorService(Ledger ledger, MuthurOptions options, TimeP
         try
         {
             await launcher.StartAsync(assignment, CancellationToken.None);
-            lock (_launchFailures) _launchFailures.Remove(key);
+            lock (_launchFailures) _launchFailures.Remove(key);   // including a probe: the pair is working again
         }
         catch (Exception ex)
         {
-            int failures;
-            lock (_launchFailures) failures = _launchFailures[key] = _launchFailures.GetValueOrDefault(key) + 1;
+            Stall stall;
+            lock (_launchFailures)
+            {
+                var previous = _launchFailures.GetValueOrDefault(key);
+                var failures = previous is null ? 1 : previous.Failures + 1;
+                var stalling = failures >= options.ConductorMaxAttempts;
+                stall = new Stall(failures, stalling ? clock.GetUtcNow() : null, previous?.Announced == true);
+                _launchFailures[key] = stall with { Announced = stall.Announced || stalling };
+            }
 
             await ledger.MutateAsync(Caller.Founder, m =>
             {
-                m.Record("conductor.failed", assignment.TaskId, new { role = assignment.RoleKey, error = ex.Message, attempt = failures });
-                if (failures >= options.ConductorMaxAttempts)
+                m.Record("conductor.failed", assignment.TaskId, new { role = assignment.RoleKey, error = ex.Message, attempt = stall.Failures });
+                if (stall.StalledAt is not null && !stall.Announced)
                 {
-                    // Stop rather than degrade, and say so: the founder's only other signal is that nothing shipped.
+                    // Stop rather than degrade, and say so once: the founder's only other signal is that nothing shipped.
                     m.Record("conductor.stalled", assignment.TaskId, new { role = assignment.RoleKey, error = ex.Message });
                     MessageService.PostFromHub(m, Recipient.Founder, null,
                         $"The conductor could not start a validator for {assignment.TaskKey} ({assignment.RoleKey}) " +
-                        $"{failures} times and has stopped trying: {ex.Message}", assignment.TaskId);
+                        $"{stall.Failures} times and has stopped trying: {ex.Message}" + Environment.NewLine +
+                        $"Fix the cause and it retries by itself within {options.ConductorStallProbeMinutes} minutes; " +
+                        "`muthur conductor off --founder && muthur conductor on --founder` retries at once.",
+                        assignment.TaskId);
                     _lastAction = $"gave up starting {assignment.RoleKey} for {assignment.TaskKey}: {ex.Message}";
                 }
                 return Task.CompletedTask;

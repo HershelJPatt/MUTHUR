@@ -27,10 +27,14 @@ public sealed class AgentLauncher(IProcessRunner processes, Func<string, (string
             ["MUTHUR_TOKEN"] = identity.Token,
         };
 
+    /// <param name="identityFor">
+    /// Called for the candidate about to run, not once up front: the launcher may fall through to another vendor
+    /// when an account is out of quota, and the session's ledger entries must name whoever actually ran.
+    /// </param>
     public async Task<IReadOnlyList<WorkerAttempt>> RunAsync(
         IReadOnlyList<HarnessCandidate> candidates,
         Func<HarnessCandidate, WorkerRequest> requestFor,
-        AgentIdentity identity,
+        Func<HarnessCandidate, Task<AgentIdentity>> identityFor,
         TimeSpan timeout,
         Func<HarnessCandidate, Task> onRateLimited,
         CancellationToken ct = default)
@@ -54,7 +58,8 @@ public sealed class AgentLauncher(IProcessRunner processes, Func<string, (string
             }
 
             var result = await processes.RunAsync(executable.FileName, [.. executable.Prefix, .. invocation.Arguments],
-                request.WorkingDirectory, invocation.Stdin, timeout, ct, scrubEnvironment: null, environment: EnvironmentFor(identity));
+                request.WorkingDirectory, invocation.Stdin, timeout, ct,
+                scrubEnvironment: null, environment: EnvironmentFor(await identityFor(candidate)));
             var outcome = adapter.Interpret(request, result);
             attempts.Add(new(candidate, outcome, clock.Elapsed));
 

@@ -34,13 +34,6 @@ public sealed class ValidatorSessionLauncher(
         if (candidates.Count == 0)
             throw new InvalidOperationException($"No available {Tier} candidate to validate {assignment.TaskKey}.");
 
-        // One agent per role, reused across sessions, so the ledger shows a stable name rather than a new
-        // stranger every night. Registering again re-issues its token, which is what we want: the previous
-        // session is over.
-        var name = $"conductor-{assignment.RoleKey}";
-        var registration = await agents.RegisterAsync(Caller.Founder,
-            new RegisterAgentRequest(name, candidates[0].Harness, candidates[0].Model, Tier, candidates[0].Account), ct);
-
         var scratch = Path.Combine(options.DataDir, "conductor", $"{assignment.TaskKey}-{assignment.RoleKey}");
         Directory.CreateDirectory(scratch);
 
@@ -55,7 +48,7 @@ public sealed class ValidatorSessionLauncher(
                 AllowedCommands: Allowed,
                 DeniedCommands: Denied,
                 ScratchDirectory: scratch),
-            new AgentIdentity(name, registration.Token),
+            candidate => IdentityFor(assignment.RoleKey, candidate, ct),
             TimeSpan.FromMinutes(options.ConductorSessionMinutes),
             candidate => MarkLimitedAsync(candidate.Account, ct),
             ct);
@@ -63,6 +56,22 @@ public sealed class ValidatorSessionLauncher(
         var last = attempts.LastOrDefault();
         logger.LogInformation("Validator session for {Task}/{Role} finished on {Harness}: {Outcome}",
             assignment.TaskKey, assignment.RoleKey, last?.Candidate.Harness, last?.Outcome.Success == true ? "ok" : "failed");
+    }
+
+    /// <summary>
+    /// One agent per role, reused across sessions, so the ledger shows a stable name rather than a new stranger
+    /// every night. It is registered for the candidate that is about to run — a fall-through to another vendor
+    /// must not leave the ledger saying the first one did the work. Registering again re-issues the token, which
+    /// is what we want: the previous session is over.
+    /// </summary>
+    internal async Task<AgentIdentity> IdentityFor(string role, HarnessCandidate candidate, CancellationToken ct)
+    {
+        var name = $"conductor-{role}";
+        // A tier entry may leave the model blank to mean "the harness's own default"; the ledger still needs a word.
+        var model = candidate.Model is { Length: > 0 } ? candidate.Model : "default";
+        var registration = await agents.RegisterAsync(Caller.Founder,
+            new RegisterAgentRequest(name, candidate.Harness, model, Tier, candidate.Account), ct);
+        return new AgentIdentity(name, registration.Token);
     }
 
     /// <summary>An account that could not answer leaves the rotation, exactly as `muthur agent limited` does.</summary>

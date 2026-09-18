@@ -227,6 +227,77 @@ public sealed class ConductorTests : IDisposable
     }
 
     [Fact]
+    public async Task A_stall_lets_one_probe_through_once_the_cooldown_has_passed()
+    {
+        // Whatever stopped the launch is usually fixed from outside the hub - a quota cleared, a harness
+        // installed. The founder should not have to know an incantation to resume.
+        _hub.Settings["Muthur:ConductorMaxAttempts"] = "3";
+        _hub.Settings["Muthur:ConductorStallProbeMinutes"] = "30";
+        await SetUpAsync("win-validator");
+        await DefineAsync("win-validator");
+        await TaskInValidationAsync();
+        _hub.Validators.Throw = new InvalidOperationException("No available mastermind candidate.");
+
+        for (var pass = 0; pass < 5; pass++) await Conductor.RunPassAsync();
+        Assert.Equal(3, _hub.Validators.Started.Count);
+
+        // Still stalled a minute later.
+        _hub.Clock.Advance(TimeSpan.FromMinutes(1));
+        await Conductor.RunPassAsync();
+        Assert.Equal(3, _hub.Validators.Started.Count);
+
+        // The founder clears the quota; the conductor finds out by itself.
+        _hub.Validators.Throw = null;
+        _hub.Clock.Advance(TimeSpan.FromMinutes(31));
+        await Conductor.RunPassAsync();
+
+        Assert.Equal(4, _hub.Validators.Started.Count);
+    }
+
+    [Fact]
+    public async Task A_probe_that_fails_re_arms_the_cooldown_without_shouting_again()
+    {
+        _hub.Settings["Muthur:ConductorMaxAttempts"] = "3";
+        _hub.Settings["Muthur:ConductorStallProbeMinutes"] = "30";
+        await SetUpAsync("win-validator");
+        await DefineAsync("win-validator");
+        await TaskInValidationAsync();
+        _hub.Validators.Throw = new InvalidOperationException("still broken");
+
+        for (var pass = 0; pass < 5; pass++) await Conductor.RunPassAsync();
+        for (var probe = 0; probe < 3; probe++)
+        {
+            _hub.Clock.Advance(TimeSpan.FromMinutes(31));
+            await Conductor.RunPassAsync();
+        }
+
+        Assert.Equal(6, _hub.Validators.Started.Count);   // 3 before the stall, then one probe per cooldown
+
+        var events = await _hub.Founder().GetFromJsonAsync(Routes.Events, MuthurJsonContext.Default.IReadOnlyListEventDto);
+        Assert.Single(events!, e => e.Type == "conductor.stalled");   // the founder is told once, not every cooldown
+    }
+
+    [Fact]
+    public async Task Turning_it_on_again_is_the_founder_saying_try_now()
+    {
+        _hub.Settings["Muthur:ConductorMaxAttempts"] = "3";
+        await SetUpAsync("win-validator");
+        await DefineAsync("win-validator");
+        await TaskInValidationAsync();
+        _hub.Validators.Throw = new InvalidOperationException("No available mastermind candidate.");
+
+        for (var pass = 0; pass < 5; pass++) await Conductor.RunPassAsync();
+        Assert.Equal(3, _hub.Validators.Started.Count);
+
+        _hub.Validators.Throw = null;
+        var founder = _hub.Founder();
+        (await founder.PostAsJsonAsync(Routes.Conductor, new ConductorSwitch(false))).EnsureSuccessStatusCode();
+        (await founder.PostAsJsonAsync(Routes.Conductor, new ConductorSwitch(true))).EnsureSuccessStatusCode();
+
+        Assert.Equal(1, await Conductor.RunPassAsync());
+    }
+
+    [Fact]
     public async Task A_session_that_starts_again_clears_the_failures_behind_it()
     {
         _hub.Settings["Muthur:ConductorMaxAttempts"] = "3";
@@ -266,6 +337,27 @@ public sealed class ConductorTests : IDisposable
 
         Assert.Equal(140, line.Length);
         Assert.EndsWith("…", line);
+    }
+
+    [Theory]
+    [InlineData("opus", "opus")]
+    // A tier entry may leave the model blank to mean "the harness's own default". Registration refuses a blank
+    // model - the ledger exists to record what did the work - so the blank needs a word of its own.
+    [InlineData("", "default")]
+    public async Task A_conductor_agent_registers_for_the_candidate_that_is_about_to_run(string model, string recorded)
+    {
+        // The factory swaps the real launcher for a fake, so build the real one over the hub's own services.
+        var launcher = ActivatorUtilities.CreateInstance<ValidatorSessionLauncher>(_hub.Services);
+
+        var identity = await launcher.IdentityFor("win-validator", new Muthur.Launch.HarnessCandidate("codex", model, "chatgpt-subscription"), default);
+
+        Assert.Equal("conductor-win-validator", identity.Name);
+        Assert.NotEmpty(identity.Token);
+
+        var agents = await _hub.CreateClient().GetFromJsonAsync(Routes.Agents, MuthurJsonContext.Default.IReadOnlyListAgentDto);
+        var registered = Assert.Single(agents!, a => a.Name == "conductor-win-validator");
+        Assert.Equal("codex", registered.Harness);
+        Assert.Equal(recorded, registered.Model);
     }
 
     [Fact]
