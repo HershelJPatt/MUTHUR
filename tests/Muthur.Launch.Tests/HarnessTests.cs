@@ -112,6 +112,23 @@ public sealed class HarnessTests : IDisposable
     }
 }
 
+/// <summary>
+/// Hands back one scripted result per launch and records what each launch was given. Both launchers are driven
+/// through it, because what separates them is the identity and scrubbing they pass — which is only visible here.
+/// </summary>
+internal sealed class ScriptedProcesses(params ProcessResult[] results) : IProcessRunner
+{
+    private readonly Queue<ProcessResult> _results = new(results);
+    public List<(string FileName, IReadOnlyCollection<string>? Scrubbed, IReadOnlyDictionary<string, string>? Environment)> Started { get; } = [];
+
+    public Task<ProcessResult> RunAsync(string fileName, IReadOnlyList<string> arguments, string workingDirectory, string? stdin = null,
+        TimeSpan? timeout = null, CancellationToken ct = default, IReadOnlyCollection<string>? scrubEnvironment = null, IReadOnlyDictionary<string, string>? environment = null)
+    {
+        Started.Add((fileName, scrubEnvironment, environment));
+        return Task.FromResult(_results.Dequeue());
+    }
+}
+
 public sealed class WorkerLauncherTests : IDisposable
 {
     private readonly string _scratch = Path.Combine(Path.GetTempPath(), "muthur-tests", "launch-" + Guid.NewGuid().ToString("n"));
@@ -121,19 +138,6 @@ public sealed class WorkerLauncherTests : IDisposable
     public void Dispose()
     {
         try { Directory.Delete(_scratch, recursive: true); } catch (IOException) { }
-    }
-
-    private sealed class ScriptedProcesses(params ProcessResult[] results) : IProcessRunner
-    {
-        private readonly Queue<ProcessResult> _results = new(results);
-        public List<(string FileName, IReadOnlyCollection<string>? Scrubbed)> Started { get; } = [];
-
-        public Task<ProcessResult> RunAsync(string fileName, IReadOnlyList<string> arguments, string workingDirectory, string? stdin = null,
-            TimeSpan? timeout = null, CancellationToken ct = default, IReadOnlyCollection<string>? scrubEnvironment = null, IReadOnlyDictionary<string, string>? environment = null)
-        {
-            Started.Add((fileName, scrubEnvironment));
-            return Task.FromResult(_results.Dequeue());
-        }
     }
 
     private WorkerRequest RequestFor(HarnessCandidate c) => new(_scratch, "prompt", c.Model, null, [], [], _scratch);
@@ -158,6 +162,8 @@ public sealed class WorkerLauncherTests : IDisposable
         Assert.True(attempts[1].Outcome.Success);
         Assert.Equal("codex", attempts[1].Candidate.Harness);
         Assert.Equal(["claude-sub"], limited);
+        // Two attempts is also what a crash-and-retry looks like; the order of the processes started is not.
+        Assert.Equal(["claude", "codex"], processes.Started.Select(s => s.FileName));
     }
 
     [Fact]
@@ -202,8 +208,24 @@ public sealed class WorkerReportTests
 /// The line between a worker and an agent session is authority, and it is asserted in both directions here so
 /// the two launchers can never quietly converge.
 /// </summary>
-public sealed class AgentLauncherTests
+public sealed class AgentLauncherTests : IDisposable
 {
+    private readonly string _scratch = Path.Combine(Path.GetTempPath(), "muthur-tests", "launch-" + Guid.NewGuid().ToString("n"));
+
+    public AgentLauncherTests() => Directory.CreateDirectory(_scratch);
+
+    public void Dispose()
+    {
+        try { Directory.Delete(_scratch, recursive: true); } catch (IOException) { }
+    }
+
+    private WorkerRequest RequestFor(HarnessCandidate c) => new(_scratch, "prompt", c.Model, null, [], [], _scratch);
+
+    private static (string, IReadOnlyList<string>)? Installed(string name) => (name, []);
+
+    private static Task<AgentIdentity> IdentityFor(HarnessCandidate c) =>
+        Task.FromResult(new AgentIdentity($"validator-{c.Harness}", $"tok-{c.Harness}"));
+
     [Fact]
     public void An_agent_session_is_given_the_identity_a_worker_is_denied()
     {
@@ -219,5 +241,62 @@ public sealed class AgentLauncherTests
         var environment = AgentLauncher.EnvironmentFor(new AgentIdentity("a", "b"));
 
         Assert.Equal(["MUTHUR_AGENT", "MUTHUR_TOKEN"], environment.Keys.Order());
+    }
+
+    [Fact]
+    public async Task An_exhausted_account_falls_through_to_the_next_candidate()
+    {
+        var processes = new ScriptedProcesses(
+            new ProcessResult(1, """{"result":"usage limit reached","is_error":true}""", ""),
+            new ProcessResult(0, "", ""));
+        File.WriteAllText(Path.Combine(_scratch, "codex-last-message.txt"), "STATUS: done");
+        var limited = new List<string?>();
+
+        var attempts = await new AgentLauncher(processes, Installed).RunAsync(
+            [new("claude", "opus", "claude-sub"), new("codex", "", "chatgpt-sub")], RequestFor, IdentityFor,
+            TimeSpan.FromMinutes(1), c => { limited.Add(c.Account); return Task.CompletedTask; });
+
+        Assert.Equal("claude", attempts[0].Candidate.Harness);
+        Assert.True(attempts[0].Outcome.RateLimited);
+        Assert.Equal(["claude-sub"], limited);
+        Assert.Equal("codex", attempts[1].Candidate.Harness);
+        Assert.True(attempts[1].Outcome.Success);
+        Assert.Equal(2, attempts.Count);
+    }
+
+    [Fact]
+    public async Task A_session_that_ran_and_failed_is_not_retried_elsewhere()
+    {
+        var processes = new ScriptedProcesses(new ProcessResult(1, """{"result":"the verdict is fail","is_error":true}""", ""));
+        var limited = new List<string?>();
+
+        var attempts = await new AgentLauncher(processes, Installed).RunAsync(
+            [new("claude", "opus", "a"), new("codex", "", "b")], RequestFor, IdentityFor,
+            TimeSpan.FromMinutes(1), c => { limited.Add(c.Account); return Task.CompletedTask; });
+
+        // A session that ran and gave a verdict is finished, right or wrong: only an account that could not
+        // answer at all is worth trying elsewhere, so nothing here may reach the second vendor.
+        Assert.Single(attempts);
+        Assert.False(attempts[0].Outcome.Success);
+        Assert.Empty(limited);
+    }
+
+    [Fact]
+    public async Task The_identity_is_resolved_for_the_candidate_that_actually_runs()
+    {
+        var processes = new ScriptedProcesses(
+            new ProcessResult(1, """{"result":"usage limit reached","is_error":true}""", ""),
+            new ProcessResult(0, "", ""));
+        File.WriteAllText(Path.Combine(_scratch, "codex-last-message.txt"), "STATUS: done");
+        var asked = new List<string>();
+
+        await new AgentLauncher(processes, Installed).RunAsync(
+            [new("claude", "opus", "claude-sub"), new("codex", "", "chatgpt-sub")], RequestFor,
+            c => { asked.Add(c.Harness); return IdentityFor(c); },
+            TimeSpan.FromMinutes(1), _ => Task.CompletedTask);
+
+        Assert.Equal(["claude", "codex"], asked);
+        Assert.Equal("validator-claude", processes.Started[0].Environment!["MUTHUR_AGENT"]);
+        Assert.Equal("validator-codex", processes.Started[1].Environment!["MUTHUR_AGENT"]);
     }
 }
