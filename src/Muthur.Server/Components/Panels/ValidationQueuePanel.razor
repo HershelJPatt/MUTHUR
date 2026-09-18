@@ -1,0 +1,55 @@
+@inherits LivePanel
+@inject LifecycleService Lifecycle
+@inject TimeProvider Clock
+
+<section class="panel">
+    <div class="panel-head">
+        <span class="panel-title">Validation queue</span>
+        <span class="panel-sub">@(_waiting > 0 ? $"{_waiting} waiting" : "clear")</span>
+    </div>
+    <div class="panel-body">
+        @if (_queue.Count == 0)
+        {
+            <div class="empty">No validator roles defined.</div>
+        }
+        @foreach (var row in _queue)
+        {
+            <div class="role-row">
+                <span class="@TagClass(row)">@row.Holders/@row.Capacity</span>
+                <span>@row.Role</span>
+                <span class="role-holder">@Depth(row)</span>
+            </div>
+        }
+    </div>
+</section>
+
+@code {
+    private IReadOnlyList<ValidationQueueDto> _queue = [];
+    private int _waiting;
+    private DateTimeOffset _now;
+
+    // The oldest wait ages without anything being written, so refresh on the clock too.
+    protected override TimeSpan? ClockInterval => TimeSpan.FromSeconds(30);
+
+    protected override bool IsRelevant(Muthur.Core.Entities.LedgerEvent e) =>
+        e.Type.StartsWith("validation.", StringComparison.Ordinal)
+        || e.Type.StartsWith("task.", StringComparison.Ordinal)
+        || e.Type.StartsWith("role.", StringComparison.Ordinal);
+
+    protected override async Task LoadAsync()
+    {
+        // One instant for the whole render, so every age on it is measured from the same moment.
+        _now = Clock.GetUtcNow();
+        _queue = await Lifecycle.QueueAsync();
+        _waiting = _queue.Sum(q => q.Waiting);
+    }
+
+    /// <summary>Held is normal; nobody holding a role something is waiting on is the thing to notice.</summary>
+    private static string TagClass(ValidationQueueDto row) =>
+        row.Holders > 0 ? "tag tag-held" : row.Waiting > 0 ? "tag tag-open" : "tag";
+
+    private string Depth(ValidationQueueDto row) =>
+        row.Waiting == 0
+            ? "clear"
+            : $"{row.Waiting} waiting" + (row.OldestWaitingSince is { } since ? $" · oldest {Format.Age(since, _now)}" : "");
+}
