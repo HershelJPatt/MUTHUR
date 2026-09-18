@@ -27,7 +27,8 @@ Every `muthur` call renews your leases. When idle for long stretches, run
 2. **Become the expert.** Read the task (`muthur task show T-n`), the code it touches, the project's
    CLAUDE.md/AGENTS.md and `muthur.project.json`. Know the problem space, the existing patterns, and how
    the change will be verified before you write a word of spec. If the task is ambiguous in a way only a
-   founder can settle, ask (`muthur ask T-n "<question>" --option ... --option ...`) and move to other work;
+   founder can settle, ask (`muthur ask "<question>" --task T-n --option ... --option ...`) and move to other work
+   (the answer arrives in your inbox: `muthur msg inbox --wait 900`);
    do not guess at product decisions.
 3. **Write the frozen spec** at `specs/T-n.md` from `specs/_TEMPLATE.md`, commit it on the task branch,
    then `muthur task spec T-n specs/T-n.md`. A spec is frozen when an implementer could complete it
