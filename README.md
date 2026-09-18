@@ -45,7 +45,9 @@ muthur kit install --harness claude                            # or: codex, gene
 ```
 
 `kit install` writes the agent procedures for that harness (`.claude/agents` + skills, or an `AGENTS.md` section and
-`.muthur/procedures/`), `specs/_TEMPLATE.md`, and `muthur.project.json` — fill in its build/test/run commands; agents read it.
+`.muthur/procedures/`), `specs/_TEMPLATE.md`, starter role briefs under `briefs/`, and `muthur.project.json` — fill in its
+build/test/run commands; agents read it. Re-running the install never overwrites a brief you have edited, and it prints the
+`muthur role define` command for each one — a brief does nothing until you create its role.
 
 ## The organization
 

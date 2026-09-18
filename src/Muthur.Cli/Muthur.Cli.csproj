@@ -14,4 +14,7 @@
   <ItemGroup>
     <PackageReference Include="System.CommandLine" />
   </ItemGroup>
+  <ItemGroup>
+    <InternalsVisibleTo Include="Muthur.Cli.Tests" />
+  </ItemGroup>
 </Project>

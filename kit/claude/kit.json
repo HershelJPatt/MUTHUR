@@ -1,11 +1,50 @@
 {
   "harness": "claude",
   "files": [
-    { "from": "agents/muthur-implementer.md", "to": ".claude/agents/muthur-implementer.md" },
-    { "from": "agents/muthur-specialist.md", "to": ".claude/agents/muthur-specialist.md" },
-    { "from": "skills/muthur-orchestrate.md", "to": ".claude/skills/muthur-orchestrate/SKILL.md" },
-    { "from": "skills/muthur-validate.md", "to": ".claude/skills/muthur-validate/SKILL.md" },
-    { "from": "skills/muthur-oncall.md", "to": ".claude/skills/muthur-oncall/SKILL.md" },
-    { "from": "../core/spec-template.md", "to": "specs/_TEMPLATE.md" }
+    {
+      "from": "agents/muthur-implementer.md",
+      "to": ".claude/agents/muthur-implementer.md"
+    },
+    {
+      "from": "agents/muthur-specialist.md",
+      "to": ".claude/agents/muthur-specialist.md"
+    },
+    {
+      "from": "skills/muthur-orchestrate.md",
+      "to": ".claude/skills/muthur-orchestrate/SKILL.md"
+    },
+    {
+      "from": "skills/muthur-validate.md",
+      "to": ".claude/skills/muthur-validate/SKILL.md"
+    },
+    {
+      "from": "skills/muthur-oncall.md",
+      "to": ".claude/skills/muthur-oncall/SKILL.md"
+    },
+    {
+      "from": "../core/spec-template.md",
+      "to": "specs/_TEMPLATE.md"
+    },
+    {
+      "from": "../briefs/validator.md",
+      "to": "briefs/validator.md",
+      "mode": "create",
+      "validator": true
+    },
+    {
+      "from": "../briefs/comms-oncall.md",
+      "to": "briefs/comms-oncall.md",
+      "mode": "create"
+    },
+    {
+      "from": "../briefs/observability-oncall.md",
+      "to": "briefs/observability-oncall.md",
+      "mode": "create"
+    },
+    {
+      "from": "../briefs/release-oncall.md",
+      "to": "briefs/release-oncall.md",
+      "mode": "create"
+    }
   ]
 }
