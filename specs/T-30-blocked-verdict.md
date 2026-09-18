@@ -217,6 +217,15 @@ validator to send a message and release the role. They must tell it to record th
 
 Do not restructure either document. These are edits of a few lines each, in the voice already there.
 
+**And one line of CSS.** `TaskCard.razor` and `TaskDetail.razor` render `class="pill pill-verdict-@v.Verdict"`,
+and `wwwroot/app.css` defines `pill-verdict-yes`, `-no` and `-pending` but would have no `-blocked` — so the
+new verdict would render as an unstyled grey pill, on a feature whose entire point is that a blocked task is
+visible. Add it beside the others, amber, matching the existing `.pill-blocked` token:
+
+```css
+.pill-verdict-blocked { color: var(--amber); border-color: rgba(226, 166, 68, .4); background: var(--amber-bg); }
+```
+
 ## Units of work
 
 ### Unit A — `blocked` is a verdict
@@ -245,7 +254,7 @@ Do not restructure either document. These are edits of a few lines each, in the 
   still behave and still say what they said before.
 
 ### Unit C — the validator procedure
-- **Files:** `kit/core/validate.md`, `kit/briefs/validator.md`.
+- **Files:** `kit/core/validate.md`, `kit/briefs/validator.md`, `src/Muthur.Server/wwwroot/app.css`.
 - **Does:** Part 3.
 - **Depends on:** nothing, but its wording must match the CLI Unit A builds.
 - **Acceptance:** `dotnet build` and `dotnet test` clean (neither file is compiled; the check is that
