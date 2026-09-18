@@ -142,6 +142,8 @@ public sealed class ConductorService(Ledger ledger, MuthurOptions options, TimeP
             foreach (var task in tasks)
             {
                 if (failures.GetValueOrDefault(task.Id) >= options.ConductorMaxAttempts) continue;
+                // A human has said this one needs them. Staffing it spends a session to be told what the task already says.
+                if (task.AttendedReason is not null) continue;
                 foreach (var validation in pending.Where(v => v.TaskId == task.Id))
                 {
                     if (held.Contains(validation.ValidatorKey)) continue;
