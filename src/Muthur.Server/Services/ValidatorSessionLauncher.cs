@@ -1,5 +1,3 @@
-using System.Security.Cryptography;
-using System.Text;
 using Microsoft.EntityFrameworkCore;
 using Muthur.Contracts;
 using Muthur.Launch;
@@ -110,27 +108,26 @@ public sealed class ValidatorSessionLauncher(
         return new AgentIdentity(name, registration.Token);
     }
 
-    /// <summary>The agent name for one staffed pair: stable across retries of that pair, distinct between pairs.</summary>
-    internal static string IdentityName(string task, string role)
-    {
-        const int Limit = 48;                                // agent names are 1-48 chars
-        const int HashLength = 6;
-        var suffix = "-" + task.ToLowerInvariant();          // "T-3" -> "-t-3"
-        var head = $"conductor-{role}";
-        if (head.Length + suffix.Length <= Limit) return head + suffix;
-
-        // Truncating alone would map two role keys that differ only past the cut onto one name - and one name
-        // means one token, which is the very defect this method exists to fix. Keep as much of the role as
-        // fits and append a short digest of the whole of it, so distinct roles stay distinct.
-        //
-        // The separator is '.' and that is load-bearing. Agent names allow [a-z0-9._-]; role keys allow only
-        // [a-z0-9-]. A '-' separator would let a founder craft a short role key that spells out another role's
-        // truncated name - role2[..keep] + "-" + digest(role2) - and collide with it deliberately. No legal role
-        // key can contain a '.', so the dot marks a name as truncated in a way nothing else can imitate.
-        var digest = Convert.ToHexStringLower(SHA256.HashData(Encoding.UTF8.GetBytes(role)))[..HashLength];
-        var keep = Limit - suffix.Length - HashLength - 1 - "conductor-".Length;
-        return $"conductor-{role[..keep]}.{digest}{suffix}";
-    }
+    /// <summary>
+    /// The agent name for one staffed pair: stable across retries of that pair, distinct between pairs.
+    /// <para>
+    /// Plain concatenation, and the whole of both parts. Two earlier versions squeezed this into a 48-character
+    /// name and both failed validation: truncating the head discarded exactly what told two long role keys apart,
+    /// and a six-hex digest of the role left 24 bits a validator brute-forced. The fix was not a cleverer encoding
+    /// but removing the limit that forced one — <see cref="AgentService"/> allows 80 characters, and the worst case
+    /// the hub can produce is 71: "conductor-" (10) + a role key of at most 48 + "-t-" (3) + a 10-digit task id.
+    /// </para>
+    /// <para>
+    /// Injective over everything the hub accepts, by counting rather than by luck. Task keys are "T-" and a
+    /// positive int, so the tail is always a non-empty run of digits: R1 + "-t-" + d1 == R2 + "-t-" + d2 forces
+    /// the two role keys to be the same length — a tail shorter by one, two or three would land '-', 't' or '-'
+    /// where the other string has a digit — and equal lengths make R1 == R2 and d1 == d2. A role key that itself
+    /// contains "-t-" does not break it. The bound on the length, and the character set that keeps the result a
+    /// legal agent name, are <c>RoleService.KeyPattern</c>'s to hold; ConductorTests pins that.
+    /// </para>
+    /// </summary>
+    internal static string IdentityName(string task, string role) =>
+        $"conductor-{role}-{task.ToLowerInvariant()}";       // "T-3" -> "conductor-win-validator-t-3"
 
     /// <summary>An account that could not answer leaves the rotation, exactly as `muthur agent limited` does.</summary>
     private Task MarkLimitedAsync(string? account, CancellationToken ct) =>

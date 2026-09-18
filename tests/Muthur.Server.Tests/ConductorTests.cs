@@ -502,39 +502,34 @@ public sealed class ConductorTests : IDisposable
     }
 
     [Fact]
-    public void A_role_key_too_long_for_the_pair_loses_its_tail_not_the_task()
+    public void No_identity_is_ever_truncated_so_the_whole_role_key_reaches_the_name()
     {
-        // Agent names are 1-48 chars. "conductor-" plus this key is already 50, so the head has to give way - and
-        // the task must survive it, or every session for the role collides again under a truncated name.
-        var role = new string('x', 40);
+        // The worst case the hub can produce: the widest role key RoleService accepts, and the widest task id an
+        // int can hold. Two earlier rounds squeezed this into 48 characters and both failed validation - the head
+        // was cut, and two role keys differing only past the cut became one name, one token, one working session
+        // out of two. Nothing is cut now, and the whole of both parts is readable in the result.
+        var role = new string('v', 48);
+        var name = ValidatorSessionLauncher.IdentityName("T-2147483647", role);
 
-        var first = ValidatorSessionLauncher.IdentityName("T-13", role);
-        var second = ValidatorSessionLauncher.IdentityName("T-140", role);
-
-        Assert.Equal(48, first.Length);
-        Assert.EndsWith("-t-13", first);
-        Assert.Equal(48, second.Length);
-        Assert.EndsWith("-t-140", second);
-        Assert.NotEqual(first, second);
+        Assert.Equal($"conductor-{role}-t-2147483647", name);
+        Assert.Equal(71, name.Length);
+        Assert.True(name.Length <= 80, $"identity must fit the 1-80 agent-name rule, was {name.Length}");
+        Assert.Contains(role, name, StringComparison.Ordinal);
     }
 
     [Fact]
-    public void Two_long_role_keys_that_differ_only_past_the_cut_are_still_two_identities()
+    public void Two_long_role_keys_that_differ_only_in_their_last_character_are_still_two_identities()
     {
-        // Validation's own reproduction: two legal 41-char validator roles, truncated to the same head, were given
-        // one name - so one token, and the first session's 'role take' and 'validate claim' both came back
-        // unauthorized while conductor status still said two were running. The digest is of the whole role key,
-        // so a difference the cut discards still reaches the name.
+        // Round 2's reproduction, kept because the regression is what matters and not the mechanism that failed
+        // it: two legal 41-char validator roles were truncated to the same head and given one name, so the first
+        // session's 'role take' and 'validate claim' both came back unauthorized while conductor status still said
+        // two were running. Untruncated, the difference reaches the name by construction.
         var first = ValidatorSessionLauncher.IdentityName("T-4", new string('v', 40) + "a");
         var second = ValidatorSessionLauncher.IdentityName("T-4", new string('v', 40) + "b");
 
         Assert.NotEqual(first, second);
-        // The digest and its separator have to fit inside the same budget the clamp already had.
-        Assert.Equal(48, first.Length);
-        Assert.Equal(48, second.Length);
-        Assert.EndsWith("-t-4", first);
-        Assert.EndsWith("-t-4", second);
-        Assert.StartsWith("conductor-vvv", first);
+        Assert.EndsWith("a-t-4", first, StringComparison.Ordinal);
+        Assert.EndsWith("b-t-4", second, StringComparison.Ordinal);
 
         // Still stable across retries of the same pair, and still keyed to the task.
         Assert.Equal(first, ValidatorSessionLauncher.IdentityName("T-4", new string('v', 40) + "a"));
@@ -542,31 +537,91 @@ public sealed class ConductorTests : IDisposable
     }
 
     [Fact]
-    public void A_role_key_that_spells_out_another_roles_truncated_name_does_not_take_its_identity()
+    public void A_role_key_that_spells_out_another_pairs_task_suffix_does_not_take_its_identity()
     {
-        var role = new string('v', 40) + "a";
-        var name = ValidatorSessionLauncher.IdentityName("T-1", role);
+        // The only shape an attack on a concatenated name can take: hide another pair's "-t-<id>" inside a role
+        // key. Round 3 was the same idea against the digest, and it worked. It cannot work here, and the reason is
+        // worth pinning rather than trusting: for 'a-t-1' + T-2 to collide with 'a' + something, that something
+        // would have to read "1-t-2", and a task key is "T-" followed by digits - no '-' and no 't' can appear in
+        // the run. 'a-t-1' is a perfectly legal role key; it just cannot reach another pair's name.
+        var hidden = ValidatorSessionLauncher.IdentityName("T-2", "a-t-1");
 
-        // The identity a '-' separator would have produced, read back off the real name rather than recomputed,
-        // and spelled as a role key: legal, 34 chars, short enough to need no truncation of its own. Under '-'
-        // a founder could define it and collide with the long role deliberately - one name, one token, again.
-        var crafted = name["conductor-".Length..^"-t-1".Length].Replace('.', '-');
-
-        Assert.Matches("^[a-z0-9][a-z0-9-]{0,47}$", crafted);
-        Assert.NotEqual(name, ValidatorSessionLauncher.IdentityName("T-1", crafted));
+        Assert.Equal("conductor-a-t-1-t-2", hidden);
+        Assert.NotEqual(hidden, ValidatorSessionLauncher.IdentityName("T-1", "a"));
+        Assert.NotEqual(hidden, ValidatorSessionLauncher.IdentityName("T-12", "a"));
+        Assert.NotEqual(hidden, ValidatorSessionLauncher.IdentityName("T-2", "a-t-1-t"));
     }
 
     [Fact]
-    public async Task A_role_key_cannot_contain_the_dot_that_marks_a_truncated_identity()
+    public void No_two_pairs_the_hub_accepts_share_an_identity()
     {
-        // IdentityName's '.' separator is safe only because no role key can hold one: a key spelling
-        // '<kept>.<digest>' would be that truncated identity exactly. RoleService.KeyPattern is what forbids it,
-        // so the invariant the separator rests on is pinned by a test rather than by a comment in another file.
-        var refused = await _hub.Founder().PutAsJsonAsync(Routes.Roles,
-            new DefineRoleRequest("win.validator", "# win.validator\nDrive it."));
+        // Round 3 was found by a validator running a hash loop, so this is that search done here and in advance.
+        // Every role key over the alphabet that could possibly confuse the parse - 'a', 't', '-' and a digit, the
+        // exact characters "-t-<id>" is made of - up to 5 long, crossed with task ids of several digit lengths.
+        // A collision anywhere in here is a revoked token in production.
+        string[] tasks = ["T-1", "T-2", "T-12", "T-21", "T-121", "T-1121", "T-11", "T-2147483647"];
+        var roles = new List<string>();
+        for (var length = 1; length <= 5; length++) Extend(roles, "", length);
 
-        Assert.False(refused.IsSuccessStatusCode);
-        Assert.Equal("invalid_key", (await refused.ReadErrorAsync()).Code);
+        var names = new Dictionary<string, (string Task, string Role)>(StringComparer.Ordinal);
+        foreach (var role in roles)
+            foreach (var task in tasks)
+            {
+                var name = ValidatorSessionLauncher.IdentityName(task, role);
+                Assert.Matches("^[a-z0-9][a-z0-9._-]{0,79}$", name);   // AgentService.NamePattern
+                Assert.False(names.TryGetValue(name, out var owner),
+                    $"'{name}' is the identity of both ({owner.Task}, {owner.Role}) and ({task}, {role}).");
+                names[name] = (task, role);
+            }
+
+        Assert.Equal(roles.Count * tasks.Length, names.Count);
+        Assert.Equal(1023, roles.Count);
+
+        // Legal role keys only: RoleService.KeyPattern wants an alphanumeric first character.
+        static void Extend(List<string> into, string prefix, int remaining)
+        {
+            if (remaining == 0)
+            {
+                into.Add(prefix);
+                return;
+            }
+            foreach (var c in prefix.Length == 0 ? "at1" : "at1-") Extend(into, prefix + c, remaining - 1);
+        }
+    }
+
+    [Fact]
+    public async Task The_longest_identity_the_hub_can_produce_is_a_name_the_hub_accepts()
+    {
+        // Arithmetic in a comment is how the previous two rounds justified themselves, so this one goes through
+        // AgentService.RegisterAsync for real. If the 1-80 rule and the worst case ever drift apart, the session
+        // fails to register and the conductor stages a validator that cannot authenticate.
+        var role = new string('v', 48);
+
+        var identity = await RealLauncher().IdentityFor(Assignment("T-2147483647", role),
+            new Muthur.Launch.HarnessCandidate("codex", "opus", "chatgpt-subscription"), default);
+
+        Assert.Equal($"conductor-{role}-t-2147483647", identity.Name);
+        Assert.NotEmpty(identity.Token);
+
+        var agents = await _hub.CreateClient().GetFromJsonAsync(Routes.Agents, MuthurJsonContext.Default.IReadOnlyListAgentDto);
+        Assert.Single(agents!, a => a.Name == identity.Name);
+    }
+
+    [Fact]
+    public async Task A_role_key_outside_what_the_identity_rule_assumes_is_refused_at_definition()
+    {
+        // IdentityName holds its guarantee over the keys the hub accepts, not over arbitrary strings, and the
+        // bound is RoleService.KeyPattern's to hold - a cross-module invariant nothing in ValidatorSessionLauncher
+        // can enforce for itself. Nothing tested KeyPattern before this task. 1-48 chars of [a-z0-9-] keeps the
+        // worst-case identity at 71 of the 80 an agent name allows, and keeps every character in it legal there.
+        // Case is not in the list: Normalize lowercases the key before the pattern ever sees it.
+        foreach (var key in new[] { new string('v', 49), "win.validator", "win_validator" })
+        {
+            var refused = await _hub.Founder().PutAsJsonAsync(Routes.Roles, new DefineRoleRequest(key, $"# {key}\nDrive it."));
+
+            Assert.False(refused.IsSuccessStatusCode);
+            Assert.Equal("invalid_key", (await refused.ReadErrorAsync()).Code);
+        }
     }
 
     [Fact]
