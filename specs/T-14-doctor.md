@@ -437,9 +437,32 @@ What a validator should see:
   (`project set scratch --repo C:\nope --founder`) and run `doctor` again: a `repo` `fail`, and the exit code
   is `1`.
 - `doctor --offline` returns the same report without touching the network, with `"probed": false`.
-- The dashboard at `$env:MUTHUR_URL/operations` shows a Doctor panel with the same lines, colour-coded, and
-  the `Re-check` button re-runs it with probes.
 - Nowhere in the output — JSON, panel or hub log — is a secret's value or an outbound target's address.
+
+### The dashboard, without a browser
+
+**No browser is required to validate this task, and none should be used.** The dashboard is Blazor Server
+and prerenders on the server, so the panel and its state are in the HTML that `GET /operations` returns:
+
+```
+(Invoke-WebRequest "$env:MUTHUR_URL/operations" -UseBasicParsing).Content |
+    Select-String -Pattern 'Doctor', 'Re-check', 'check-ok', 'check-warn', 'check-fail'
+```
+
+With the `scratch` project above configured, that response contains `Doctor`, `Re-check`, and at least the
+`check-warn` and `check-fail` classes — the same rows the CLI printed, colour-coded by class. On a hub with
+no projects and no roles it contains `nothing to check` instead.
+
+The `Re-check` button is deliberately **not** part of this verification. What it does is
+`DoctorService.RunAsync(probe: true)` — the identical call `muthur doctor` makes without `--offline`, which
+the steps above already exercise against the real hub. Clicking it would re-test the same service call
+through a slower seam. That it is wired to that call, and not to `ReloadNowAsync`, is held by
+`DashboardOperationsTests` in the server suite.
+
+This section is written this way because the first version of it required a live browser, and a conductor
+started five validator sessions in twenty-eight minutes that each correctly reported blocked and released
+the role. A spec that cannot be validated by the sessions this organization actually starts is a defect in
+the spec.
 
 ## Out of scope / follow-ups
 
