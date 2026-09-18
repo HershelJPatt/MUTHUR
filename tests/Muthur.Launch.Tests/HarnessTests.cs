@@ -299,4 +299,24 @@ public sealed class AgentLauncherTests : IDisposable
         Assert.Equal("validator-claude", processes.Started[0].Environment!["MUTHUR_AGENT"]);
         Assert.Equal("validator-codex", processes.Started[1].Environment!["MUTHUR_AGENT"]);
     }
+
+    [Fact]
+    public async Task A_missing_cli_is_skipped()
+    {
+        var processes = new ScriptedProcesses(new ProcessResult(0, """{"result":"STATUS: done","is_error":false}""", ""));
+        var asked = new List<string>();
+
+        var attempts = await new AgentLauncher(processes, name => name == "codex" ? null : Installed(name)).RunAsync(
+            [new("codex", "", "b"), new("claude", "opus", "a")], RequestFor,
+            c => { asked.Add(c.Harness); return IdentityFor(c); },
+            TimeSpan.FromMinutes(1), _ => Task.CompletedTask);
+
+        Assert.Contains("not installed", attempts[0].Outcome.Report);
+        Assert.False(attempts[0].Started);
+        Assert.True(attempts[1].Outcome.Success);
+        Assert.Single(processes.Started);
+        // A candidate that never reaches a process resolves no identity: identityFor is called for the
+        // candidate about to run, so a skipped one must not mint a token for a session that never happens.
+        Assert.Equal(["claude"], asked);
+    }
 }
