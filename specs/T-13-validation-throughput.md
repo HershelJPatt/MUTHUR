@@ -324,27 +324,32 @@ The identity becomes unique per `(task, role)` — the same pair the conductor s
 pair still reuses its name and the ledger keeps a stable, readable actor:
 
 ```csharp
-internal static string IdentityName(string task, string role)
-{
-    const int Limit = 48;                                // agent names are 1-48 chars
-    const int HashLength = 6;
-    var suffix = "-" + task.ToLowerInvariant();          // "T-3" -> "-t-3"
-    var head = $"conductor-{role}";
-    if (head.Length + suffix.Length <= Limit) return head + suffix;
-
-    // Truncating alone would map two role keys that differ only past the cut onto one name - and one name
-    // means one token, which is the very defect this section exists to fix. Keep as much of the role as
-    // fits and append a short digest of the whole of it, so distinct roles stay distinct.
-    //
-    // The separator is '.' and that is load-bearing. Agent names allow [a-z0-9._-]; role keys allow only
-    // [a-z0-9-]. A '-' separator would let a founder craft a short role key that spells out another role's
-    // truncated name - role2[..keep] + "-" + digest(role2) - and collide with it deliberately. No legal role
-    // key can contain a '.', so the dot marks a name as truncated in a way nothing else can imitate.
-    var digest = Convert.ToHexStringLower(SHA256.HashData(Encoding.UTF8.GetBytes(role)))[..HashLength];
-    var keep = Limit - suffix.Length - HashLength - 1 - "conductor-".Length;
-    return $"conductor-{role[..keep]}.{digest}{suffix}";
-}
+internal static string IdentityName(string task, string role) =>
+    $"conductor-{role}-{task.ToLowerInvariant()}";       // "T-3" -> "conductor-win-validator-t-3"
 ```
+
+**No truncation, no digest, and the agent-name limit rises to 80 characters to make that possible.**
+`AgentService.NamePattern` becomes `^[a-z0-9][a-z0-9._-]{0,79}$` and its message says 1-80; nothing else in
+the codebase assumes 48 for an agent name, and the `agents.name` column is SQLite `TEXT` with no length of
+its own. Widening a validation rule invalidates no existing name.
+
+Two earlier attempts at this got it wrong and both failed validation, so the reasoning matters more than the
+code:
+
+1. Truncating `conductor-{role}` to fit discarded exactly the part that distinguishes two long role keys.
+   Two legal 41-character keys collided; one token was revoked; the conductor still reported two sessions.
+2. Appending a six-hex digest of the whole role made accidental collisions vanishingly unlikely but left a
+   24-bit residual. A validator **brute-forced it** — two legal keys whose SHA-256 digests both begin
+   `c0c1ec` — and reproduced the revoked token exactly. It was filed as an accepted residual; that was my
+   misjudgement, because "unlikely" is not what the spec promised.
+
+Concatenation is injective here, and that is provable rather than probable: worst case is
+`"conductor-"` (10) + a 48-character role + `"-t-"` + a 10-digit `int` task id = **71 characters**, inside
+80. And `R1 + "-t-" + d1 == R2 + "-t-" + d2` with digit-only `d`s forces `d1 = d2` and `R1 = R2` — a shorter
+digit run cannot absorb the other's `"-t-"`, because that would put a `'-'` or a `'t'` where a digit must be.
+A role key containing `-t-` does not break it.
+
+So the guarantee stops being statistical. There is nothing left to collide.
 
 `IdentityFor` takes the assignment (or its `TaskKey`) and uses this. Everything else about it stays: one
 registration per session, for the candidate about to run, so a fall-through to another vendor does not leave
@@ -444,8 +449,10 @@ No new CSS classes. Everything above uses classes that already exist in `wwwroot
   neither invalidates the other's token** — assert on `IdentityName` directly for the pair-uniqueness and the
   48-character clamp; **and that two role keys long enough to be truncated, differing only after the cut,
   still produce different names** — the failure that came back from validation was exactly this: two legal
-  41-character keys collided on one identity, and the first session's token was revoked; **and that a role key
-  crafted to spell another role's truncated name does not collide with it** — build
+  41-character keys collided on one identity, and the first session's token was revoked; **and that no name is ever
+  truncated** — assert the worst case (a 48-character role key and a 10-digit task id) is at most 80
+  characters and contains the whole role key; **and that a role key crafted to spell another role's name
+  does not collide with it** — build
   `role2[..keep] + "-" + digest(role2)`, **with a dash**, which is the shape that collided under the old
   separator and is a legal role key. Written with a dot it is neither: `RoleService.KeyPattern` forbids `.`,
   so the hub would never accept it, and it would still collide — a test written that way pins nothing.
