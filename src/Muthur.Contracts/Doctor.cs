@@ -1,7 +1,14 @@
+using System.Text.Json.Serialization;
+
 namespace Muthur.Contracts;
 
 /// <summary>ok: nothing to do. warn: worth knowing, nothing is broken. fail: the hub cannot do this job.</summary>
-public enum CheckStatus { Ok, Warn, Fail }
+public enum CheckStatus
+{
+    [JsonStringEnumMemberName("ok")] Ok,
+    [JsonStringEnumMemberName("warn")] Warn,
+    [JsonStringEnumMemberName("fail")] Fail,
+}
 
 /// <param name="Category">"secret", "ingest", "outbound", "project", "repo" or "role".</param>
 /// <param name="Subject">What was checked, safe to show: a source, a target key, a project key, a role key.</param>

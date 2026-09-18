@@ -1,5 +1,6 @@
 using System.Net;
 using System.Net.Http.Json;
+using System.Text.Json;
 using Muthur.Contracts;
 
 namespace Muthur.Server.Tests;
@@ -32,5 +33,17 @@ public sealed class DoctorTests : IDisposable
 
         var offline = await _hub.CreateClient().GetFromJsonAsync($"{Routes.Doctor}?probe=false", MuthurJsonContext.Default.DoctorDto);
         Assert.False(offline!.Probed);
+    }
+
+    [Fact]
+    public void A_status_goes_on_the_wire_lowercase()
+    {
+        var json = JsonSerializer.Serialize(
+            new CheckDto("project", "scratch", CheckStatus.Ok, "Gated by win-validator."),
+            MuthurJsonContext.Default.CheckDto);
+
+        // The CLI and the panel read this text, not the enum: "Ok" would be a different wire contract.
+        Assert.Contains("\"status\":\"ok\"", json);
+        Assert.DoesNotContain("\"Ok\"", json);
     }
 }
