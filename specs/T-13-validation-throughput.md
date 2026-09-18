@@ -311,6 +311,32 @@ to not repeat it.
 Everything else in `PlanAsync` — priority order, the failure ceiling, `_running`, the stall cooldown,
 `ConductorMaxSessions` — is unchanged.
 
+### The launcher's identity must be per session, not per role
+
+`ValidatorSessionLauncher.IdentityFor` names every session for a role `conductor-{role}`, and re-registering
+re-issues that agent's token. Its comment says why that was safe: *"Registering again re-issues the token,
+which is what we want: the previous session is over."* **This task makes that false.** Two sessions for the
+same role now run at once, the second registration invalidates the first's token, and the first session gets
+`unauthorized` / exit 6 on every call while `conductor status` still reports `running: 2`. Two validators
+that look staffed, one that works.
+
+The identity becomes unique per `(task, role)` — the same pair the conductor staffs, so a retry of the same
+pair still reuses its name and the ledger keeps a stable, readable actor:
+
+```csharp
+internal static string IdentityName(string task, string role)
+{
+    var suffix = "-" + task.ToLowerInvariant();          // "T-3" -> "-t-3"
+    var head = $"conductor-{role}";
+    // Agent names are 1-48 chars; a 48-char role key would otherwise push the pair over the limit.
+    return head.Length + suffix.Length <= 48 ? head + suffix : head[..(48 - suffix.Length)] + suffix;
+}
+```
+
+`IdentityFor` takes the assignment (or its `TaskKey`) and uses this. Everything else about it stays: one
+registration per session, for the candidate about to run, so a fall-through to another vendor does not leave
+the ledger saying the first one did the work.
+
 The validator prompt in `ValidatorSessionLauncher` gains one line after the `role take` lines:
 
 ```
@@ -401,7 +427,9 @@ No new CSS classes. Everything above uses classes that already exist in `wwwroot
 - **Depends on:** Units A and B.
 - **Acceptance:** `dotnet build` and `dotnet test` clean. Tests: with a capacity-2 role and three tasks in
   `validating`, one pass plans exactly two assignments, on the two highest-priority tasks; with capacity 1 it
-  plans exactly one, as today; a task whose pair is already claimed is not planned; a role whose holds are
+  plans exactly one, as today; **two concurrent sessions for one role get different agent identities and
+  neither invalidates the other's token** — assert on `IdentityName` directly for the pair-uniqueness and the
+  48-character clamp; a task whose pair is already claimed is not planned; a role whose holds are
   all live at capacity is not planned; a role whose slots are filled by sessions still in `_running` — started,
   not yet holding — is not planned again on the following pass; `ConductorMaxSessions` still caps the total
   below capacity.
