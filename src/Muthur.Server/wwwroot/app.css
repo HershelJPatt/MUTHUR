@@ -96,6 +96,9 @@ b { font-weight: 600; }
 .tag { font: 700 9.5px var(--mono); letter-spacing: .1em; text-transform: uppercase; padding: 1px 5px; border-radius: 3px; background: var(--line); color: var(--dim); }
 .tag-held { background: var(--accent-bg); color: var(--accent); }
 .tag-open { background: var(--amber-bg); color: var(--amber); }
+.check-ok { background: var(--accent-bg); color: var(--accent); }
+.check-warn { background: var(--amber-bg); color: var(--amber); }
+.check-fail { background: var(--red-bg); color: var(--red); }
 
 /* ---------- agents ---------- */
 .agent { padding: 9px 10px; border: 1px solid var(--line); border-radius: 6px; background: var(--panel-2); margin-bottom: 8px; }

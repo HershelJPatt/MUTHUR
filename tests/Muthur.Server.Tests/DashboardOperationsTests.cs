@@ -78,6 +78,17 @@ public sealed class DashboardOperationsTests : IDisposable
     }
 
     [Fact]
+    public async Task The_doctor_panel_renders_and_offers_a_re_check_even_when_there_is_nothing_to_check()
+    {
+        var page = await _hub.CreateClient().GetStringAsync("/operations");
+
+        Assert.Contains(">Doctor<", page);
+        Assert.Contains("all ok", page);
+        Assert.Contains(">Re-check<", page);
+        Assert.Contains("nothing to check", page);
+    }
+
+    [Fact]
     public async Task A_flagged_message_tells_the_founder_why_it_needs_them()
     {
         (await _hub.Founder().PutAsJsonAsync(Routes.OutboundTargets, new DefineTargetRequest("news", "file", Path.Combine(_hub.DataDir, "o.txt")))).EnsureSuccessStatusCode();
