@@ -126,9 +126,10 @@ public sealed class MessagingTests : IDisposable
     {
         var waiter = await _hub.RegisterAgentAsync("idle");
         var waiting = InboxAsync(waiter, wait: 900);
-        // NOT a barrier this test can drop: a request that arrives after StopApplication() finds the host's
-        // service provider disposed and answers 500, so it must reach the pipeline before the hub is told to stop.
-        await Task.Delay(150);
+        // The hub must be told to stop only once the request is really parked in the long poll: a request
+        // dispatched after StopApplication() meets a disposed service provider, not a cancelled wait.
+        await Eventually.TrueAsync(() => _hub.Clock.Timers.Contains(TimeSpan.FromSeconds(900)),
+            "the inbox never reached its 900-second wait on the hub's clock");
         Assert.False(waiting.IsCompleted);
 
         _hub.Services.GetRequiredService<IHostApplicationLifetime>().StopApplication();
