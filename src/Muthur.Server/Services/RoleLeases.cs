@@ -24,4 +24,8 @@ public static class RoleLeases
 
     public static Task<bool> HoldsAsync(MuthurDb db, Guid agentId, string roleKey, DateTimeOffset now, CancellationToken ct) =>
         db.RoleHolds.AnyAsync(h => h.AgentId == agentId && h.RoleKey == roleKey && h.LeaseExpires > now, ct);
+
+    /// <summary>How many agents hold a role right now, for callers that only need the number against its capacity.</summary>
+    public static Task<int> LiveHolderCountAsync(MuthurDb db, string roleKey, DateTimeOffset now, CancellationToken ct) =>
+        db.RoleHolds.CountAsync(h => h.RoleKey == roleKey && h.LeaseExpires > now, ct);
 }
