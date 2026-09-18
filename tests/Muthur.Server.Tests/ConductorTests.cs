@@ -542,6 +542,34 @@ public sealed class ConductorTests : IDisposable
     }
 
     [Fact]
+    public void A_role_key_that_spells_out_another_roles_truncated_name_does_not_take_its_identity()
+    {
+        var role = new string('v', 40) + "a";
+        var name = ValidatorSessionLauncher.IdentityName("T-1", role);
+
+        // The identity a '-' separator would have produced, read back off the real name rather than recomputed,
+        // and spelled as a role key: legal, 34 chars, short enough to need no truncation of its own. Under '-'
+        // a founder could define it and collide with the long role deliberately - one name, one token, again.
+        var crafted = name["conductor-".Length..^"-t-1".Length].Replace('.', '-');
+
+        Assert.Matches("^[a-z0-9][a-z0-9-]{0,47}$", crafted);
+        Assert.NotEqual(name, ValidatorSessionLauncher.IdentityName("T-1", crafted));
+    }
+
+    [Fact]
+    public async Task A_role_key_cannot_contain_the_dot_that_marks_a_truncated_identity()
+    {
+        // IdentityName's '.' separator is safe only because no role key can hold one: a key spelling
+        // '<kept>.<digest>' would be that truncated identity exactly. RoleService.KeyPattern is what forbids it,
+        // so the invariant the separator rests on is pinned by a test rather than by a comment in another file.
+        var refused = await _hub.Founder().PutAsJsonAsync(Routes.Roles,
+            new DefineRoleRequest("win.validator", "# win.validator\nDrive it."));
+
+        Assert.False(refused.IsSuccessStatusCode);
+        Assert.Equal("invalid_key", (await refused.ReadErrorAsync()).Code);
+    }
+
+    [Fact]
     public async Task Two_concurrent_sessions_for_one_role_do_not_invalidate_each_others_tokens()
     {
         await SetUpAsync("win-validator");

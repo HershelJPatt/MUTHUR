@@ -122,9 +122,14 @@ public sealed class ValidatorSessionLauncher(
         // Truncating alone would map two role keys that differ only past the cut onto one name - and one name
         // means one token, which is the very defect this method exists to fix. Keep as much of the role as
         // fits and append a short digest of the whole of it, so distinct roles stay distinct.
+        //
+        // The separator is '.' and that is load-bearing. Agent names allow [a-z0-9._-]; role keys allow only
+        // [a-z0-9-]. A '-' separator would let a founder craft a short role key that spells out another role's
+        // truncated name - role2[..keep] + "-" + digest(role2) - and collide with it deliberately. No legal role
+        // key can contain a '.', so the dot marks a name as truncated in a way nothing else can imitate.
         var digest = Convert.ToHexStringLower(SHA256.HashData(Encoding.UTF8.GetBytes(role)))[..HashLength];
         var keep = Limit - suffix.Length - HashLength - 1 - "conductor-".Length;
-        return $"conductor-{role[..keep]}-{digest}{suffix}";
+        return $"conductor-{role[..keep]}.{digest}{suffix}";
     }
 
     /// <summary>An account that could not answer leaves the rotation, exactly as `muthur agent limited` does.</summary>
