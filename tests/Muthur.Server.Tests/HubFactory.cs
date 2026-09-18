@@ -1,7 +1,6 @@
 using System.Net.Http.Headers;
 using Microsoft.AspNetCore.Hosting;
 using Microsoft.AspNetCore.Mvc.Testing;
-using Microsoft.Data.Sqlite;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.DependencyInjection.Extensions;
 using Microsoft.Extensions.Time.Testing;
@@ -28,6 +27,10 @@ public sealed class HubFactory : WebApplicationFactory<Program>
     {
         builder.UseSetting("Muthur:DataDir", DataDir);
         builder.UseSetting("Muthur:BackgroundServices", "false");
+        // Pooling off, not pool-clearing: the process-global ClearAllPools() disposed connections out from
+        // under hubs that were still serving, which failed an arbitrary test with a 500 under load.
+        builder.UseSetting("Muthur:ConnectionString",
+            $"Data Source={Path.Combine(DataDir, MuthurEnvironment.DatabaseFile)};Pooling=False");
         foreach (var (key, value) in Settings) builder.UseSetting(key, value);
         builder.ConfigureServices(services =>
         {
@@ -62,7 +65,6 @@ public sealed class HubFactory : WebApplicationFactory<Program>
     protected override void Dispose(bool disposing)
     {
         base.Dispose(disposing);
-        SqliteConnection.ClearAllPools();
         try { Directory.Delete(DataDir, recursive: true); } catch (IOException) { } catch (UnauthorizedAccessException) { }
     }
 }
