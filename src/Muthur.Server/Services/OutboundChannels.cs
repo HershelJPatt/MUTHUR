@@ -13,6 +13,8 @@ public sealed class FileChannel(TimeProvider clock) : IOutboundChannel
     {
         if (!Path.IsPathRooted(address))
             throw Fail.Rule("invalid_address", "A file target needs an absolute path.");
+        if (Directory.Exists(address))
+            throw Fail.Rule("invalid_address", "A file target needs a path to a file, not a directory.");
     }
 
     public async Task SendAsync(string address, string body, CancellationToken ct = default)
@@ -27,10 +29,17 @@ public sealed class FileChannel(TimeProvider clock) : IOutboundChannel
         try
         {
             Directory.CreateDirectory(Path.GetDirectoryName(address)!);
+            // A directory passes every check a send makes until the send itself, which fails with access denied.
+            if (Directory.Exists(address)) throw new ChannelException("the address is a directory, not a file");
+
+            // Prove what a send needs: that the address itself opens for append. Not a byte is written, and the
+            // file is left where it is even if this created it — deleting it could discard a message SendAsync
+            // appended in between, and it is the outbox the target names, which the next send would create anyway.
+            using (new FileStream(address, FileMode.Append, FileAccess.Write, FileShare.ReadWrite)) { }
         }
-        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or NotSupportedException)
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or NotSupportedException or ArgumentException)
         {
-            throw new ChannelException("the directory cannot be created or written");
+            throw new ChannelException("the address cannot be written");
         }
         return Task.CompletedTask;
     }

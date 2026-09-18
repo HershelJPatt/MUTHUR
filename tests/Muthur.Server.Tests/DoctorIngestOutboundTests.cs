@@ -183,6 +183,55 @@ public sealed class DoctorIngestOutboundTests : IDisposable
         Assert.DoesNotContain("outbox.txt", body, StringComparison.OrdinalIgnoreCase);
     }
 
+    [Fact]
+    public async Task A_target_whose_address_became_a_directory_probes_as_a_failure()
+    {
+        var address = Path.Combine(_hub.DataDir, "press-9c41", "outbox.txt");
+        await DefineFileTargetAsync("press", address);
+
+        // The address was a file's path when the founder allowed it; something has since created a directory there,
+        // which every send to it will fail on. Doctor exists to say so before an agent finds out the hard way.
+        Directory.CreateDirectory(address);
+
+        var check = Assert.Single((await DoctorAsync(probe: true)).Checks, c => c.Category == "outbound");
+
+        Assert.Equal("press", check.Subject);
+        Assert.Equal(CheckStatus.Fail, check.Status);
+        Assert.DoesNotContain("outbox.txt", check.Detail, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain("press-9c41", await DoctorBodyAsync(probe: true), StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public async Task The_file_probe_proves_the_address_itself_can_be_written_without_writing_a_byte()
+    {
+        // A parent directory that can be created says nothing about the address: this is what an "ok" must mean.
+        var channel = new FileChannel(_hub.Clock);
+        var address = Path.Combine(_hub.DataDir, "probe-9c41", "outbox.txt");
+
+        await channel.ProbeAsync(address);
+        // The probe may leave the outbox the target names — the next send would create it anyway — but never a byte
+        // in it. Deleting it instead could discard a message a concurrent send appended between the two calls.
+        Assert.True(File.Exists(address));
+        Assert.Equal(0, new FileInfo(address).Length);
+
+        await File.WriteAllTextAsync(address, "--- an earlier message\n");
+        await channel.ProbeAsync(address);
+        Assert.Equal("--- an earlier message\n", await File.ReadAllTextAsync(address));
+
+        var directory = Path.Combine(_hub.DataDir, "probe-9c41", "a-directory");
+        Directory.CreateDirectory(directory);
+        var asDirectory = await Assert.ThrowsAsync<ChannelException>(() => channel.ProbeAsync(directory));
+        Assert.Equal("the address is a directory, not a file", asDirectory.Message);
+
+        // Held open exclusively: the parent exists and is writable, and the address still is not.
+        var locked = Path.Combine(_hub.DataDir, "probe-9c41", "locked.txt");
+        using (new FileStream(locked, FileMode.Create, FileAccess.Write, FileShare.None))
+        {
+            var refused = await Assert.ThrowsAsync<ChannelException>(() => channel.ProbeAsync(locked));
+            Assert.Equal("the address cannot be written", refused.Message);
+        }
+    }
+
     private async Task DefineFileTargetAsync(string key, string? address = null, bool founderApproval = false) =>
         (await _hub.Founder().PutAsJsonAsync(Routes.OutboundTargets,
             new DefineTargetRequest(key, "file", address ?? Path.Combine(_hub.DataDir, "outbox.txt"), founderApproval)))
