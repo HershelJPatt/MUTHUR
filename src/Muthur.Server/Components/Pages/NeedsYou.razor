@@ -6,7 +6,10 @@
     <aside class="side side-left">
         <AgentsPanel />
     </aside>
-    <RequestsPanel />
+    <div class="stack">
+        <RequestsPanel />
+        <OutboundPanel AwaitingOnly="true" />
+    </div>
     <aside class="side side-right">
         <CommsPanel />
     </aside>
