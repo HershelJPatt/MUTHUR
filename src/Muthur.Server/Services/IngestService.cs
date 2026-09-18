@@ -153,6 +153,88 @@ public sealed class GitHubIssuesSource(IProcessRunner processes) : IInboundSourc
     }
 }
 
+/// <summary>
+/// Messages a person typed in one Discord channel. Polled with the newest message id as the cursor, because the
+/// hub is off for hours at a time and a webhook delivered to a process that is not running is simply lost.
+/// </summary>
+public sealed class DiscordChannelSource(IHttpClientFactory http, MuthurOptions options) : IInboundSource
+{
+    private const int TitleLength = 120;
+
+    public string Scheme => "discord";
+
+    public async Task<SourceFetch> FetchAsync(string location, string? cursor, CancellationToken ct = default)
+    {
+        if (options.DiscordBotToken is not { Length: > 0 } token)
+            throw new InvalidOperationException("No Discord bot token. Set the environment variable Muthur__DiscordBotToken and restart the hub.");
+
+        var (_, channel) = SplitLocation(location);
+        var url = $"https://discord.com/api/v10/channels/{channel}/messages?limit=100";
+        if (cursor is { Length: > 0 }) url += $"&after={cursor}";
+
+        using var request = new HttpRequestMessage(HttpMethod.Get, url);
+        // "Bot <token>" is Discord's scheme for a bot account. The token never leaves this line.
+        request.Headers.TryAddWithoutValidation("Authorization", $"Bot {token}");
+        using var response = await http.CreateClient().SendAsync(request, ct);
+        if (!response.IsSuccessStatusCode)
+            throw new InvalidOperationException($"Discord returned {(int)response.StatusCode} for channel {channel}.");
+
+        return Parse(await response.Content.ReadAsStringAsync(ct), cursor, location);
+    }
+
+    /// <summary>A channel id, or "guild/channel" — the guild is only needed to build a link back to the message.</summary>
+    internal static (string? Guild, string Channel) SplitLocation(string location)
+    {
+        var slash = location.IndexOf('/');
+        return slash < 0 ? (null, location) : (location[..slash], location[(slash + 1)..]);
+    }
+
+    public static SourceFetch Parse(string json, string? cursor, string location)
+    {
+        var (guild, channel) = SplitLocation(location);
+        using var doc = JsonDocument.Parse(json);
+        var newest = cursor;
+        var items = new List<(ulong Id, IncomingItem Item)>();
+
+        foreach (var message in doc.RootElement.EnumerateArray())
+        {
+            var id = message.GetProperty("id").GetString()!;
+            // Snowflakes are ids, not text: compared as text, a 19-digit id sorts below an 18-digit one.
+            // The cursor advances past every message we saw, including the ones we skip below - otherwise our
+            // own latest reply is never passed, and every poll fetches that same page again.
+            if (ulong.TryParse(id, out var snowflake) &&
+                (newest is null || (ulong.TryParse(newest, out var high) && snowflake > high)))
+                newest = id;
+
+            // Our own replies arrive through the webhook as bot messages. Ingesting them would make the
+            // comms on-call answer itself, forever. Only what a person typed becomes inbound.
+            if (message.TryGetProperty("author", out var author) && author.TryGetProperty("bot", out var bot) && bot.ValueKind == JsonValueKind.True)
+                continue;
+            if (message.TryGetProperty("webhook_id", out var hook) && hook.ValueKind is not JsonValueKind.Null)
+                continue;
+
+            var content = (message.TryGetProperty("content", out var c) ? c.GetString() : null)?.Trim();
+            if (string.IsNullOrEmpty(content)) continue;   // an attachment or a sticker alone: nothing to act on
+
+            items.Add((snowflake, new IncomingItem(
+                id,
+                Title(content),
+                content,
+                guild is null ? null : $"https://discord.com/channels/{guild}/{channel}/{id}",
+                author.ValueKind == JsonValueKind.Object && author.TryGetProperty("username", out var name) ? name.GetString() : null)));
+        }
+
+        // Discord answers newest first; the organization reads them in the order they were written.
+        return new SourceFetch(items.OrderBy(i => i.Id).Select(i => i.Item).ToList(), newest);
+    }
+
+    private static string Title(string content)
+    {
+        var line = content.ReplaceLineEndings("\n").Split('\n')[0].Trim();
+        return line.Length <= TitleLength ? line : line[..(TitleLength - 1)].TrimEnd() + "…";
+    }
+}
+
 public sealed class IngestWorker(IServiceProvider services, MuthurOptions options, TimeProvider clock, ILogger<IngestWorker> logger) : BackgroundService
 {
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)

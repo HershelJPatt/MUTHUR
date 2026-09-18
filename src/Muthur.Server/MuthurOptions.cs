@@ -20,6 +20,12 @@ public sealed class MuthurOptions
     /// <summary>Off in tests so sweeps and ingest only run when a test asks for them.</summary>
     public bool BackgroundServices { get; set; } = true;
 
+    /// <summary>
+    /// Bot token for <c>discord:</c> ingest, in practice set as the environment variable
+    /// <c>Muthur__DiscordBotToken</c>. It is never recorded in the ledger, logged, or returned by an endpoint.
+    /// </summary>
+    public string? DiscordBotToken { get; set; }
+
     public string ResolveConnectionString() =>
         ConnectionString ?? $"Data Source={Path.Combine(DataDir, MuthurEnvironment.DatabaseFile)}";
 }

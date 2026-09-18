@@ -123,6 +123,7 @@ launcher commits for it because the sandbox keeps `.git` read-only), `codex-oss`
 
 ```bash
 muthur project set my-repo --ingest github:owner/repo --founder     # polled with a cursor: nothing is missed while the hub is off
+muthur project set my-repo --ingest discord:<guild>/<channel> --founder    # needs Muthur__DiscordBotToken; only what a person typed
 muthur inbound add "Customer: export is broken" --source email --external-id msg-42      # push from any script
 muthur inbound claim I-7 --as-task                                  # one winner; becomes a backlog task linking to its source
 
@@ -145,6 +146,7 @@ on a different vendor than the author.
 | `Muthur:ClaimLeaseMinutes` / `RoleLeaseMinutes` | 30 / 30 | appsettings or `Muthur__…` environment variables |
 | `Muthur:IngestIntervalSeconds` | 180 | |
 | `Muthur:RequireCrossProviderReview` | false | |
+| `Muthur:DiscordBotToken` | — | bot token for `discord:` ingest; set it as `Muthur__DiscordBotToken`, never in a file |
 
 A build under test must never share the live hub's port or data: prefix **every** command with its own
 `MUTHUR_HOME`/`MUTHUR_URL` (never `export` them). `muthur down` refuses to stop a hub that is not its own installation.
@@ -155,6 +157,8 @@ A build under test must never share the live hub's port or data: prefix **every*
   Real isolation arrives when the hub runs on its own host (tokens, role checks and "all access over HTTP" are already in place for that).
 - Validation is only as good as your project's ability to be built, launched and driven unattended. That harness is the first thing to build for any project you bring in.
 - `github:` ingest and the `github-issue` channel use the GitHub CLI's login (`gh auth login`). Azure DevOps is the next adapter on both sides.
+- Discord is two-way: `discord:` ingest reads a channel, `discord-webhook` replies into one. Bot and webhook messages are never
+  ingested, so the comms on-call cannot end up answering itself.
 
 ## Development
 
