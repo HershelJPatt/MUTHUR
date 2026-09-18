@@ -360,6 +360,51 @@ public sealed class ConductorTests : IDisposable
         Assert.Equal(recorded, registered.Model);
     }
 
+    private static Muthur.Launch.WorkerAttempt Attempt(string harness, bool success, string report) =>
+        new(new Muthur.Launch.HarnessCandidate(harness, "opus", "acct"),
+            new Muthur.Launch.WorkerOutcome(success, report, RateLimited: false), TimeSpan.Zero);
+
+    [Fact]
+    public void A_harness_the_build_cannot_run_is_a_launch_failure_not_a_quiet_success()
+    {
+        // AgentLauncher records "unknown harness" and "not on PATH" as attempts and returns normally. Unexamined,
+        // the caller takes the success path, the stall counter clears, and the conductor staffs the same pair
+        // every interval forever - the round-2 defect, through the door the README says is closed.
+        var attempts = new[]
+        {
+            Attempt("gemini", false, "Unknown harness 'gemini'."),
+            Attempt("claude", false, "'claude' is not installed or not on PATH."),
+        };
+
+        var thrown = Assert.Throws<InvalidOperationException>(() => ValidatorSessionLauncher.EnsureSomethingRan("T-1", attempts));
+        Assert.Equal("'claude' is not installed or not on PATH.", thrown.Message);
+    }
+
+    [Fact]
+    public void A_session_that_ran_is_not_a_launch_failure_whatever_it_decided()
+    {
+        // A validator that ran and voted no is the system working. Only "nothing ran" is a launch failure.
+        var attempts = new[]
+        {
+            Attempt("claude", false, "rate limited"),
+            Attempt("codex", true, "validated T-1: fail, evidence attached"),
+        };
+
+        ValidatorSessionLauncher.EnsureSomethingRan("T-1", attempts);
+    }
+
+    [Fact]
+    public void No_candidate_reported_anything_at_all_is_still_a_failure() =>
+        Assert.Throws<InvalidOperationException>(() => ValidatorSessionLauncher.EnsureSomethingRan("T-1", []));
+
+    [Fact]
+    public async Task The_status_line_carries_the_number_a_founder_waiting_on_a_probe_needs()
+    {
+        _hub.Settings["Muthur:ConductorStallProbeMinutes"] = "17";
+
+        Assert.Equal(17, (await Conductor.StatusAsync()).StallProbeMinutes);
+    }
+
     [Fact]
     public async Task The_founders_decision_outlives_the_process_that_heard_it()
     {

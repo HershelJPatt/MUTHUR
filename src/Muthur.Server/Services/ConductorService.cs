@@ -70,6 +70,7 @@ public sealed class ConductorService(Ledger ledger, MuthurOptions options, TimeP
         options.ConductorSessionMinutes,
         options.ConductorMaxAttempts,
         options.ConductorIntervalSeconds,
+        options.ConductorStallProbeMinutes,
         _lastPass,
         _lastAction);
 
@@ -224,7 +225,8 @@ public sealed class ConductorService(Ledger ledger, MuthurOptions options, TimeP
                     MessageService.PostFromHub(m, Recipient.Founder, null,
                         $"The conductor could not start a validator for {assignment.TaskKey} ({assignment.RoleKey}) " +
                         $"{stall.Failures} times and has stopped trying: {ex.Message}" + Environment.NewLine +
-                        $"Fix the cause and it retries by itself within {options.ConductorStallProbeMinutes} minutes; " +
+                        $"Fix the cause and it retries by itself within {options.ConductorStallProbeMinutes} " +
+                        (options.ConductorStallProbeMinutes == 1 ? "minute; " : "minutes; ") +
                         "`muthur conductor off --founder && muthur conductor on --founder` retries at once.",
                         assignment.TaskId);
                     _lastAction = $"gave up starting {assignment.RoleKey} for {assignment.TaskKey}: {ex.Message}";

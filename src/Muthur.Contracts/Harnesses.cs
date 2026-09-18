@@ -22,6 +22,6 @@ public sealed record WorkerRunReport(
 /// <summary>Whether the conductor is staffing validation, the limits it staffs within, and what it last did.</summary>
 public sealed record ConductorStatusDto(
     bool Enabled, int Running, int MaxSessions, int SessionMinutes, int MaxAttempts, int IntervalSeconds,
-    DateTimeOffset? LastPass, string? LastAction);
+    int StallProbeMinutes, DateTimeOffset? LastPass, string? LastAction);
 
 public sealed record ConductorSwitch(bool Enabled);

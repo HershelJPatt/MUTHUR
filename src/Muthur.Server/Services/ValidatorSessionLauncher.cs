@@ -53,9 +53,25 @@ public sealed class ValidatorSessionLauncher(
             candidate => MarkLimitedAsync(candidate.Account, ct),
             ct);
 
-        var last = attempts.LastOrDefault();
-        logger.LogInformation("Validator session for {Task}/{Role} finished on {Harness}: {Outcome}",
-            assignment.TaskKey, assignment.RoleKey, last?.Candidate.Harness, last?.Outcome.Success == true ? "ok" : "failed");
+        EnsureSomethingRan(assignment.TaskKey, attempts);
+
+        var last = attempts[^1];
+        logger.LogInformation("Validator session for {Task}/{Role} finished on {Harness}.",
+            assignment.TaskKey, assignment.RoleKey, last.Candidate.Harness);
+    }
+
+    /// <summary>
+    /// A harness the build does not know, or a CLI that is not on the hub's PATH, is not an exception in
+    /// <see cref="AgentLauncher"/> — it is an attempt that records why and returns. Left unexamined, the caller
+    /// takes the success path, the stall counter is cleared, and the conductor staffs the same pair every interval
+    /// forever. Everything that means "no session ran" has to leave here the same way: by throwing.
+    /// </summary>
+    internal static void EnsureSomethingRan(string taskKey, IReadOnlyList<WorkerAttempt> attempts)
+    {
+        if (attempts.Any(a => a.Outcome.Success)) return;
+        throw new InvalidOperationException(attempts.Count > 0
+            ? attempts[^1].Outcome.Report
+            : $"No validator session ran for {taskKey} and no candidate reported why.");
     }
 
     /// <summary>
