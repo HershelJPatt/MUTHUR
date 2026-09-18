@@ -105,7 +105,16 @@ var full = Path.GetFullPath(Path.Combine(task.Project!.RepoPath, relative));
    A first heading that names **no** task id is accepted. Not every project writes `# T-n — title`, and
    this check exists to catch a wrong id, not to impose a house style on a heading.
 
-   Read at most the first 8 KiB of the file, so a mistaken path to something enormous is cheap to reject.
+   Read at most the first **8192 characters** of the file — `StreamReader.ReadBlock` into a `char[8 * 1024]`,
+   which is what the code does and the unit this cap is expressed in. An earlier draft said "8 KiB", a
+   different unit: UTF-8 decodes up to four bytes per character, so the character cap can consume up to
+   32 KB. That is fine, because **the cap bounds work; it is not a security boundary.** It exists so a
+   mistaken path to something enormous is cheap to reject, and 32 KB is as cheap as 8 KB.
+
+   One edge is worth pinning, because two requirements in this section can conflict: if there is no non-blank
+   line within the cap, the heading names nothing and the spec is **accepted**. A file opening with more than
+   8192 characters of whitespace is pathological, and refusing it would mean claiming it is the spec for
+   another task without having read one.
    An `IOException` or `UnauthorizedAccessException` while reading is
    `Fail.Rule("spec_unreadable", $"'{relative}' could not be read: {ex.Message}")` — a spec the hub cannot
    read is one an implementer cannot read either.
@@ -173,7 +182,10 @@ They are a record of what was asked at the time, and editing them is the failure
   whose heading names this task is accepted; one whose heading names another task is refused 422
   `spec_id_mismatch`; a path to no file is refused 422 `spec_missing`; a path containing `..` that escapes
   the repository is refused 422 `spec_outside_repository`; a spec whose first heading names no task id at
-  all is accepted; and a spec whose first non-blank line is preceded by blank lines is still read correctly.
+  all is accepted; a spec whose first non-blank line is preceded by blank lines is still read correctly; and
+  a spec whose first non-blank line lies beyond the 8192-character cap is **accepted** rather than refused —
+  write one with more than 8192 characters of leading whitespace followed by a `# T-9` heading, and assert
+  the attach succeeds.
 
 ### Unit B — the renames, the recoveries, and the README
 - **Files:** the twelve files in the tables above, plus new `specs/README.md`.
