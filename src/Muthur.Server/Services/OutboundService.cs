@@ -17,6 +17,9 @@ public interface IOutboundChannel
 
     /// <summary>Throws <see cref="ChannelException"/> with a reason that is safe to show to agents when delivery fails.</summary>
     Task SendAsync(string address, string body, CancellationToken ct = default);
+
+    /// <summary>Is the target reachable and its address still valid? Sends nothing. Throws <see cref="ChannelException"/>, whose message names nothing of the address.</summary>
+    Task ProbeAsync(string address, CancellationToken ct = default);
 }
 
 /// <summary>A delivery failure whose message contains nothing about the target's address (which is often a credential).</summary>

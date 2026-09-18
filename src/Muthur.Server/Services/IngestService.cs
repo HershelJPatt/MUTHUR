@@ -17,6 +17,9 @@ public interface IInboundSource
 
     /// <summary>Items at or after <paramref name="cursor"/>, and the cursor to resume from. Throws <see cref="InvalidOperationException"/> when the source cannot be read.</summary>
     Task<SourceFetch> FetchAsync(string location, string? cursor, CancellationToken ct = default);
+
+    /// <summary>Can this source be read right now? Ingests nothing. Throws <see cref="InvalidOperationException"/> with a reason safe to show the founder.</summary>
+    Task ProbeAsync(string location, CancellationToken ct = default);
 }
 
 /// <summary>
@@ -97,6 +100,7 @@ public sealed class IngestService(Ledger ledger, IEnumerable<IInboundSource> sou
         row.Cursor = cursor;
         row.LastError = error;
         row.UpdatedAt = m.Now;
+        if (error is null) row.LastSuccessAt = m.Now;
     }
 
     private static (string Scheme, string Location) Split(string source)
@@ -131,6 +135,14 @@ public sealed class GitHubIssuesSource(IProcessRunner processes) : IInboundSourc
         return Parse(result.StdOut, cursor);
     }
 
+    public async Task ProbeAsync(string location, CancellationToken ct = default)
+    {
+        // The repository itself, not its issues: the cheapest call that proves gh is logged in and can see it.
+        var result = await processes.RunAsync("gh", ["api", "--method", "GET", $"repos/{location}"],
+            Environment.CurrentDirectory, timeout: TimeSpan.FromSeconds(60), ct: ct);
+        if (!result.Ok) throw new InvalidOperationException($"gh api failed: {result.Message}");
+    }
+
     public static SourceFetch Parse(string json, string? cursor)
     {
         using var doc = JsonDocument.Parse(json);
@@ -160,13 +172,14 @@ public sealed class GitHubIssuesSource(IProcessRunner processes) : IInboundSourc
 public sealed class DiscordChannelSource(IHttpClientFactory http, MuthurOptions options) : IInboundSource
 {
     private const int TitleLength = 120;
+    private const string NoToken = "No Discord bot token. Set the environment variable Muthur__DiscordBotToken and restart the hub.";
 
     public string Scheme => "discord";
 
     public async Task<SourceFetch> FetchAsync(string location, string? cursor, CancellationToken ct = default)
     {
         if (options.DiscordBotToken is not { Length: > 0 } token)
-            throw new InvalidOperationException("No Discord bot token. Set the environment variable Muthur__DiscordBotToken and restart the hub.");
+            throw new InvalidOperationException(NoToken);
 
         var (_, channel) = SplitLocation(location);
         var url = $"https://discord.com/api/v10/channels/{channel}/messages?limit=100";
@@ -180,6 +193,18 @@ public sealed class DiscordChannelSource(IHttpClientFactory http, MuthurOptions 
             throw new InvalidOperationException($"Discord returned {(int)response.StatusCode} for channel {channel}.");
 
         return Parse(await response.Content.ReadAsStringAsync(ct), cursor, location);
+    }
+
+    public async Task ProbeAsync(string location, CancellationToken ct = default)
+    {
+        if (options.DiscordBotToken is not { Length: > 0 } token) throw new InvalidOperationException(NoToken);
+
+        var (_, channel) = SplitLocation(location);
+        using var request = new HttpRequestMessage(HttpMethod.Get, $"https://discord.com/api/v10/channels/{channel}");
+        request.Headers.TryAddWithoutValidation("Authorization", $"Bot {token}");
+        using var response = await http.CreateClient().SendAsync(request, ct);
+        if (!response.IsSuccessStatusCode)
+            throw new InvalidOperationException($"Discord returned {(int)response.StatusCode} for channel {channel}.");
     }
 
     /// <summary>A channel id, or "guild/channel" — the guild is only needed to build a link back to the message.</summary>

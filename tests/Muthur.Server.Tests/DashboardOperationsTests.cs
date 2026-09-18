@@ -1,5 +1,8 @@
 using System.Net.Http.Json;
+using Microsoft.AspNetCore.Hosting;
+using Microsoft.Extensions.DependencyInjection;
 using Muthur.Contracts;
+using Muthur.Server.Services;
 
 namespace Muthur.Server.Tests;
 
@@ -75,6 +78,38 @@ public sealed class DashboardOperationsTests : IDisposable
         (await worker.PostAsJsonAsync(Routes.AgentLimited, new LimitedRequest(_hub.Clock.GetUtcNow().AddHours(2)))).EnsureSuccessStatusCode();
 
         Assert.Contains("limited in", await _hub.CreateClient().GetStringAsync("/operations"));
+    }
+
+    [Fact]
+    public async Task The_doctor_panel_renders_and_offers_a_re_check_even_when_there_is_nothing_to_check()
+    {
+        var page = await _hub.CreateClient().GetStringAsync("/operations");
+
+        Assert.Contains(">Doctor<", page);
+        Assert.Contains("all ok", page);
+        Assert.Contains(">Re-check<", page);
+        Assert.Contains("nothing to check", page);
+    }
+
+    [Fact]
+    public async Task A_check_that_knows_when_its_source_last_read_shows_the_age_and_not_a_timestamp()
+    {
+        var lastRead = _hub.Clock.GetUtcNow().AddMinutes(-7);
+        var row = new CheckDto("ingest", "fake:inbox", CheckStatus.Ok, "Reads.", lastRead);
+        using var hub = _hub.WithWebHostBuilder(b => b.ConfigureServices(s => s.AddSingleton<IDoctorCheck>(new OneRowCheck(row))));
+
+        var page = await hub.CreateClient().GetStringAsync("/operations");
+
+        Assert.Contains("fake:inbox", page);
+        Assert.Contains("last read 7m", page);
+        Assert.DoesNotContain(lastRead.ToString("u"), page);       // an age, never a bare timestamp
+    }
+
+    /// <summary>One fixed row, so the panel can be rendered without the real checks, which this unit does not own.</summary>
+    private sealed class OneRowCheck(CheckDto row) : IDoctorCheck
+    {
+        public Task<IReadOnlyList<CheckDto>> RunAsync(DoctorContext context, CancellationToken ct = default) =>
+            Task.FromResult<IReadOnlyList<CheckDto>>([row]);
     }
 
     [Fact]
