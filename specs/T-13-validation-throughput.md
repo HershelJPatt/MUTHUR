@@ -97,6 +97,9 @@ public sealed record RoleDto(
 public sealed record ClaimValidationRequest(string Validator);
 ```
 
+`ClaimValidationRequest` belongs to **Unit B**, which is the unit that consumes it; Unit A adds the other
+three records and leaves it alone.
+
 `ValidationDto` (in `src/Muthur.Contracts/Tasks.cs`, wherever it is declared today) gains three members,
 appended so existing positional uses keep their meaning:
 
@@ -206,9 +209,14 @@ upgrade" is honest, and there are at most a handful.
 - Load the role. Load *all* unexpired holds for it.
 - If one of them is mine → renew it, no ledger event (today's "taking a role you already hold" rule).
 - Else if `unexpiredHolds.Count >= role.Holders` → `Fail.Conflict("role_held", …)`:
-  - capacity 1: `"Role '<key>' is held by '<holder>' until <lease:O>."` — **unchanged from today**, so the
-    existing message and test survive.
-  - capacity > 1: `"Role '<key>' is full: <n> of <capacity> held by <comma-separated holders>."`
+  - **exactly one live holder**: `"Role '<key>' is held by '<holder>' until <lease:O>."` — **unchanged from
+    today**, so the existing message and test survive.
+  - **more than one live holder**: `"Role '<key>' is full: <n> of <capacity> held by <comma-separated holders>."`
+
+  Branch on the number of live holders, **not** on `role.Holders`. The spec allows a founder to lower a
+  capacity below the number of standing holds, and a capacity-1 role with two holders left over from a
+  capacity-3 era would otherwise print the single-holder message and name only the oldest of them — telling
+  an agent to wait for one lease when two stand in its way.
 - Else add a hold and record `role.taken` with `{ role, agent, holders = <live count after>, capacity }`.
   The `tookOverFrom` field disappears — with capacity, taking a role never displaces anyone.
 
