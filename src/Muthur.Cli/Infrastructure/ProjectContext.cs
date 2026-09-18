@@ -17,9 +17,9 @@ public static class ProjectContext
         return null;
     }
 
-    public static string? FindKey()
+    public static string? FindKey(string? startDirectory = null)
     {
-        if (FindFile() is not { } file) return null;
+        if (FindFile(startDirectory) is not { } file) return null;
         try
         {
             using var doc = JsonDocument.Parse(File.ReadAllText(file));

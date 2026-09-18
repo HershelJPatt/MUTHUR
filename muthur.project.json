@@ -3,5 +3,5 @@
   "build": "dotnet build",
   "test": "dotnet test",
   "run": "pwsh ./scripts/install.ps1 -Destination ./artifacts/muthur; then set MUTHUR_HOME to a scratch directory and run ./artifacts/muthur/muthur.exe up (dashboard at http://127.0.0.1:7420)",
-  "notes": "Never point a development build at the real %LOCALAPPDATA%\Muthur home: set MUTHUR_HOME to a scratch directory. Warnings are errors. Tests use HubFactory (isolated temp data dir + FakeTimeProvider)."
+  "notes": "Never point a development build at the real %LOCALAPPDATA%\\Muthur home: set MUTHUR_HOME to a scratch directory. Warnings are errors. Tests use HubFactory (isolated temp data dir + FakeTimeProvider)."
 }
