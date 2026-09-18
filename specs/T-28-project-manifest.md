@@ -179,3 +179,26 @@ Known, out of scope, and worth a validator knowing: these tests walk up from the
 an agent worktree they assert against that worktree's copy of the manifest. The nine copies under
 `.claude/worktrees/` still hold the broken string and would fail there. They are transient and this spec
 excludes them.
+
+### A red server test on this branch, and why it is not this branch's
+
+The first full `dotnet test` on the integrated branch came back 138/139:
+
+```
+IngestTests.Dismissing_needs_a_reason_and_the_intake_role_is_told_about_new_items [FAIL]
+HttpRequestException: Response status code does not indicate success: 500
+  at HubTestExtensions.AddProjectAsync(...)
+```
+
+Not this task's. `git diff main..HEAD` touches no file under `src/Muthur.Server` or
+`tests/Muthur.Server.Tests` — T-28 changes a JSON file, one optional parameter in the CLI, and one CLI test
+file. This branch is cut from `main`, and `main` still has `SqliteConnection.ClearAllPools()` at
+`tests/Muthur.Server.Tests/HubFactory.cs:65`.
+
+It is the T-22 defect again, on unfixed code: an arbitrary test, an arbitrary request, HTTP 500. That is now
+the fourth independent sighting in a fourth different test class — `OutboundTests` (on main, originally),
+agent-register in `conductor-validator`'s matrix, `LifecycleTests` and `ConductorTests` in corner's parallel
+builds, and now `IngestTests` here. A re-run was 139/139.
+
+Recorded rather than re-run into silence, because "it passed the second time" is exactly the habit T-22
+exists to stop.
