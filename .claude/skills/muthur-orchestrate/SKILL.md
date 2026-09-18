@@ -35,6 +35,8 @@ Every `muthur` call renews your leases. When idle for long stretches, run
    without making a single design decision. If you can't write it that precisely, you haven't finished step 2.
 4. **Split and delegate.** Break the spec into units that can be built independently. For each unit start an
    implementer in its own git worktree on branch `task/T-n-<slug>` (or sub-branches you will merge into it).
+   Your harness may have a native way to do this; `muthur worker run --tier implementer --spec … --unit …` works from any
+   harness and staffs the tier with whichever model and account is available.
    Give it: the spec path, the unit it owns, the exact verification commands. Nothing else — no hub access,
    no authority to merge or push. Use a stronger (mastermind-tier) sub-orchestrator instead of an implementer
    when the unit is itself a large or risky problem space.
@@ -67,6 +69,10 @@ Every `muthur` call renews your leases. When idle for long stretches, run
   units in a single message so they run in parallel.
 - An implementer's report names its branch. Integrate with `git merge --no-ff <branch>` **into the task
   branch only**. Merging into the project's default branch is MUTHUR's job (`muthur task land`).
+- **Cross-harness workers:** `muthur worker run --tier implementer --spec specs/T-n.md --unit "<unit>" --task T-n` runs the unit
+  headless on whichever harness and account the tier has available (another Claude, Codex, a local model) in its own
+  worktree, and returns the report and branch. Use it when your own account is near its limit, to get a second
+  vendor's take on a unit, or for utility-tier chores. Run it as a background Bash call for long units.
 - Subagents cannot spawn subagents. For a unit too big for one specialist, split it further yourself or make it
   its own ledger task for another orchestrator session.
 - The prompt you give a subagent is everything it knows. Always include: the spec path, the unit name, the
