@@ -300,6 +300,14 @@ Then, per pending validation:
 - otherwise plan it, and **count it against that role for the rest of this pass**, so one pass does not plan
   three sessions into two free slots.
 
+A slot is taken by a hold **or by a session already on its way to one.** Seed each role's count with the
+sessions `_running` already holds for it — its keys are `"T-n/role"`, so the role is the part after the
+slash — before comparing against `Role.Holders`. Without that, a session that has started but has not yet
+taken the role is invisible to the next pass, and with a short interval two passes in a row can plan more
+sessions than the role has slots. The extras start, fail to take the role, and produce nothing. That is the
+exact waste this organization spent five sessions on the week this task was written, and it costs one line
+to not repeat it.
+
 Everything else in `PlanAsync` — priority order, the failure ceiling, `_running`, the stall cooldown,
 `ConductorMaxSessions` — is unchanged.
 
@@ -394,7 +402,9 @@ No new CSS classes. Everything above uses classes that already exist in `wwwroot
 - **Acceptance:** `dotnet build` and `dotnet test` clean. Tests: with a capacity-2 role and three tasks in
   `validating`, one pass plans exactly two assignments, on the two highest-priority tasks; with capacity 1 it
   plans exactly one, as today; a task whose pair is already claimed is not planned; a role whose holds are
-  all live at capacity is not planned; `ConductorMaxSessions` still caps the total below capacity.
+  all live at capacity is not planned; a role whose slots are filled by sessions still in `_running` — started,
+  not yet holding — is not planned again on the following pass; `ConductorMaxSessions` still caps the total
+  below capacity.
 
 ### Unit D — CLI
 - **Files:** `src/Muthur.Cli/Commands/RoleCommands.cs`.
