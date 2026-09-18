@@ -152,9 +152,15 @@ End to end, against a scratch hub — never the live one. Install first
 
 ```
 muthur project add solo --repo <path> --founder      # response contains "ungated": true
-muthur project set solo --validator win-validator --founder   # response no longer contains "ungated"
-muthur project add gated --repo <path> --validator win-validator --founder   # no "ungated"
+muthur project set solo --validator win-validator --founder   # response contains "ungated": false
+muthur project add gated --repo <path> --validator win-validator --founder   # "ungated": false
 ```
+
+(Corrected. This block first said the field would be *absent* once a project had a validator, which
+contradicts the Design section: `Ungated` is a non-nullable `bool` on every `ProjectDto`, so a gated
+project reports `"ungated": false`. Unit A's worker caught it. Keeping it a plain `bool` rather than a
+`bool?` that the `WhenWritingNull` policy would omit is deliberate: a two-valued fact should not be typed
+as three-valued to save sixteen bytes, and a reader of the JSON gets an answer either way.)
 
 Then open `/projects` on the scratch hub: `solo` shows an amber `ungated` pill and the sentence about
 `implemented` going straight to `validated`; `gated` shows neither and lists its validator.
