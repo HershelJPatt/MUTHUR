@@ -57,7 +57,7 @@ public sealed class ValidatorSessionLauncher(
                 AllowedCommands: Allowed,
                 DeniedCommands: Denied,
                 ScratchDirectory: scratch),
-            candidate => IdentityFor(assignment.RoleKey, candidate, ct),
+            candidate => IdentityFor(assignment, candidate, ct),
             TimeSpan.FromMinutes(options.ConductorSessionMinutes),
             candidate => MarkLimitedAsync(candidate.Account, ct),
             ct);
@@ -91,19 +91,30 @@ public sealed class ValidatorSessionLauncher(
     }
 
     /// <summary>
-    /// One agent per role, reused across sessions, so the ledger shows a stable name rather than a new stranger
-    /// every night. It is registered for the candidate that is about to run — a fall-through to another vendor
-    /// must not leave the ledger saying the first one did the work. Registering again re-issues the token, which
-    /// is what we want: the previous session is over.
+    /// One agent per (task, role) pair — the same pair the conductor staffs — so a retry of that pair reuses its
+    /// name and the ledger keeps a stable, readable actor. It must not be one agent per role: a validator role may
+    /// have several holders, registering re-issues that agent's token, and two sessions sharing a name would leave
+    /// the older one holding a revoked token, failing every call while the conductor still counts it as running.
+    /// It is registered for the candidate that is about to run — a fall-through to another vendor must not leave
+    /// the ledger saying the first one did the work.
     /// </summary>
-    internal async Task<AgentIdentity> IdentityFor(string role, HarnessCandidate candidate, CancellationToken ct)
+    internal async Task<AgentIdentity> IdentityFor(ConductorAssignment assignment, HarnessCandidate candidate, CancellationToken ct)
     {
-        var name = $"conductor-{role}";
+        var name = IdentityName(assignment.TaskKey, assignment.RoleKey);
         // A tier entry may leave the model blank to mean "the harness's own default"; the ledger still needs a word.
         var model = candidate.Model is { Length: > 0 } ? candidate.Model : "default";
         var registration = await agents.RegisterAsync(Caller.Founder,
             new RegisterAgentRequest(name, candidate.Harness, model, Tier, candidate.Account), ct);
         return new AgentIdentity(name, registration.Token);
+    }
+
+    /// <summary>The agent name for one staffed pair: stable across retries of that pair, distinct between pairs.</summary>
+    internal static string IdentityName(string task, string role)
+    {
+        var suffix = "-" + task.ToLowerInvariant();          // "T-3" -> "-t-3"
+        var head = $"conductor-{role}";
+        // Agent names are 1-48 chars; a 48-char role key would otherwise push the pair over the limit.
+        return head.Length + suffix.Length <= 48 ? head + suffix : head[..(48 - suffix.Length)] + suffix;
     }
 
     /// <summary>An account that could not answer leaves the rotation, exactly as `muthur agent limited` does.</summary>
