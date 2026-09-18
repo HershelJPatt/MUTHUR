@@ -155,8 +155,22 @@ muthur task attended <id> --clear
 - Command description: `"Say that this task needs a human validator, and why. --clear lifts it when the reason stops being true."`
 - `--reason`: `"Why a human is needed: a browser, a device, your hands. Required unless --clear."`
 - `--clear`: `"Lift the flag. The conductor staffs the task again."`
-- Neither given → `Output.Error("reason_required", "Say why this task needs a human: --reason \"<why>\", or --clear to lift it.", ExitCodes.RuleViolation)` without calling the hub. Both given → the same error, wording
-  `"Pass --reason or --clear, not both."`
+- The refusal branches on **whether each option was supplied**, never on whether the reason has content.
+  In `System.CommandLine` that is `parse.GetResult(reasonOption) is not null`, not
+  `string.IsNullOrWhiteSpace(value)`. Getting this wrong is not cosmetic: `--reason "   " --clear` then
+  matches neither arm, the command calls the hub, and the hub — which cannot tell "clear" from "set with the
+  reason left out", because both arrive as a null reason — **silently lifts the flag**. A conflicting
+  invocation the spec requires to be rejected would instead re-enable unattended staffing.
+
+  | `--reason` supplied | `--clear` | Result |
+  |---|---|---|
+  | yes | yes | `reason_required`, `"Pass --reason or --clear, not both."`, exit 2, hub not called |
+  | no | no | `reason_required`, `"Say why this task needs a human: --reason \"<why>\", or --clear to lift it."`, exit 2, hub not called |
+  | yes, but whitespace only | no | the same `"Say why this task needs a human…"` refusal — a blank reason is not a reason |
+  | yes, with content | no | send `new AttendedRequest(reason.Trim())` |
+  | no | yes | send `new AttendedRequest(null)` |
+
+  Both refusals go through `Output.Error(code, message, ExitCodes.RuleViolation)` without calling the hub.
 - `--clear` sends `new AttendedRequest(null)`; `--reason x` sends `new AttendedRequest(x)`.
 
 ### The board says so, and says why
