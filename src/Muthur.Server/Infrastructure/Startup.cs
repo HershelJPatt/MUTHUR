@@ -60,6 +60,7 @@ public static class Startup
         builder.Services.AddSingleton<IOutboundChannel, GitHubIssueChannel>();
         builder.Services.AddSingleton<IngestService>();
         builder.Services.AddSingleton<IInboundSource, GitHubIssuesSource>();
+        builder.Services.AddSingleton<IInboundSource, DiscordChannelSource>();
         builder.Services.AddSingleton<IProcessRunner, ProcessRunner>();
         builder.Services.AddSingleton<IPullRequestOpener, GhPullRequestOpener>();
         builder.Services.AddSingleton<ITaskLander, GitLander>();
