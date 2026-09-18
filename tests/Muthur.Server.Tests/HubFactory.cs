@@ -13,7 +13,8 @@ namespace Muthur.Server.Tests;
 /// <summary>A full hub over an isolated temp data directory with a controllable clock.</summary>
 public sealed class HubFactory : WebApplicationFactory<Program>
 {
-    public string DataDir { get; } = Path.Combine(Path.GetTempPath(), "muthur-tests", Guid.NewGuid().ToString("n"));
+    /// <summary>Settable so a test can bring a second hub up over the same database, as a restart does.</summary>
+    public string DataDir { get; init; } = Path.Combine(Path.GetTempPath(), "muthur-tests", Guid.NewGuid().ToString("n"));
     public FakeTimeProvider Clock { get; } = new(new DateTimeOffset(2026, 1, 1, 12, 0, 0, TimeSpan.Zero));
 
     /// <summary>Extra configuration for a test class, e.g. ["Muthur:RequireCrossProviderReview"] = "true".</summary>

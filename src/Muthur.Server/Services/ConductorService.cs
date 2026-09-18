@@ -31,39 +31,57 @@ public sealed class ConductorService(Ledger ledger, MuthurOptions options, IVali
     private readonly HashSet<string> _running = [];
     private readonly HashSet<int> _escalated = [];
 
+    // F3: "what it last did" - a founder who turned this on overnight needs to know it ran at all.
+    private DateTimeOffset? _lastPass;
+    private string? _lastAction;
+
+    /// <summary>
+    /// Whether staffing is on. The hub is a local process that is off for hours, so this lives in the database:
+    /// a founder who turned it on must not find it silently off after the next restart.
+    /// </summary>
+    private Task<bool> EnabledAsync(CancellationToken ct) =>
+        ledger.ReadAsync(async (db, _) =>
+            await db.Meta.Where(e => e.Key == MetaEntry.ConductorEnabled).Select(e => e.Value).SingleOrDefaultAsync(ct)
+                is { } stored ? stored == "true" : options.ConductorEnabled, ct);
+
     /// <summary>Sessions the conductor believes it has running, by "T-n/role".</summary>
     public int RunningCount { get { lock (_running) return _running.Count; } }
 
-    public ConductorStatusDto Status() => new(
-        options.ConductorEnabled,
+    public async Task<ConductorStatusDto> StatusAsync(CancellationToken ct = default) => new(
+        await EnabledAsync(ct),
         RunningCount,
         options.ConductorMaxSessions,
         options.ConductorSessionMinutes,
-        options.ConductorMaxAttempts);
+        options.ConductorMaxAttempts,
+        options.ConductorIntervalSeconds,
+        _lastPass,
+        _lastAction);
 
     /// <summary>The founder turns staffing on and off; the decision is in the ledger like any other.</summary>
     public async Task<ConductorStatusDto> SetEnabledAsync(Caller caller, bool enabled, CancellationToken ct = default)
     {
-        var was = options.ConductorEnabled;
-        options.ConductorEnabled = enabled;
-        if (was != enabled)
-            await ledger.MutateAsync(caller, m =>
-            {
+        var was = await EnabledAsync(ct);
+        await ledger.MutateAsync(caller, async m =>
+        {
+            var row = await m.Db.Meta.SingleOrDefaultAsync(e => e.Key == MetaEntry.ConductorEnabled, ct);
+            if (row is null) m.Db.Meta.Add(new MetaEntry { Key = MetaEntry.ConductorEnabled, Value = enabled ? "true" : "false" });
+            else row.Value = enabled ? "true" : "false";
+            if (was != enabled)
                 m.Record(enabled ? "conductor.on" : "conductor.off", payload: new { maxSessions = options.ConductorMaxSessions });
-                return Task.CompletedTask;
-            }, ct);
-        return Status();
+        }, ct);
+        return await StatusAsync(ct);
     }
 
     /// <summary>
     /// What the conductor would staff right now, most urgent first. Separated from starting anything so the
     /// decision can be tested without launching a process.
     /// </summary>
-    public Task<IReadOnlyList<ConductorAssignment>> PlanAsync(CancellationToken ct = default)
+    public async Task<IReadOnlyList<ConductorAssignment>> PlanAsync(CancellationToken ct = default)
     {
-        if (!options.ConductorEnabled) return Task.FromResult<IReadOnlyList<ConductorAssignment>>([]);
+        if (!await EnabledAsync(ct)) return [];
+        // Callers that already know staffing is on pass it in; PlanAsync on its own re-reads it.
 
-        return ledger.ReadAsync<IReadOnlyList<ConductorAssignment>>(async (db, now) =>
+        return await ledger.ReadAsync<IReadOnlyList<ConductorAssignment>>(async (db, now) =>
         {
 
             // Only 'validating'. A blocked task is waiting on the founder, and staffing it would waste a session
@@ -121,10 +139,11 @@ public sealed class ConductorService(Ledger ledger, MuthurOptions options, IVali
     /// <summary>One pass: start what the plan asks for, up to the session budget. Returns how many it started.</summary>
     public async Task<int> RunPassAsync(CancellationToken ct = default)
     {
-        if (!options.ConductorEnabled) return 0;
+        if (!await EnabledAsync(ct)) return 0;
         if (!await _pass.WaitAsync(0, ct)) return 0;   // a slow pass must never overlap the next tick
         try
         {
+            _lastPass = DateTimeOffset.UtcNow;
             await EscalateExhaustedAsync(ct);
 
             var started = 0;
@@ -144,6 +163,7 @@ public sealed class ConductorService(Ledger ledger, MuthurOptions options, IVali
                     return Task.CompletedTask;
                 }, ct);
 
+                _lastAction = $"staffed {assignment.TaskKey} for {assignment.RoleKey}";
                 _ = RunSessionAsync(assignment, key);
                 started++;
             }
@@ -191,10 +211,15 @@ public sealed class ConductorService(Ledger ledger, MuthurOptions options, IVali
                     if (!_escalated.Add(row.TaskId)) continue;
 
                 var task = await m.Db.Tasks.FirstAsync(t => t.Id == row.TaskId, ct);
+                var verdicts = await m.Db.Events
+                    .Where(e => e.Type == "validation.failed" && e.TaskId == task.Id)
+                    .OrderBy(e => e.Seq).Select(e => e.Actor + ": " + e.PayloadJson).ToListAsync(ct);
                 MessageService.PostFromHub(m, Recipient.Founder, null,
-                    $"{Wire.TaskId(task.Id)} \"{task.Title}\" has failed validation {row.Count} times. The conductor " +
-                    "has stopped restaffing it: re-spec it, cancel it, or raise the attempt ceiling.", task.Id);
+                    $"{Wire.TaskId(task.Id)} \"{task.Title}\" has failed validation {row.Count} times and the conductor " +
+                    "has stopped restaffing it. Re-spec it, cancel it, or raise Muthur:ConductorMaxAttempts."
+                    + Environment.NewLine + Environment.NewLine + string.Join(Environment.NewLine, verdicts), task.Id);
                 m.Record("conductor.exhausted", task.Id, new { failures = row.Count });
+                _lastAction = $"stopped restaffing {Wire.TaskId(task.Id)} after {row.Count} failures";
             }
         }, ct);
 }

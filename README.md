@@ -165,8 +165,11 @@ on a different vendor than the author.
 | `Muthur:ClaimLeaseMinutes` / `RoleLeaseMinutes` | 30 / 30 | appsettings or `Muthur__…` environment variables |
 | `Muthur:IngestIntervalSeconds` | 180 | |
 | `Muthur:RequireCrossProviderReview` | false | |
-| `Muthur:ConductorEnabled` | false | staff validator sessions unattended; `muthur conductor on --founder` |
-| `Muthur:ConductorMaxSessions` / `SessionMinutes` / `MaxAttempts` | 2 / 45 / 3 | concurrency, session timeout, failures before it asks you |
+| `Muthur:ConductorEnabled` | false | the starting value only; `muthur conductor on --founder` is stored in the database and outlives a restart |
+| `Muthur:ConductorMaxSessions` | 2 | validator sessions running at once |
+| `Muthur:ConductorSessionMinutes` | 45 | a session that has not finished by then is killed |
+| `Muthur:ConductorMaxAttempts` | 3 | failed verdicts on one task before it stops and asks you |
+| `Muthur:ConductorIntervalSeconds` | 60 | |
 | `Muthur:DiscordBotToken` | — | bot token for `discord:` ingest; set it as `Muthur__DiscordBotToken`, never in a file |
 
 A build under test must never share the live hub's port or data: prefix **every** command with its own

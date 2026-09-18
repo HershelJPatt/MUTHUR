@@ -83,12 +83,19 @@ public sealed class ValidatorSessionLauncher(
     private async Task<IReadOnlyList<HarnessCandidate>> CandidatesAsync(string? avoid, CancellationToken ct)
     {
         var tiers = await harnesses.TiersAsync(Tier, ct);
-        var available = tiers.SelectMany(t => t.Candidates).Where(c => !c.Limited)
-            .Select(c => new HarnessCandidate(c.Harness, c.Model, c.Account)).ToList();
-        return avoid is { Length: > 0 }
+        return Prefer(tiers.SelectMany(t => t.Candidates).Where(c => !c.Limited)
+            .Select(c => new HarnessCandidate(c.Harness, c.Model, c.Account)).ToList(), avoid);
+    }
+
+    /// <summary>
+    /// The harness that built the task goes to the back of the queue, never off it. One vendor checking another's
+    /// work is the preference; when the other vendor is out of quota, the builder's own harness validating is
+    /// still better than a task nobody looks at.
+    /// </summary>
+    internal static IReadOnlyList<HarnessCandidate> Prefer(IReadOnlyList<HarnessCandidate> available, string? avoid) =>
+        avoid is { Length: > 0 }
             ? [.. available.Where(c => c.Harness != avoid), .. available.Where(c => c.Harness == avoid)]
             : available;
-    }
 
     private Task<string?> RepositoryPathAsync(string projectKey, CancellationToken ct) =>
         ledger.ReadAsync((db, _) => db.Projects.Where(p => p.Key == projectKey).Select(p => p.RepoPath).SingleOrDefaultAsync(ct), ct);

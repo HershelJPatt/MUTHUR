@@ -22,7 +22,7 @@ public static class HarnessEndpoints
             return Results.NoContent();
         });
 
-        app.MapGet(Routes.Conductor, (ConductorService conductor) => conductor.Status());
+        app.MapGet(Routes.Conductor, (ConductorService conductor, CancellationToken ct) => conductor.StatusAsync(ct));
 
         // Turning staffing on is a founder decision and is recorded as one.
         app.MapPost(Routes.Conductor, async (HttpContext http, ConductorSwitch request, ConductorService conductor, CancellationToken ct) =>

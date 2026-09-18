@@ -24,7 +24,10 @@ public sealed class ConductorTests : IDisposable
 
     private ConductorService Conductor => _hub.Services.GetRequiredService<ConductorService>();
 
-    private async Task<string> TaskInValidationAsync(string title = "Build the feature", string branch = "task/T-1-feature", string file = "feature.txt")
+    private async Task<string> TaskInValidationAsync(string title = "Build the feature", string branch = "task/T-1-feature", string file = "feature.txt") =>
+        (await OwnedTaskInValidationAsync(title, branch, file)).TaskId;
+
+    private async Task<(HttpClient Owner, string TaskId)> OwnedTaskInValidationAsync(string title = "Build the feature", string branch = "task/T-1-feature", string file = "feature.txt")
     {
         var owner = await _hub.RegisterAgentAsync("owner");
         var task = await owner.AddTaskAsync(title);
@@ -32,7 +35,7 @@ public sealed class ConductorTests : IDisposable
         (await owner.PostActionAsync(task.Id, "spec", new SetSpecRequest("specs/T-1.md"))).EnsureSuccessStatusCode();
         _repo.BranchWithFile(branch, file, "feature\n");
         (await owner.PostActionAsync(task.Id, "implemented", new ImplementedRequest(branch))).EnsureSuccessStatusCode();
-        return task.Id;
+        return (owner, task.Id);
     }
 
     private Task SetUpAsync(params string[] validators) => _hub.AddProjectAsync(repoPath: _repo.Path, validators: validators);
@@ -120,17 +123,82 @@ public sealed class ConductorTests : IDisposable
     }
 
     [Fact]
-    public async Task Whoever_built_it_is_the_harness_the_validator_avoids()
+    public async Task The_harness_that_built_the_task_is_the_one_the_plan_says_to_avoid()
     {
         await SetUpAsync("win-validator");
         await DefineAsync("win-validator");
-        await TaskInValidationAsync();
+        var owner = await _hub.RegisterAgentAsync("builder", harness: "claude", model: "opus");
+        var task = await owner.AddTaskAsync("Built by Claude");
+        (await owner.ClaimAsync(task.Id)).EnsureSuccessStatusCode();
+        (await owner.PostActionAsync(task.Id, "spec", new SetSpecRequest("specs/T-1.md"))).EnsureSuccessStatusCode();
+        _repo.BranchWithFile("task/T-1-feature", "feature.txt", "feature\n");
+        (await owner.PostActionAsync(task.Id, "implemented", new ImplementedRequest("task/T-1-feature"))).EnsureSuccessStatusCode();
 
-        // 'owner' registers with no harness in these tests, so the assignment carries whatever the ledger saw.
-        var started = (await Conductor.PlanAsync()).Single();
-        Assert.Equal("win-validator", started.RoleKey);
-        // The preference is expressed, not invented: a task built by a known harness names it.
-        Assert.True(started.AvoidHarness is null or { Length: > 0 });
+        var assignment = Assert.Single(await Conductor.PlanAsync());
+        Assert.Equal("claude", assignment.AvoidHarness);
+    }
+
+    [Theory]
+    // The harness that built it goes to the back of the queue, never off it: validating beats not validating.
+    [InlineData("claude", new[] { "codex", "claude" })]
+    [InlineData("codex", new[] { "claude", "codex" })]
+    [InlineData(null, new[] { "claude", "codex" })]
+    public void A_different_vendor_is_preferred_but_the_same_one_still_validates(string? avoid, string[] expected)
+    {
+        var available = new[]
+        {
+            new Muthur.Launch.HarnessCandidate("claude", "opus", "claude-subscription"),
+            new Muthur.Launch.HarnessCandidate("codex", "", "chatgpt-subscription"),
+        };
+
+        Assert.Equal(expected, ValidatorSessionLauncher.Prefer(available, avoid).Select(c => c.Harness));
+    }
+
+    [Fact]
+    public void When_the_other_vendor_is_out_of_quota_the_builder_validates_its_own_project()
+    {
+        // Not ideal and deliberately allowed: an unvalidated task helps nobody.
+        var onlyClaude = new[] { new Muthur.Launch.HarnessCandidate("claude", "opus", "claude-subscription") };
+
+        Assert.Equal(["claude"], ValidatorSessionLauncher.Prefer(onlyClaude, "claude").Select(c => c.Harness));
+    }
+
+    [Fact]
+    public async Task After_three_failed_verdicts_it_stops_and_asks_the_founder()
+    {
+        _hub.Settings["Muthur:ConductorMaxAttempts"] = "3";
+        await SetUpAsync("win-validator");
+        await DefineAsync("win-validator");
+        var (owner, id) = await OwnedTaskInValidationAsync();
+        var checker = await _hub.RegisterAgentAsync("checker");
+
+        for (var attempt = 1; attempt <= 3; attempt++)
+        {
+            (await checker.PostAsync(Routes.RoleAction("win-validator", "take"), null)).EnsureSuccessStatusCode();
+            (await checker.PostActionAsync(id, "fail", new VerdictRequest("win-validator", $"broken, round {attempt}"))).EnsureSuccessStatusCode();
+            (await checker.PostAsync(Routes.RoleAction("win-validator", "release"), null)).EnsureSuccessStatusCode();
+            (await owner.PostActionAsync(id, "implemented", new ImplementedRequest("task/T-1-feature"))).EnsureSuccessStatusCode();
+        }
+
+        Assert.Equal(0, await Conductor.RunPassAsync());
+        Assert.Empty(_hub.Validators.Started);
+
+        var events = await _hub.Founder().GetFromJsonAsync(Routes.Events, MuthurJsonContext.Default.IReadOnlyListEventDto);
+        Assert.Contains(events!, e => e.Type == "conductor.exhausted");
+        Assert.DoesNotContain(events!, e => e.Type == "conductor.staffing");
+    }
+
+    [Fact]
+    public async Task The_founders_decision_outlives_the_process_that_heard_it()
+    {
+        // The hub is off for hours at a time. A founder who turned staffing on must not find it silently off.
+        _hub.Settings["Muthur:ConductorEnabled"] = "false";
+        (await _hub.Founder().PostAsJsonAsync(Routes.Conductor, new ConductorSwitch(true))).EnsureSuccessStatusCode();
+
+        using var restarted = new HubFactory { DataDir = _hub.DataDir };
+        var status = await restarted.CreateClient().GetFromJsonAsync(Routes.Conductor, MuthurJsonContext.Default.ConductorStatusDto);
+
+        Assert.True(status!.Enabled, "the switch is in the database, not in the process that was told");
     }
 
     [Fact]
@@ -143,7 +211,7 @@ public sealed class ConductorTests : IDisposable
 
         Assert.Equal(0, await Conductor.RunPassAsync());
         Assert.Empty(_hub.Validators.Started);
-        Assert.False(Conductor.Status().Enabled);
+        Assert.False((await Conductor.StatusAsync()).Enabled);
     }
 
     [Fact]
