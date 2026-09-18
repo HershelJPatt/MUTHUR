@@ -196,7 +196,15 @@ public sealed class LifecycleService(Ledger ledger, LeasePolicy leases, ITaskLan
                     case LandOutcome.Conflict:
                         current.State = TaskState.InProgress;
                         current.ClaimExpires = m.Now + leases.ClaimLease;
-                        m.Record("task.land_failed", current.Id, new { code = result.Code, result.Message });
+                        m.Record("task.land_failed", current.Id, new
+                        {
+                            code = result.Code,
+                            result.Message,
+                            branch = current.Branch,
+                            target = current.Project!.DefaultBranch,
+                            files = result.Files ?? [],
+                            landedSince = result.LandedSince ?? [],
+                        });
                         break;
                     default:
                         m.Record("task.land_refused", current.Id, new { code = result.Code, result.Message });
