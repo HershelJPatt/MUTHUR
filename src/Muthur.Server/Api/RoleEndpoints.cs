@@ -31,10 +31,13 @@ public static class RoleEndpoints
             lifecycle.ImplementedAsync(http.GetCaller(), id, request, ct));
 
         app.MapPost(Routes.Tasks + "/{id}/pass", (HttpContext http, string id, VerdictRequest request, LifecycleService lifecycle, CancellationToken ct) =>
-            lifecycle.VerdictAsync(http.GetCaller(), id, request, pass: true, ct));
+            lifecycle.VerdictAsync(http.GetCaller(), id, request, Verdict.Yes, ct));
 
         app.MapPost(Routes.Tasks + "/{id}/fail", (HttpContext http, string id, VerdictRequest request, LifecycleService lifecycle, CancellationToken ct) =>
-            lifecycle.VerdictAsync(http.GetCaller(), id, request, pass: false, ct));
+            lifecycle.VerdictAsync(http.GetCaller(), id, request, Verdict.No, ct));
+
+        app.MapPost(Routes.Tasks + "/{id}/blocked", (HttpContext http, string id, VerdictRequest request, LifecycleService lifecycle, CancellationToken ct) =>
+            lifecycle.VerdictAsync(http.GetCaller(), id, request, Verdict.Blocked, ct));
 
         app.MapPost(Routes.Tasks + "/{id}/land", (HttpContext http, string id, LifecycleService lifecycle, CancellationToken ct) =>
             lifecycle.LandAsync(http.GetCaller(), id, ct));
