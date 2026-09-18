@@ -25,7 +25,7 @@ public interface IValidatorSessionLauncher
 /// again on a later pass — the bounce-back loop closes on machinery that already existed.
 /// </para>
 /// </summary>
-public sealed class ConductorService(Ledger ledger, MuthurOptions options, IValidatorSessionLauncher launcher)
+public sealed class ConductorService(Ledger ledger, MuthurOptions options, TimeProvider clock, IValidatorSessionLauncher launcher)
 {
     private readonly SemaphoreSlim _pass = new(1, 1);
     private readonly HashSet<string> _running = [];
@@ -34,6 +34,13 @@ public sealed class ConductorService(Ledger ledger, MuthurOptions options, IVali
     // F3: "what it last did" - a founder who turned this on overnight needs to know it ran at all.
     private DateTimeOffset? _lastPass;
     private string? _lastAction;
+
+    /// <summary>
+    /// Consecutive failures to <em>start</em> a session, per task and role. A validator that ran and said no is
+    /// progress; a session that could not start at all is the organization wedged, and retrying it every interval
+    /// all night writes thousands of ledger events while `status` reads perfectly healthy.
+    /// </summary>
+    private readonly Dictionary<string, int> _launchFailures = [];
 
     /// <summary>
     /// Whether staffing is on. The hub is a local process that is off for hours, so this lives in the database:
@@ -123,8 +130,11 @@ public sealed class ConductorService(Ledger ledger, MuthurOptions options, IVali
                 {
                     if (held.Contains(validation.ValidatorKey)) continue;
                     if (!validatorRoles.Contains(validation.ValidatorKey)) continue;   // a role that no longer exists
+                    var key = $"{Wire.TaskId(task.Id)}/{validation.ValidatorKey}";
                     lock (_running)
-                        if (_running.Contains($"{Wire.TaskId(task.Id)}/{validation.ValidatorKey}")) continue;
+                        if (_running.Contains(key)) continue;
+                    lock (_launchFailures)
+                        if (_launchFailures.GetValueOrDefault(key) >= options.ConductorMaxAttempts) continue;
 
                     plan.Add(new ConductorAssignment(
                         task.Id, Wire.TaskId(task.Id), task.Title, task.Project?.Key ?? "",
@@ -143,7 +153,7 @@ public sealed class ConductorService(Ledger ledger, MuthurOptions options, IVali
         if (!await _pass.WaitAsync(0, ct)) return 0;   // a slow pass must never overlap the next tick
         try
         {
-            _lastPass = DateTimeOffset.UtcNow;
+            _lastPass = clock.GetUtcNow();
             await EscalateExhaustedAsync(ct);
 
             var started = 0;
@@ -177,12 +187,25 @@ public sealed class ConductorService(Ledger ledger, MuthurOptions options, IVali
         try
         {
             await launcher.StartAsync(assignment, CancellationToken.None);
+            lock (_launchFailures) _launchFailures.Remove(key);
         }
         catch (Exception ex)
         {
+            int failures;
+            lock (_launchFailures) failures = _launchFailures[key] = _launchFailures.GetValueOrDefault(key) + 1;
+
             await ledger.MutateAsync(Caller.Founder, m =>
             {
-                m.Record("conductor.failed", assignment.TaskId, new { role = assignment.RoleKey, error = ex.Message });
+                m.Record("conductor.failed", assignment.TaskId, new { role = assignment.RoleKey, error = ex.Message, attempt = failures });
+                if (failures >= options.ConductorMaxAttempts)
+                {
+                    // Stop rather than degrade, and say so: the founder's only other signal is that nothing shipped.
+                    m.Record("conductor.stalled", assignment.TaskId, new { role = assignment.RoleKey, error = ex.Message });
+                    MessageService.PostFromHub(m, Recipient.Founder, null,
+                        $"The conductor could not start a validator for {assignment.TaskKey} ({assignment.RoleKey}) " +
+                        $"{failures} times and has stopped trying: {ex.Message}", assignment.TaskId);
+                    _lastAction = $"gave up starting {assignment.RoleKey} for {assignment.TaskKey}: {ex.Message}";
+                }
                 return Task.CompletedTask;
             }, CancellationToken.None);
         }
@@ -190,6 +213,29 @@ public sealed class ConductorService(Ledger ledger, MuthurOptions options, IVali
         {
             lock (_running) _running.Remove(key);
         }
+    }
+
+    /// <summary>
+    /// The first line of a failed verdict's evidence, capped. A founder's notification says which validator said no
+    /// and roughly why; the evidence in full is one command away and belongs there, not in a message body.
+    /// </summary>
+    internal static string FirstLineOfEvidence(string payloadJson)
+    {
+        const int Limit = 140;
+        string? evidence = null;
+        try
+        {
+            using var doc = System.Text.Json.JsonDocument.Parse(payloadJson);
+            if (doc.RootElement.TryGetProperty("evidence", out var value) && value.ValueKind == System.Text.Json.JsonValueKind.String)
+                evidence = value.GetString();
+        }
+        catch (System.Text.Json.JsonException) { }
+
+        var line = (evidence ?? "").ReplaceLineEndings("\n").Split('\n')
+            .Select(l => l.Trim().TrimStart('#').Trim())
+            .FirstOrDefault(l => l.Length > 0);
+        if (string.IsNullOrEmpty(line)) return "(no evidence)";
+        return line.Length <= Limit ? line : line[..(Limit - 1)].TrimEnd() + "…";
     }
 
     /// <summary>A task that keeps failing stops being restaffed and becomes a question for the founder, once.</summary>
@@ -211,13 +257,18 @@ public sealed class ConductorService(Ledger ledger, MuthurOptions options, IVali
                     if (!_escalated.Add(row.TaskId)) continue;
 
                 var task = await m.Db.Tasks.FirstAsync(t => t.Id == row.TaskId, ct);
-                var verdicts = await m.Db.Events
+                var events = await m.Db.Events
                     .Where(e => e.Type == "validation.failed" && e.TaskId == task.Id)
-                    .OrderBy(e => e.Seq).Select(e => e.Actor + ": " + e.PayloadJson).ToListAsync(ct);
+                    .OrderBy(e => e.Seq).Select(e => new { e.At, e.Actor, e.PayloadJson }).ToListAsync(ct);
+                var verdicts = events.Select(e => $"- {e.At:yyyy-MM-dd HH:mm} {e.Actor}: {FirstLineOfEvidence(e.PayloadJson)}");
+
+                // One line per verdict. The founder reads this on a card; the evidence itself is whole in
+                // `muthur task show`, and pasting it here turns a notification into kilobytes of escaped JSON.
                 MessageService.PostFromHub(m, Recipient.Founder, null,
                     $"{Wire.TaskId(task.Id)} \"{task.Title}\" has failed validation {row.Count} times and the conductor " +
-                    "has stopped restaffing it. Re-spec it, cancel it, or raise Muthur:ConductorMaxAttempts."
-                    + Environment.NewLine + Environment.NewLine + string.Join(Environment.NewLine, verdicts), task.Id);
+                    $"has stopped restaffing it. Re-spec it, cancel it, or raise Muthur:ConductorMaxAttempts."
+                    + Environment.NewLine + string.Join(Environment.NewLine, verdicts)
+                    + Environment.NewLine + $"Full evidence: muthur task show {Wire.TaskId(task.Id)}", task.Id);
                 m.Record("conductor.exhausted", task.Id, new { failures = row.Count });
                 _lastAction = $"stopped restaffing {Wire.TaskId(task.Id)} after {row.Count} failures";
             }

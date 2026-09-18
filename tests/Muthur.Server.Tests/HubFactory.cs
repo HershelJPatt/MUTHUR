@@ -113,9 +113,13 @@ public sealed class FakeValidatorSessions : IValidatorSessionLauncher
 
     public IReadOnlyList<ConductorAssignment> Started { get { lock (_started) return [.. _started]; } }
 
+    /// <summary>When set, every start throws it — a harness that is not installed, or no candidate left.</summary>
+    public Exception? Throw { get; set; }
+
     public async Task StartAsync(ConductorAssignment assignment, CancellationToken ct = default)
     {
         lock (_started) _started.Add(assignment);
+        if (Throw is { } failure) throw failure;
         if (Block) await _release.WaitAsync(ct);
     }
 

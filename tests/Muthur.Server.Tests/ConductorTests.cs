@@ -189,6 +189,86 @@ public sealed class ConductorTests : IDisposable
     }
 
     [Fact]
+    public async Task What_it_last_did_is_on_the_injected_clock()
+    {
+        // Assertable only because the timestamp comes from TimeProvider: HubFactory's clock is pinned to 2026-01-01.
+        await SetUpAsync("win-validator");
+        await DefineAsync("win-validator");
+        await TaskInValidationAsync();
+
+        Assert.Null((await Conductor.StatusAsync()).LastPass);
+        await Conductor.RunPassAsync();
+
+        var status = await Conductor.StatusAsync();
+        Assert.Equal(_hub.Clock.GetUtcNow(), status.LastPass);
+        Assert.Equal("staffed T-1 for win-validator", status.LastAction);
+    }
+
+    [Fact]
+    public async Task A_session_that_cannot_start_is_not_retried_all_night()
+    {
+        // The neighbouring failure path to a failed verdict, and the one an unattended night hits first:
+        // no candidate, no harness installed, no repository. Retrying every interval writes thousands of
+        // events while `status` reads perfectly healthy.
+        _hub.Settings["Muthur:ConductorMaxAttempts"] = "3";
+        await SetUpAsync("win-validator");
+        await DefineAsync("win-validator");
+        await TaskInValidationAsync();
+        _hub.Validators.Throw = new InvalidOperationException("No available mastermind candidate to validate T-1.");
+
+        for (var pass = 0; pass < 6; pass++) await Conductor.RunPassAsync();
+
+        Assert.Equal(3, _hub.Validators.Started.Count);
+
+        var events = await _hub.Founder().GetFromJsonAsync(Routes.Events, MuthurJsonContext.Default.IReadOnlyListEventDto);
+        Assert.Equal(3, events!.Count(e => e.Type == "conductor.failed"));
+        Assert.Single(events!, e => e.Type == "conductor.stalled");
+        Assert.Contains("gave up starting", (await Conductor.StatusAsync()).LastAction);
+    }
+
+    [Fact]
+    public async Task A_session_that_starts_again_clears_the_failures_behind_it()
+    {
+        _hub.Settings["Muthur:ConductorMaxAttempts"] = "3";
+        await SetUpAsync("win-validator");
+        await DefineAsync("win-validator");
+        await TaskInValidationAsync();
+
+        _hub.Validators.Throw = new InvalidOperationException("claude is not installed");
+        await Conductor.RunPassAsync();
+        await Conductor.RunPassAsync();
+
+        _hub.Validators.Throw = null;   // the harness came back
+        await Conductor.RunPassAsync();
+        await Conductor.RunPassAsync();
+
+        Assert.Equal(4, _hub.Validators.Started.Count);
+        var events = await _hub.Founder().GetFromJsonAsync(Routes.Events, MuthurJsonContext.Default.IReadOnlyListEventDto);
+        Assert.DoesNotContain(events!, e => e.Type == "conductor.stalled");
+    }
+
+    [Theory]
+    [InlineData(@"{""validator"":""win-validator"",""by"":""checker"",""evidence"":""# Verdict: FAIL\n\nThe panel throws on an empty list.""}", "Verdict: FAIL")]
+    [InlineData("""{"validator":"win-validator","by":"checker","evidence":"the export still 500s"}""", "the export still 500s")]
+    [InlineData("""{"validator":"win-validator","by":"checker","evidence":null}""", "(no evidence)")]
+    [InlineData("""{"validator":"win-validator","by":"checker"}""", "(no evidence)")]
+    [InlineData("not json at all", "(no evidence)")]
+    public void A_founder_notification_carries_a_line_of_evidence_not_a_report(string payload, string expected) =>
+        Assert.Equal(expected, ConductorService.FirstLineOfEvidence(payload));
+
+    [Fact]
+    public void A_long_verdict_is_cut_short_rather_than_pasted_whole()
+    {
+        var evidence = new string('x', 4000);
+        var payload = $$"""{"validator":"win-validator","by":"checker","evidence":"{{evidence}}"}""";
+
+        var line = ConductorService.FirstLineOfEvidence(payload);
+
+        Assert.Equal(140, line.Length);
+        Assert.EndsWith("…", line);
+    }
+
+    [Fact]
     public async Task The_founders_decision_outlives_the_process_that_heard_it()
     {
         // The hub is off for hours at a time. A founder who turned staffing on must not find it silently off.
