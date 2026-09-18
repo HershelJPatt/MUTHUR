@@ -87,8 +87,12 @@ public sealed class CollisionService(ITaskLander lander, IProcessRunner processe
     {
         var candidates = await ledger.ReadAsync(async (db, _) =>
         {
+            // Validated counts, and counts most: a validated task is queued to land, so two conflicting ones
+            // are not a future risk but a bounce about to happen. Blocked stays out — it waits on a human and
+            // rarely has a branch yet.
             var tasks = await db.Tasks.Include(t => t.Project)
-                .Where(t => (t.State == TaskState.InProgress || t.State == TaskState.Validating) && t.Branch != null && t.Branch != "")
+                .Where(t => (t.State == TaskState.InProgress || t.State == TaskState.Validating || t.State == TaskState.Validated)
+                    && t.Branch != null && t.Branch != "")
                 .OrderBy(t => t.Id)
                 .Take(MaxBranches)
                 .ToListAsync(ct);
