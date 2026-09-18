@@ -20,7 +20,7 @@
                 <div class="role-row">
                     <span class="tag check-@Wire(check.Status)">@Wire(check.Status)</span>
                     <span>@check.Subject</span>
-                    <span class="role-holder">@check.Detail</span>
+                    <span class="role-holder">@check.Detail@(check.LastSuccess is { } read ? " · last read " + Format.Age(read, _now) : "")</span>
                 </div>
             }
         }
@@ -34,6 +34,7 @@
     private IReadOnlyList<CheckDto> _checks = [];
     private int _fail;
     private int _warn;
+    private DateTimeOffset _now;
 
     // Roles go stale and leases lapse with time alone, so ask again even when nothing is written.
     protected override TimeSpan? ClockInterval => TimeSpan.FromSeconds(60);
@@ -55,8 +56,11 @@
         StateHasChanged();
     }
 
+    // Stamped here rather than in LoadAsync so that the re-check path shares it too, and every age on one render
+    // is measured from the same instant.
     private void Apply(DoctorDto report)
     {
+        _now = Clock.GetUtcNow();
         _checks = report.Checks;
         _fail = report.Fail;
         _warn = report.Warn;
