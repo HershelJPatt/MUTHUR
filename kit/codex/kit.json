@@ -1,11 +1,50 @@
 {
   "harness": "codex",
   "files": [
-    { "from": "AGENTS.section.md", "to": "AGENTS.md", "mode": "section" },
-    { "from": "../core/orchestrate.md", "to": ".muthur/procedures/orchestrate.md" },
-    { "from": "../core/implementer.md", "to": ".muthur/procedures/implementer.md" },
-    { "from": "../core/validate.md", "to": ".muthur/procedures/validate.md" },
-    { "from": "../core/oncall.md", "to": ".muthur/procedures/oncall.md" },
-    { "from": "../core/spec-template.md", "to": "specs/_TEMPLATE.md" }
+    {
+      "from": "AGENTS.section.md",
+      "to": "AGENTS.md",
+      "mode": "section"
+    },
+    {
+      "from": "../core/orchestrate.md",
+      "to": ".muthur/procedures/orchestrate.md"
+    },
+    {
+      "from": "../core/implementer.md",
+      "to": ".muthur/procedures/implementer.md"
+    },
+    {
+      "from": "../core/validate.md",
+      "to": ".muthur/procedures/validate.md"
+    },
+    {
+      "from": "../core/oncall.md",
+      "to": ".muthur/procedures/oncall.md"
+    },
+    {
+      "from": "../core/spec-template.md",
+      "to": "specs/_TEMPLATE.md"
+    },
+    {
+      "from": "../briefs/validator.md",
+      "to": "briefs/validator.md",
+      "mode": "create"
+    },
+    {
+      "from": "../briefs/comms-oncall.md",
+      "to": "briefs/comms-oncall.md",
+      "mode": "create"
+    },
+    {
+      "from": "../briefs/observability-oncall.md",
+      "to": "briefs/observability-oncall.md",
+      "mode": "create"
+    },
+    {
+      "from": "../briefs/release-oncall.md",
+      "to": "briefs/release-oncall.md",
+      "mode": "create"
+    }
   ]
 }
