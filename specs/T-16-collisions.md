@@ -303,3 +303,15 @@ exists to avoid.
 - A collision between a task branch and the default branch (rather than between two task branches) is not
   shown. It is the case Unit A already records on land, and showing it would mean testing every in-flight
   branch against a target that moves.
+
+  **This is not hypothetical: it happened during this task.** T-22 passed validation, and its land bounced
+  against `main` because T-30 had landed first and refactored the same file. The board would not have warned
+  about it, because the conflict was with the target rather than with another in-flight branch. Whether that
+  is worth showing — and what it would cost to test every branch against a moving target — is the first
+  thing the revisit should weigh, ahead of any rule about prevention.
+
+- **A `blocked` task that carries a branch is invisible to the indicator.** Flagged by Unit B's specialist
+  rather than left to be discovered. The exclusion is deliberate and mostly safe, for a reason worth
+  recording: a task bounced back from a failed land goes to `in_progress`, not `blocked`, so the bounce path
+  has no blind spot. The gap is only a task that reached `in_progress` with a branch and then hit a founder
+  request. Known edge, not a surprise.
