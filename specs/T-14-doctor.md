@@ -64,7 +64,12 @@ Constraints that are not obvious from the code:
 namespace Muthur.Contracts;
 
 /// <summary>ok: nothing to do. warn: worth knowing, nothing is broken. fail: the hub cannot do this job.</summary>
-public enum CheckStatus { Ok, Warn, Fail }
+public enum CheckStatus
+{
+    [JsonStringEnumMemberName("ok")] Ok,
+    [JsonStringEnumMemberName("warn")] Warn,
+    [JsonStringEnumMemberName("fail")] Fail,
+}
 
 /// <param name="Category">"secret", "ingest", "outbound", "project", "repo" or "role".</param>
 /// <param name="Subject">What was checked, safe to show: a source, a target key, a project key, a role key.</param>
@@ -85,9 +90,13 @@ public sealed record DoctorDto(
     IReadOnlyList<CheckDto> Checks);
 ```
 
-Register `CheckDto`, `IReadOnlyList<CheckDto>` and `DoctorDto` in `MuthurJsonContext`. `CheckStatus` is
-serialized by the existing `UseStringEnumConverter`; do not add a converter, and do not add a `ToWire`
-helper unless the neighbouring enums (`Verdict`, `TaskState`) turn out to need one — match whatever they do.
+Register `CheckDto`, `IReadOnlyList<CheckDto>` and `DoctorDto` in `MuthurJsonContext`.
+
+`CheckStatus` goes on the wire as `ok` / `warn` / `fail`, and the explicit `[JsonStringEnumMemberName]`
+attributes above are how it gets there. `UseStringEnumConverter` does **not** apply the context's camelCase
+property policy to enum members, which is why every enum in `src/Muthur.Contracts/Enums.cs` — `TaskState`,
+`Verdict`, `LandMode`, `AgentStatus` — names each member the same way. Do not add a converter and do not
+add a `ToWire` helper; `CheckStatus` has no separator to spell, so the attributes alone are enough.
 
 Add to `src/Muthur.Contracts/Routes.cs`, beside `Status`:
 
@@ -144,8 +153,9 @@ public sealed class DoctorService(IEnumerable<IDoctorCheck> checks, TimeProvider
   `Order.Length`.
 - Counts `Ok`/`Warn`/`Fail` and returns `new DoctorDto(now, probe, ok, warn, fail, sorted)`.
 
-Register in `Program.cs` beside the other services: `DoctorService` and each `IDoctorCheck`
-implementation, with the same lifetime the neighbouring services use.
+Register in `src/Muthur.Server/Infrastructure/Startup.cs`, in `AddMuthur`, beside the other services —
+`Program.cs` registers none. `DoctorService` and every `IDoctorCheck` implementation are singletons, like
+every neighbour there.
 
 ### The checks
 
@@ -340,20 +350,22 @@ below `<HarnessPanel />`.
   `src/Muthur.Contracts/MuthurJsonContext.cs`, `src/Muthur.Core/Entities/Entities.cs`,
   `src/Muthur.Server/Services/IngestService.cs` (`SaveCursorAsync` only), a new migration under
   `src/Muthur.Data/Migrations/`; new `src/Muthur.Server/Services/DoctorService.cs`; modified
-  `src/Muthur.Server/Api/SystemEndpoints.cs` and `src/Muthur.Server/Program.cs`.
+  `src/Muthur.Server/Api/SystemEndpoints.cs` and `src/Muthur.Server/Infrastructure/Startup.cs`.
 - **Does:** the DTOs, the route, `LastSuccessAt` and its migration, `IDoctorCheck` / `DoctorContext` /
   `DoctorService` with the ordering, counting and per-check exception containment described above, the
   endpoint, and DI registration. Registers no `IDoctorCheck` implementations.
 - **Depends on:** nothing.
 - **Acceptance:** `dotnet build` and `dotnet test` clean, plus a new
   `tests/Muthur.Server.Tests/DoctorTests.cs` asserting that `GET /api/v1/doctor` returns 200 with zero
-  checks and `ok`/`warn`/`fail` all zero, and that `?probe=false` reports `probed: false`.
+  checks and `ok`/`warn`/`fail` all zero, that `?probe=false` reports `probed: false`, and that a `CheckDto`
+  serialized through `MuthurJsonContext.Default` carries `"status":"ok"` — lowercase, the form the CLI and
+  the **Verification** section below both read.
 
 ### Unit B — ingest, secret and outbound checks, and the two probes
 - **Files:** new `src/Muthur.Server/Services/DoctorIngestCheck.cs` and `DoctorOutboundCheck.cs`; modified
   `src/Muthur.Server/Services/IngestService.cs` (interface member and both adapters),
   `OutboundService.cs` (interface member), `OutboundChannels.cs` (three adapters),
-  `tests/Muthur.Server.Tests/HubFactory.cs` (`FakeInboundSource.ProbeAsync`), and `Program.cs` registration.
+  `tests/Muthur.Server.Tests/HubFactory.cs` (`FakeInboundSource.ProbeAsync`), and `Infrastructure/Startup.cs` registration.
 - **Does:** every `secret`, `ingest` and `outbound` row in the tables above, and `ProbeAsync` on both seams.
 - **Depends on:** Unit A.
 - **Acceptance:** `dotnet build` and `dotnet test` clean, with tests covering: a source with no adapter
@@ -364,7 +376,7 @@ below `<HarnessPanel />`.
 
 ### Unit C — project, repository and role checks
 - **Files:** new `src/Muthur.Server/Services/DoctorProjectCheck.cs`, `DoctorRepoCheck.cs` and
-  `DoctorRoleCheck.cs`; `Program.cs` registration.
+  `DoctorRoleCheck.cs`; `Infrastructure/Startup.cs` registration.
 - **Does:** every `project`, `repo` and `role` row in the tables above.
 - **Depends on:** Unit A.
 - **Acceptance:** `dotnet build` and `dotnet test` clean, with tests covering: a project with no required
