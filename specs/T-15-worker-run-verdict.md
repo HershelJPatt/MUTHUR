@@ -306,3 +306,36 @@ was **observed** (a limited account is dropped from the candidate list before an
 fallthrough rests on **tests**, for both launchers after this amendment; and an observation was not
 available because forcing a real rate limit means exhausting a subscription, which is neither cheap nor
 reproducible for a validator.
+
+## Proof of Amendment 1 (2026-09-18)
+
+```
+dotnet build   0 warnings, 0 errors
+dotnet test    Launch 23 (was 19) + Cli 32 + Core 3692 + Server 196, all passing
+git diff --stat src/   empty — no production code changed
+```
+
+`AgentLauncher.RunAsync` is now exercised by four tests where it was exercised by none: the fallthrough
+sequence, the negative (a session that ran and failed for any other reason is not retried elsewhere), the
+per-candidate identity, and the missing-CLI skip. `WorkerLauncher`'s existing fallthrough test gained the
+assertion that distinguishes it from crash-and-retry — the order the processes were actually started in.
+
+The launcher's own doc comment claims "the tests assert the inversion in both directions". Before this, the
+agent half was proved only through the static `EnvironmentFor` helper and never through `RunAsync`. That
+sentence is now true for the first time, and no comment or code under it was touched to make it so.
+
+Two improvements over what this amendment specified, both the implementer's:
+
+- One shared `ScriptedProcesses` fake rather than a copy per test class. Two fakes that can drift is the
+  failure mode this amendment exists to correct.
+- The identity test asserts the **first** process received the first candidate's identity as well as the
+  second receiving the second. Asserting only the second passes even if the launcher resolved one identity
+  up front and handed it to both — which is precisely the bug `identityFor`-as-a-callback prevents.
+
+Both launchers were read in full to answer whether they have diverged beyond authority. They have not: the
+loop bodies are line-for-line equivalent, and the only differences are the intended ones — `WorkerLauncher`
+scrubs `MUTHUR_AGENT`/`MUTHUR_TOKEN` and passes no environment; `AgentLauncher` passes an identity and
+carries the `identityFor` parameter. Authority, and nothing else.
+
+This branch was rebuilt from `main` after T-38 turned it green again, so the suite here is the same one a
+validator will run.
