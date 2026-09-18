@@ -146,6 +146,28 @@ public sealed class TaskService(Ledger ledger, LeasePolicy leases)
         }, ct);
     }
 
+    /// <summary>
+    /// Says that a human validator is needed, and why, or lifts that when the reason stops being true. Nothing sets
+    /// this automatically: a person reads the evidence and decides. Repeating an assertion is not an error.
+    /// </summary>
+    public Task<TaskDto> SetAttendedAsync(Caller caller, string id, AttendedRequest request, CancellationToken ct = default) =>
+        ledger.MutateAsync(caller, async m =>
+        {
+            var task = await LoadAsync(m.Db, id, ct);
+            // An owned task is its owner's to flag; an unowned one is anyone's, because the case worth recording
+            // early - a backlog task whose author already knows it needs a browser - has no owner to be.
+            if (task.OwnerAgentId is not null) RequireOwnerOrFounder(task, caller);
+            else caller.RequireIdentified();
+            var was = task.AttendedReason;
+            var reason = string.IsNullOrWhiteSpace(request.Reason) ? null : request.Reason.Trim();
+            if (reason == was) return task.ToDto();
+            task.AttendedReason = reason;
+            task.UpdatedAt = m.Now;
+            if (reason is null) m.Record("task.attended_cleared", task.Id, new { was });
+            else m.Record("task.attended", task.Id, new { reason });
+            return task.ToDto();
+        }, ct);
+
     public Task<TaskDto> CancelAsync(Caller caller, string id, CancelTaskRequest request, CancellationToken ct = default) =>
         ledger.MutateAsync(caller, async m =>
         {

@@ -28,6 +28,7 @@ namespace Muthur.Contracts;
 [JsonSerializable(typeof(SetSpecRequest))]
 [JsonSerializable(typeof(SetPriorityRequest))]
 [JsonSerializable(typeof(CancelTaskRequest))]
+[JsonSerializable(typeof(AttendedRequest))]
 [JsonSerializable(typeof(TaskDto))]
 [JsonSerializable(typeof(IReadOnlyList<TaskDto>))]
 [JsonSerializable(typeof(TaskDetailDto))]

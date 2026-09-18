@@ -52,6 +52,8 @@ public sealed class WorkTask
     public string? Branch { get; set; }
     public string? PrUrl { get; set; }
     public int? ParentId { get; set; }
+    /// <summary>Why this task needs a human validator. Null means it does not; the conductor staffs it as usual.</summary>
+    public string? AttendedReason { get; set; }
     public DateTimeOffset CreatedAt { get; set; }
     public DateTimeOffset UpdatedAt { get; set; }
     public DateTimeOffset? DoneAt { get; set; }
