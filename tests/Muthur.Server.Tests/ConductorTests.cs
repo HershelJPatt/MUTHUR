@@ -470,17 +470,77 @@ public sealed class ConductorTests : IDisposable
     public async Task A_conductor_agent_registers_for_the_candidate_that_is_about_to_run(string model, string recorded)
     {
         // The factory swaps the real launcher for a fake, so build the real one over the hub's own services.
-        var launcher = ActivatorUtilities.CreateInstance<ValidatorSessionLauncher>(_hub.Services);
+        var launcher = RealLauncher();
 
-        var identity = await launcher.IdentityFor("win-validator", new Muthur.Launch.HarnessCandidate("codex", model, "chatgpt-subscription"), default);
+        var identity = await launcher.IdentityFor(Assignment("T-1", "win-validator"),
+            new Muthur.Launch.HarnessCandidate("codex", model, "chatgpt-subscription"), default);
 
-        Assert.Equal("conductor-win-validator", identity.Name);
+        Assert.Equal("conductor-win-validator-t-1", identity.Name);
         Assert.NotEmpty(identity.Token);
 
         var agents = await _hub.CreateClient().GetFromJsonAsync(Routes.Agents, MuthurJsonContext.Default.IReadOnlyListAgentDto);
-        var registered = Assert.Single(agents!, a => a.Name == "conductor-win-validator");
+        var registered = Assert.Single(agents!, a => a.Name == "conductor-win-validator-t-1");
         Assert.Equal("codex", registered.Harness);
         Assert.Equal(recorded, registered.Model);
+    }
+
+    private static ConductorAssignment Assignment(string task, string role) =>
+        new(1, task, $"Build {task}", "muthur", role, AvoidHarness: null);
+
+    [Fact]
+    public void Two_sessions_for_one_role_are_two_agents_because_the_pair_is_the_identity()
+    {
+        // Named per role, both sessions register as one agent: the second registration re-issues the token and the
+        // first session runs on a revoked one - unauthorized on every call, while the conductor still counts it.
+        Assert.Equal("conductor-win-validator-t-1", ValidatorSessionLauncher.IdentityName("T-1", "win-validator"));
+        Assert.NotEqual(ValidatorSessionLauncher.IdentityName("T-1", "win-validator"),
+            ValidatorSessionLauncher.IdentityName("T-2", "win-validator"));
+
+        // The same pair keeps its name, so a retry reads as the same actor in the ledger.
+        Assert.Equal(ValidatorSessionLauncher.IdentityName("T-1", "win-validator"),
+            ValidatorSessionLauncher.IdentityName("T-1", "win-validator"));
+    }
+
+    [Fact]
+    public void A_role_key_too_long_for_the_pair_loses_its_tail_not_the_task()
+    {
+        // Agent names are 1-48 chars. "conductor-" plus this key is already 50, so the head has to give way - and
+        // the task must survive it, or every session for the role collides again under a truncated name.
+        var role = new string('x', 40);
+
+        var first = ValidatorSessionLauncher.IdentityName("T-13", role);
+        var second = ValidatorSessionLauncher.IdentityName("T-140", role);
+
+        Assert.Equal(48, first.Length);
+        Assert.EndsWith("-t-13", first);
+        Assert.Equal(48, second.Length);
+        Assert.EndsWith("-t-140", second);
+        Assert.NotEqual(first, second);
+    }
+
+    [Fact]
+    public async Task Two_concurrent_sessions_for_one_role_do_not_invalidate_each_others_tokens()
+    {
+        await SetUpAsync("win-validator");
+        await DefineAsync(2, "win-validator");
+        var launcher = RealLauncher();
+        var candidate = new Muthur.Launch.HarnessCandidate("codex", "opus", "chatgpt-subscription");
+
+        var first = await launcher.IdentityFor(Assignment("T-1", "win-validator"), candidate, default);
+        var second = await launcher.IdentityFor(Assignment("T-2", "win-validator"), candidate, default);
+
+        // The reproduction, asserted before the names so this test fails on the behaviour and not on a convention:
+        // the older session got 'unauthorized' on 'role take' while conductor status still said two were running.
+        (await _hub.CreateClient(first.Token).PostAsync(Routes.RoleAction("win-validator", "take"), null)).EnsureSuccessStatusCode();
+        (await _hub.CreateClient(second.Token).PostAsync(Routes.RoleAction("win-validator", "take"), null)).EnsureSuccessStatusCode();
+
+        Assert.NotEqual(first.Name, second.Name);
+
+        var roles = await _hub.Founder().GetFromJsonAsync(Routes.Roles, MuthurJsonContext.Default.IReadOnlyListRoleDto);
+        var role = Assert.Single(roles!, r => r.Key == "win-validator");
+        Assert.Equal(2, role.Holders.Count);
+        Assert.Contains(role.Holders, h => h.Agent == first.Name);
+        Assert.Contains(role.Holders, h => h.Agent == second.Name);
     }
 
     private static Muthur.Launch.WorkerAttempt Attempt(string harness, bool success, string report, bool started = true) =>
