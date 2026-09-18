@@ -79,8 +79,10 @@ public sealed partial class RoleService(Ledger ledger, LeasePolicy leases)
 
             // Taking a role you already hold just renews it; no ledger noise.
             var isRenewal = mine is not null && mine.LeaseExpires > m.Now;
+            // Branching on the live count rather than the capacity: a founder may lower a capacity below the
+            // holds already standing, and naming one of the two agents in your way is worse than naming none.
             if (!isRenewal && live.Count >= role.Holders)
-                throw Fail.Conflict("role_held", role.Holders == 1
+                throw Fail.Conflict("role_held", live.Count == 1
                     ? $"Role '{normalized}' is held by '{live[0].Agent?.Name}' until {live[0].LeaseExpires:O}."
                     : $"Role '{normalized}' is full: {live.Count} of {role.Holders} held by {string.Join(", ", live.Select(h => h.Agent?.Name))}.");
 

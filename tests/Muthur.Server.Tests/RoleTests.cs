@@ -129,10 +129,13 @@ public sealed class RoleTests : IDisposable
         Assert.Equal(1, role.Capacity);
         Assert.Equal(["one", "two"], Names(role)); // the new ceiling applies to the next take, not to standing holds
 
-        // …and it does apply to the next take.
+        // …and it does apply to the next take, which is told about both leases in its way, not just the oldest.
         var three = await _hub.RegisterAgentAsync("three");
         var full = await three.PostAsync(Routes.RoleAction("win-validator", "take"), null);
-        Assert.Equal("role_held", (await full.ReadErrorAsync()).Code);
+        Assert.Equal(HttpStatusCode.Conflict, full.StatusCode);
+        var error = await full.ReadErrorAsync();
+        Assert.Equal("role_held", error.Code);
+        Assert.Contains("2 of 1 held by one, two", error.Message);
 
         var events = await _hub.CreateClient().GetFromJsonAsync(Routes.Events, MuthurJsonContext.Default.IReadOnlyListEventDto);
         Assert.Contains(events!, e => e.Type == "role.updated" && e.Payload.GetProperty("holders").GetInt32() == 1);
