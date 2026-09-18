@@ -69,7 +69,7 @@ public sealed class ConductorService(Ledger ledger, MuthurOptions options, TimeP
         options.ConductorMaxSessions,
         options.ConductorSessionMinutes,
         options.ConductorMaxAttempts,
-        options.ConductorIntervalSeconds,
+        options.EffectiveConductorIntervalSeconds,   // what it runs at, not what was asked for
         options.ConductorStallProbeMinutes,
         _lastPass,
         _lastAction);
@@ -217,7 +217,11 @@ public sealed class ConductorService(Ledger ledger, MuthurOptions options, TimeP
 
             // A session that ran and hung is not a session that never started, and the founder must not be sent
             // looking for a missing CLI when the real fault is sessions outliving their timeout.
-            var ranButFailed = ex is not ValidatorLaunchException;
+            //
+            // Classified on what is known, never on the absence of one type: an exception nobody anticipated is
+            // far likelier to mean the session never began than that it ran, and this wording is the only thing
+            // telling the founder where to look.
+            var ranButFailed = ex is ValidatorSessionException;
 
             await ledger.MutateAsync(Caller.Founder, m =>
             {
@@ -325,7 +329,7 @@ public sealed class ConductorWorker(IServiceProvider services, MuthurOptions opt
             {
                 logger.LogError(ex, "Conductor pass failed.");
             }
-            await Task.Delay(TimeSpan.FromSeconds(Math.Max(15, options.ConductorIntervalSeconds)), clock, stoppingToken);
+            await Task.Delay(TimeSpan.FromSeconds(options.EffectiveConductorIntervalSeconds), clock, stoppingToken);
         }
     }
 }

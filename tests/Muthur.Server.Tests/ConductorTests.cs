@@ -438,6 +438,86 @@ public sealed class ConductorTests : IDisposable
         Assert.Contains("gave up running", (await Conductor.StatusAsync()).LastAction);
     }
 
+    /// <summary>
+    /// The real launcher, not the fake. Every earlier test let itself choose which exception was thrown, so none of
+    /// them could see a pre-flight failure being classified as a session that ran.
+    /// </summary>
+    private ValidatorSessionLauncher RealLauncher() => ActivatorUtilities.CreateInstance<ValidatorSessionLauncher>(_hub.Services);
+
+    [Fact]
+    public async Task No_candidate_left_is_a_launch_failure_not_a_session_that_ran()
+    {
+        // The likeliest way this path is hit overnight: the subscription is spent. Telling the founder that three
+        // sessions ran and hung sends them to look for the wrong thing entirely.
+        await SetUpAsync("win-validator");
+        var founder = _hub.Founder();
+        foreach (var account in new[] { "claude-subscription", "chatgpt-subscription" })
+            (await founder.PostAsJsonAsync(Routes.AccountLimits, new AccountLimitRequest(account, _hub.Clock.GetUtcNow().AddHours(2)))).EnsureSuccessStatusCode();
+
+        var thrown = await Assert.ThrowsAsync<ValidatorLaunchException>(() => RealLauncher().StartAsync(
+            new ConductorAssignment(1, "T-1", "a task", "demo", "win-validator", null)));
+
+        Assert.Contains("No available mastermind candidate", thrown.Message);
+    }
+
+    [Fact]
+    public async Task A_project_whose_repository_is_gone_is_a_launch_failure_too()
+    {
+        await SetUpAsync("win-validator");
+
+        var thrown = await Assert.ThrowsAsync<ValidatorLaunchException>(() => RealLauncher().StartAsync(
+            new ConductorAssignment(1, "T-1", "a task", "no-such-project", "win-validator", null)));
+
+        Assert.Contains("no repository on disk", thrown.Message);
+    }
+
+    [Fact]
+    public async Task A_launch_failure_from_the_real_launcher_is_worded_as_one()
+    {
+        // End to end through the conductor, with the launcher the hub actually ships.
+        _hub.Settings["Muthur:ConductorMaxAttempts"] = "2";
+        await SetUpAsync("win-validator");
+        await DefineAsync("win-validator");
+        await TaskInValidationAsync();
+        var founder = _hub.Founder();
+        foreach (var account in new[] { "claude-subscription", "chatgpt-subscription" })
+            (await founder.PostAsJsonAsync(Routes.AccountLimits, new AccountLimitRequest(account, _hub.Clock.GetUtcNow().AddHours(2)))).EnsureSuccessStatusCode();
+        _hub.Validators.Delegate = RealLauncher();
+
+        for (var pass = 0; pass < 4; pass++) await Conductor.RunPassAsync();
+
+        var events = await founder.GetFromJsonAsync(Routes.Events, MuthurJsonContext.Default.IReadOnlyListEventDto);
+        Assert.Equal(2, events!.Count(e => e.Type == "conductor.failed"));
+        Assert.DoesNotContain(events!, e => e.Type == "conductor.session_failed");
+        Assert.Contains("gave up starting", (await Conductor.StatusAsync()).LastAction);
+    }
+
+    [Fact]
+    public async Task An_unexpected_failure_is_called_a_launch_failure_rather_than_a_session()
+    {
+        // Classified on what is known: something nobody anticipated is likelier to mean the session never began.
+        _hub.Settings["Muthur:ConductorMaxAttempts"] = "1";
+        await SetUpAsync("win-validator");
+        await DefineAsync("win-validator");
+        await TaskInValidationAsync();
+        _hub.Validators.Throw = new InvalidOperationException("something nobody thought of");
+
+        await Conductor.RunPassAsync();
+
+        var events = await _hub.Founder().GetFromJsonAsync(Routes.Events, MuthurJsonContext.Default.IReadOnlyListEventDto);
+        Assert.Single(events!, e => e.Type == "conductor.failed");
+        Assert.DoesNotContain(events!, e => e.Type == "conductor.session_failed");
+    }
+
+    [Fact]
+    public async Task The_status_line_reports_the_interval_it_runs_at_not_the_one_that_was_asked_for()
+    {
+        // The worker floors it at 15s; a founder who sets 5 and is told 5 will misread every timestamp they see.
+        _hub.Settings["Muthur:ConductorIntervalSeconds"] = "5";
+
+        Assert.Equal(15, (await Conductor.StatusAsync()).IntervalSeconds);
+    }
+
     [Fact]
     public async Task The_status_line_carries_the_number_a_founder_waiting_on_a_probe_needs()
     {

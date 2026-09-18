@@ -171,7 +171,7 @@ on a different vendor than the author.
 | `Muthur:ConductorMaxSessions` | 2 | validator sessions running at once |
 | `Muthur:ConductorSessionMinutes` | 45 | a session that has not finished by then is killed |
 | `Muthur:ConductorMaxAttempts` | 3 | failed verdicts on one task before it stops and asks you |
-| `Muthur:ConductorIntervalSeconds` | 60 | |
+| `Muthur:ConductorIntervalSeconds` | 60 | how often it looks; floored at 15s, and `conductor status` reports the floored value |
 | `Muthur:ConductorStallProbeMinutes` | 30 | after it gives up on a task, how long before it quietly tries once more |
 | `Muthur:DiscordBotToken` | — | bot token for `discord:` ingest; set it as `Muthur__DiscordBotToken`, never in a file |
 

@@ -116,10 +116,14 @@ public sealed class FakeValidatorSessions : IValidatorSessionLauncher
     /// <summary>When set, every start throws it — a harness that is not installed, or no candidate left.</summary>
     public Exception? Throw { get; set; }
 
+    /// <summary>When set, the real launcher answers instead, so a test can see how it actually fails.</summary>
+    public IValidatorSessionLauncher? Delegate { get; set; }
+
     public async Task StartAsync(ConductorAssignment assignment, CancellationToken ct = default)
     {
         lock (_started) _started.Add(assignment);
         if (Throw is { } failure) throw failure;
+        if (Delegate is { } real) await real.StartAsync(assignment, ct);
         if (Block) await _release.WaitAsync(ct);
     }
 

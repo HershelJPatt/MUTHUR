@@ -32,6 +32,9 @@ public sealed class MuthurOptions
     /// <summary>Failed verdicts on one task before the conductor stops restaffing it and asks the founder.</summary>
     public int ConductorMaxAttempts { get; set; } = 3;
     public int ConductorIntervalSeconds { get; set; } = 60;
+    /// <summary>The interval the conductor actually runs at: a floor, so a small number cannot turn it into a spin.</summary>
+    public int EffectiveConductorIntervalSeconds => Math.Max(MinimumConductorIntervalSeconds, ConductorIntervalSeconds);
+    public const int MinimumConductorIntervalSeconds = 15;
     /// <summary>After a pair gives up starting, how long before one probe is let through. Its cause is usually fixed from outside the hub.</summary>
     public int ConductorStallProbeMinutes { get; set; } = 30;
 

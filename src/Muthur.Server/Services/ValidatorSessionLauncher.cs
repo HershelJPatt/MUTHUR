@@ -6,6 +6,15 @@ using Muthur.Server.Auth;
 namespace Muthur.Server.Services;
 
 /// <summary>
+/// No validator session ever reached a process: no candidate to run, an unknown harness, a CLI that is not on
+/// PATH, or no repository to run in. Nothing was spent and nothing was tried.
+/// </summary>
+public sealed class ValidatorLaunchException(string message) : Exception(message);
+
+/// <summary>A validator session started and produced nothing — reaped at its timeout, or it crashed.</summary>
+public sealed class ValidatorSessionException(string message) : Exception(message);
+
+/// <summary>
 /// Starts a real validator session through <see cref="AgentLauncher"/>.
 /// <para>
 /// The session is an ordinary registered agent with an ordinary token: nothing the conductor starts has authority
@@ -14,12 +23,6 @@ namespace Muthur.Server.Services;
 /// the product cannot be driven and report blocked instead of passing.
 /// </para>
 /// </summary>
-/// <summary>No validator session ever reached a process: an unknown harness, or a CLI that is not on PATH.</summary>
-public sealed class ValidatorLaunchException(string message) : Exception(message);
-
-/// <summary>A validator session started and produced nothing — reaped at its timeout, or it crashed.</summary>
-public sealed class ValidatorSessionException(string message) : Exception(message);
-
 public sealed class ValidatorSessionLauncher(
     Ledger ledger,
     MuthurOptions options,
@@ -34,11 +37,11 @@ public sealed class ValidatorSessionLauncher(
     {
         var repo = await RepositoryPathAsync(assignment.Project, ct);
         if (repo is null || !Directory.Exists(repo))
-            throw new InvalidOperationException($"Project '{assignment.Project}' has no repository on disk.");
+            throw new ValidatorLaunchException($"Project '{assignment.Project}' has no repository on disk.");
 
         var candidates = await CandidatesAsync(assignment.AvoidHarness, ct);
         if (candidates.Count == 0)
-            throw new InvalidOperationException($"No available {Tier} candidate to validate {assignment.TaskKey}.");
+            throw new ValidatorLaunchException($"No available {Tier} candidate to validate {assignment.TaskKey}.");
 
         var scratch = Path.Combine(options.DataDir, "conductor", $"{assignment.TaskKey}-{assignment.RoleKey}");
         Directory.CreateDirectory(scratch);
