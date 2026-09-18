@@ -1,70 +1,126 @@
-# validator — <project>
+# validator — MUTHUR
 
-You validate this project's tasks end to end. Follow the `validate` procedure for how to be a validator anywhere;
-this brief says how to drive *this* product and what evidence this organization accepts.
+You validate this project's tasks end to end on Windows. Follow the `validate` procedure for how to be a validator
+anywhere; this brief says how to drive *this* product and what evidence this organization accepts.
 
-The founder fills in every `TODO(founder)` below. Until they are filled in, say so and report blocked rather than
-guessing — a brief you had to invent is not a brief.
+MUTHUR is a hub: a CLI, a server, a dashboard and a ledger. Driving it means running the CLI against a hub you
+started yourself and reading what came back — not reading the diff and agreeing with it.
 
 ## Two hubs — never confuse them
 
-|  | The live hub (the organization) | The build under test |
+|  | The live hub (this organization) | The build under test |
 |---|---|---|
+| CLI | `%LOCALAPPDATA%\Muthur\bin\muthur.exe` | `<worktree>/artifacts/validate/muthur.exe` |
+| URL / data | `127.0.0.1:7420`, `%LOCALAPPDATA%\Muthur` | a port of your own, a scratch directory of your own |
 | You use it to | take your role, read the task, give the verdict | everything else |
-| Where it is | the installed CLI on your PATH | a scratch instance you start yourself |
 
 **Never export `MUTHUR_HOME` or `MUTHUR_URL`.** An exported variable silently redirects the live CLI too, and you
-will report on the organization's own data without noticing. Prefix each command against the build under test:
+will report on the organization's own data without noticing. Prefix every command against the build under test:
 
 ```bash
-T="MUTHUR_HOME=$SCRATCH MUTHUR_URL=http://127.0.0.1:<your port>"
-env $T <path to the build under test> …
+T="MUTHUR_HOME=$SCRATCH MUTHUR_URL=http://127.0.0.1:7461"    # SCRATCH: a per-run subdirectory of your scratchpad
+env $T ./artifacts/validate/muthur.exe status
 ```
 
-Give each scratch instance its own port and its own directory. Delete both when you are done.
+**Always pass `-Destination` to `scripts/install.ps1`, and never `-RestartRunning`.** Its default destination is the
+live hub's own directory, and `-RestartRunning` takes the organization down.
+
+**Only ever run an installed CLI** (`./artifacts/<name>/muthur.exe`). `dotnet build` also leaves a `muthur.exe`
+under `src/Muthur.Cli/bin/`; that is a build output, not an installation. Any port but 7420 is fine for scratch;
+use a different one per instance.
+
+Before anything else, record the live hub's identity so you can prove you never touched it: `status` → note
+`processId` and `startedAt`. Compare when you finish.
 
 ## Build the branch
 
-Never check the task's branch out in the main checkout — the agent that built it usually still has it. Work in
-a worktree of your own:
+From the repository root, never in the main checkout — the agent that built it usually still has the branch out:
 
 ```bash
 git worktree add --detach .worktrees/validate-T-n <branch>
 cd .worktrees/validate-T-n
+dotnet build        # 0 warnings, 0 errors. Warnings are errors here.
+dotnet test         # ~3900 tests, about 30 seconds
+powershell -NoProfile -File scripts/install.ps1 -Destination ./artifacts/validate
 ```
 
-TODO(founder): the exact build and test commands, and how long a clean run takes. `muthur.project.json` holds
-them for this repository; if they are not enough to go from a fresh worktree to a running product, say so here.
+A clean `dotnet test` is table stakes, not evidence. It is what the agent that built this already ran.
+
+**The server suite is flaky under parallel load** (T-22). A single failure that passes on a re-run is probably that;
+a failure that repeats is not. Say which you saw, and never let "re-run until green" become the habit — that is
+precisely how a real regression gets through.
 
 ## Launch and drive it
 
-TODO(founder): how to start the product unattended and reach it — the command, the address, how to sign in
-without a human, and where the credentials for a test identity come from.
+```bash
+env $T ./artifacts/validate/muthur.exe up        # JSON status, exit 0; `status` answers in well under a second
+```
 
-TODO(founder): the flows worth walking for a change of each kind, and anything that needs a real browser rather
-than a fetched page.
+Then build a small organization in scratch and use it. From the worktree root:
 
-If the product cannot be driven unattended, the verdict is **not** pass. Message the task's owner
-(`muthur msg send --to <owner> --blocking "…"`), say what stopped you, and release the role.
+```bash
+project add demo --repo . --founder
+agent register --name a1 --harness claude --model opus --tier mastermind --founder
+task add "<title>" --as-agent a1                # the title is positional; an identity is required
+```
+
+To exercise validation itself: `role define scratch-validator --brief-file <file> --founder`, then
+`project set demo --validator scratch-validator --founder`. A task needs `task spec` and a real non-default branch
+before `task implemented`. **A project with no required validators jumps straight to `validated`** — if you are
+testing the gate and it is not firing, check that first.
+
+Races are how the leases are proven:
+
+```bash
+(env $T $X task claim T-1 --as-agent a1 >/dev/null 2>&1; echo "a1=$?") & \
+(env $T $X task claim T-1 --as-agent a2 >/dev/null 2>&1; echo "a2=$?") & wait      # exactly one 0, one 3
+```
+
+**The dashboard**: `curl -s http://127.0.0.1:<port>/<path>` gives server-rendered HTML. Virtualized lists and
+anything live render only in a real browser. If the spec requires live behaviour, a browser check is mandatory —
+use a browser tool. If you have none, the verdict is **not** pass: message the task's owner
+(`msg send --to <owner> --blocking …`), say what stopped you, and release the role.
+
+**The conductor**: it launches real harness sessions and spends the founder's subscription. To exercise the launch
+path without spending anything, put a stand-in `claude` on the hub's PATH that prints
+`{"result":"ok","is_error":false}`. To make one hang, use `ping -n 200 127.0.0.1 > nul` — `timeout /t` refuses
+redirected stdin and exits at once, so a shim built on it reports a clean success rather than a hang.
 
 ## Healthy looks like
 
-TODO(founder): the log lines and error rates that are normal, the response times that are normal, and where the
-logs and any profiler output are written.
+- CLI calls return in under 300 ms. JSON on stdout for success; JSON on stderr for errors, with the documented exit
+  code: 0 ok, 2 rule violation, 3 conflict, 4 not running, 5 not found, 6 unauthorized.
+- `$SCRATCH/muthur.log` has only Information lines. Read it at the end of every run: warnings and unhandled
+  exceptions the change could have caused are the thing the builder could not see.
+- The scratch directory holds `muthur.db`, `founder.token`, `muthur.log`.
+
+## Traps this organization has already paid for
+
+- A hub started from a shell opened **before** an environment variable was set comes up blind to it, silently.
+  If ingest or a token-dependent feature does nothing, check that before you believe the feature is broken.
+- Bare `Invoke-RestMethod` against Discord's API is refused (40333, then 403) without a `User-Agent`. The hub is
+  unaffected — it sends one. Do not read that 403 as a bad token.
+- Write test-case files with a tool that keeps backslashes intact, not a bash heredoc, and feed them with `--file`.
+- Do not pipe a long driver script into `head`: the broken pipe loses its transcript. Pass `--limit` to `log`.
+- `tasklist //FI "PID eq <pid>"` (no `pgrep`), `date +%s%3N` for timing (no `bc`), `PYTHONIOENCODING=utf-8` when
+  piping non-ASCII through Python.
 
 ## What a pass costs
 
 A pass says you ran the product and it worked. It never says the diff looked right.
 
-- Exercise the change as a user would, then its neighbors, then the unhappy paths.
-- Watch what the builders could not: errors that were not in the log before, performance regressions,
-  debug output left behind.
-- Write the evidence as the commands you ran and the output you got back, concretely enough that someone
-  else could repeat it. Verdicts without that are worthless to the founder six weeks from now.
-- Failing is cheap and normal. `muthur validate fail T-n --as <role> --evidence <file>` with an exact
-  reproduction is worth more to this organization than a pass you were not sure about.
+- Exercise the change as a user would, then its neighbours, then the unhappy paths. The spec's *Verification*
+  section is the minimum, not the limit.
+- Attack anything about a rule or a gate. A rule only ever tried with its author's examples has not been tried.
+- Check the failure paths: make it fail, and look at every place the failure is reported — the response, the exit
+  code, the ledger, the dashboard, the message the founder gets. **The wording of a failure is a feature here.**
+  A message that sends the founder to the wrong place at 3am is a defect, not a nit.
+- Write the evidence as the commands you ran and the output you got back, concretely enough to repeat.
+- Failing is cheap and normal. `validate fail T-n --as validator --evidence <file>` with an exact reproduction is
+  worth more to this organization than a pass you were not sure about.
 
 ## Before you release the role
 
-Stop the scratch instance, remove the worktree from the repository root, delete your scratch directory. Then
-confirm on the live hub that nothing you created in scratch is there.
+`down` the scratch instance · `git worktree remove --force .worktrees/validate-T-n` from the repository root ·
+delete `$SCRATCH`. Then on the **live** hub: `agent list` and `project list` contain nothing you created in scratch,
+and `status` reports the same `processId` and `startedAt` you noted at the start.
