@@ -1,7 +1,6 @@
 using System.Net.Http.Headers;
 using Microsoft.AspNetCore.Hosting;
 using Microsoft.AspNetCore.Mvc.Testing;
-using Microsoft.Data.Sqlite;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.DependencyInjection.Extensions;
 using Microsoft.Extensions.Time.Testing;
@@ -15,7 +14,7 @@ public sealed class HubFactory : WebApplicationFactory<Program>
 {
     /// <summary>Settable so a test can bring a second hub up over the same database, as a restart does.</summary>
     public string DataDir { get; init; } = Path.Combine(Path.GetTempPath(), "muthur-tests", Guid.NewGuid().ToString("n"));
-    public FakeTimeProvider Clock { get; } = new(new DateTimeOffset(2026, 1, 1, 12, 0, 0, TimeSpan.Zero));
+    public ObservingClock Clock { get; } = new(new DateTimeOffset(2026, 1, 1, 12, 0, 0, TimeSpan.Zero));
 
     /// <summary>Extra configuration for a test class, e.g. ["Muthur:RequireCrossProviderReview"] = "true".</summary>
     public Dictionary<string, string> Settings { get; } = [];
@@ -28,6 +27,10 @@ public sealed class HubFactory : WebApplicationFactory<Program>
     {
         builder.UseSetting("Muthur:DataDir", DataDir);
         builder.UseSetting("Muthur:BackgroundServices", "false");
+        // Pooling off, not pool-clearing: the process-global ClearAllPools() disposed connections out from
+        // under hubs that were still serving, which failed an arbitrary test with a 500 under load.
+        builder.UseSetting("Muthur:ConnectionString",
+            $"Data Source={Path.Combine(DataDir, MuthurEnvironment.DatabaseFile)};Pooling=False");
         foreach (var (key, value) in Settings) builder.UseSetting(key, value);
         builder.ConfigureServices(services =>
         {
@@ -62,8 +65,25 @@ public sealed class HubFactory : WebApplicationFactory<Program>
     protected override void Dispose(bool disposing)
     {
         base.Dispose(disposing);
-        SqliteConnection.ClearAllPools();
         try { Directory.Delete(DataDir, recursive: true); } catch (IOException) { } catch (UnauthorizedAccessException) { }
+    }
+}
+
+/// <summary>
+/// A fake clock that also records what has started waiting on it. A test cannot otherwise observe that a
+/// long-poll request has reached the hub, and the request's own wait is what creates the timer.
+/// </summary>
+public sealed class ObservingClock(DateTimeOffset start) : FakeTimeProvider(start)
+{
+    private readonly List<TimeSpan> _timers = [];
+
+    /// <summary>The due time of every timer created on this clock, in the order they were created.</summary>
+    public IReadOnlyList<TimeSpan> Timers { get { lock (_timers) return [.. _timers]; } }
+
+    public override ITimer CreateTimer(TimerCallback callback, object? state, TimeSpan dueTime, TimeSpan period)
+    {
+        lock (_timers) _timers.Add(dueTime);
+        return base.CreateTimer(callback, state, dueTime, period);
     }
 }
 

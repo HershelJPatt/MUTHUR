@@ -57,9 +57,6 @@ public sealed class ConductorTests : IDisposable
         Assert.Equal(0, Conductor.RunningCount);
     }
 
-    private async Task<IReadOnlyList<EventDto>> EventsAsync() =>
-        (await _hub.Founder().GetFromJsonAsync(Routes.Events, MuthurJsonContext.Default.IReadOnlyListEventDto))!;
-
     private async Task<IReadOnlyList<MessageDto>> FounderMessagesAsync() =>
         (await _hub.Founder().GetFromJsonAsync($"{Routes.Messages}?founder=true", MuthurJsonContext.Default.IReadOnlyListMessageDto))!;
 
@@ -256,7 +253,8 @@ public sealed class ConductorTests : IDisposable
 
         Assert.Equal(3, _hub.Validators.Started.Count);
 
-        var events = await EventsAsync();
+        var events = await _hub.EventsWhenAsync(e => e.Count(x => x.Type == "conductor.failed") == 3,
+            "three launch failures were never recorded");
         Assert.Equal(3, events.Count(e => e.Type == "conductor.failed"));
         Assert.Single(events, e => e.Type == "conductor.stalled");
         Assert.Contains("gave up starting", (await Conductor.StatusAsync()).LastAction);
@@ -325,7 +323,9 @@ public sealed class ConductorTests : IDisposable
 
         Assert.Equal(6, _hub.Validators.Started.Count);   // 3 before the stall, then one probe per cooldown
 
-        Assert.Single(await EventsAsync(), e => e.Type == "conductor.stalled");   // told once, not every cooldown
+        var events = await _hub.EventsWhenAsync(e => e.Count(x => x.Type == "conductor.failed") == 6,
+            "six launch failures were never recorded");
+        Assert.Single(events, e => e.Type == "conductor.stalled");   // told once, not every cooldown
     }
 
     [Fact]
@@ -382,7 +382,9 @@ public sealed class ConductorTests : IDisposable
         await SettledAsync();
 
         Assert.Equal(4, _hub.Validators.Started.Count);
-        Assert.DoesNotContain(await EventsAsync(), e => e.Type == "conductor.stalled");
+        var events = await _hub.EventsWhenAsync(e => e.Count(x => x.Type == "conductor.failed") == 2,
+            "two launch failures were never recorded");
+        Assert.DoesNotContain(events, e => e.Type == "conductor.stalled");
     }
 
     [Fact]
@@ -397,7 +399,8 @@ public sealed class ConductorTests : IDisposable
         Assert.Equal(1, await Conductor.RunPassAsync());
         await SettledAsync();
 
-        var events = await EventsAsync();
+        var events = await _hub.EventsWhenAsync(e => e.Count(x => x.Type == "conductor.no_verdict") == 1,
+            "the session that reached no verdict was never recorded");
         var recorded = Assert.Single(events, e => e.Type == "conductor.no_verdict");
         Assert.Equal(id, recorded.TaskId);
         Assert.Equal("win-validator", recorded.Payload.GetProperty("role").GetString());
@@ -421,7 +424,8 @@ public sealed class ConductorTests : IDisposable
 
         Assert.Equal(3, _hub.Validators.Started.Count);
 
-        var events = await EventsAsync();
+        var events = await _hub.EventsWhenAsync(e => e.Count(x => x.Type == "conductor.no_verdict") == 3,
+            "three sessions without a verdict were never recorded");
         Assert.Equal(3, events.Count(e => e.Type == "conductor.no_verdict"));
         Assert.Single(events, e => e.Type == "conductor.stalled");
 
@@ -461,7 +465,9 @@ public sealed class ConductorTests : IDisposable
         await SettledAsync();
 
         Assert.Equal(3, _hub.Validators.Started.Count);
-        Assert.Single(await EventsAsync(), e => e.Type == "conductor.stalled");   // still told once, not per probe
+        var events = await _hub.EventsWhenAsync(e => e.Count(x => x.Type == "conductor.no_verdict") == 3,
+            "three sessions without a verdict were never recorded");
+        Assert.Single(events, e => e.Type == "conductor.stalled");   // still told once, not per probe
     }
 
     [Theory]
@@ -582,7 +588,8 @@ public sealed class ConductorTests : IDisposable
             await SettledAsync();
         }
 
-        var events = await EventsAsync();
+        var events = await _hub.EventsWhenAsync(e => e.Count(x => x.Type == "conductor.session_failed") == 2,
+            "two session failures were never recorded");
         Assert.Equal(2, events.Count(e => e.Type == "conductor.session_failed"));
         Assert.DoesNotContain(events, e => e.Type == "conductor.failed");
         Assert.DoesNotContain(events, e => e.Type == "conductor.no_verdict");   // it threw; it is not the quiet kind
@@ -646,7 +653,8 @@ public sealed class ConductorTests : IDisposable
             await SettledAsync();
         }
 
-        var events = await EventsAsync();
+        var events = await _hub.EventsWhenAsync(e => e.Count(x => x.Type == "conductor.failed") == 2,
+            "two launch failures were never recorded");
         Assert.Equal(2, events.Count(e => e.Type == "conductor.failed"));
         Assert.DoesNotContain(events, e => e.Type == "conductor.session_failed");
         Assert.Contains("gave up starting", (await Conductor.StatusAsync()).LastAction);
@@ -665,7 +673,8 @@ public sealed class ConductorTests : IDisposable
         await Conductor.RunPassAsync();
         await SettledAsync();
 
-        var events = await EventsAsync();
+        var events = await _hub.EventsWhenAsync(e => e.Count(x => x.Type == "conductor.failed") == 1,
+            "the launch failure was never recorded");
         Assert.Single(events, e => e.Type == "conductor.failed");
         Assert.DoesNotContain(events, e => e.Type == "conductor.session_failed");
     }
