@@ -226,3 +226,73 @@ either.
 This is recorded as unproven rather than quietly redefined, and the scope question — accept pre-run
 filtering as the evidence, cover the path with a fake `IProcessRunner`, or leave it open — is with the
 founder as request #9. **Until that is answered, treat mid-run fallthrough as untested.**
+
+## Amendment 1 — the mid-run criterion rests on tests, and one launcher had none (2026-09-18)
+
+Founder request #9, answered: **cover the path with a test** rather than accept pre-run filtering or leave
+the criterion open, with three conditions — assert the sequence rather than a count, assert the negative
+beside it, and cover `AgentLauncher` too or say it is not covered.
+
+> Option 1 accepts evidence for the neighbouring behaviour and records the actual requirement as unproven,
+> which leaves a documented hole in the one feature T-15 exists to prove. Option 3 lands with a criterion
+> knowingly unmet, and a criterion that lands unmet is one nobody ever comes back to.
+
+### A correction to the premise that question was asked on
+
+I told the founder the path was untested. **It was already tested for `WorkerLauncher`**, and close to the
+way they specified:
+
+- `An_exhausted_account_falls_through_to_the_next_candidate_and_is_reported` asserts the first candidate was
+  attempted, its outcome is `RateLimited`, `onRateLimited` was called with that candidate's account, the
+  second candidate was attempted, and the second outcome came back successful — a sequence, not a count.
+- `A_worker_that_ran_and_failed_is_not_retried_elsewhere` is the negative, already present.
+
+What is missing is the third condition, and it is worse than the founder supposed: **`AgentLauncher.RunAsync`
+is never invoked by any test.** Its only coverage is the static `EnvironmentFor` helper. The fallthrough
+loop, the negative, the missing-CLI skip and the per-candidate `identityFor` callback are all untested on
+the launcher that runs **validator sessions** — the one whose sessions cast the verdicts that decide whether
+work ships. One of two launchers being untested is how a fix goes into one and not the other; here one was
+never exercised at all, and it is the one with authority.
+
+`AgentLauncher`'s own doc comment claims "the tests assert the inversion in both directions". Half of that
+sentence was true.
+
+### The work
+
+**1. `AgentLauncherTests` gains the loop it never had**, mirroring `WorkerLauncherTests` — same
+`ScriptedProcesses` fake, same `Installed` resolver, a scratch directory per class:
+
+- `An_exhausted_account_falls_through_to_the_next_candidate` — two candidates; the first process result is
+  claude's rate-limit JSON (`{"result":"usage limit reached","is_error":true}`, exit 1), the second is a
+  clean codex run. Assert **the sequence**: `attempts[0].Candidate.Harness == "claude"`,
+  `attempts[0].Outcome.RateLimited`, `onRateLimited` received exactly the first candidate's account,
+  `attempts[1].Candidate.Harness == "codex"`, `attempts[1].Outcome.Success`, and `attempts.Count == 2`.
+- `A_session_that_ran_and_failed_is_not_retried_elsewhere` — one scripted failure that is **not** a rate
+  limit; assert exactly one attempt, `Success` false, and that `onRateLimited` was never called. This is the
+  more dangerous half to get wrong: the launcher's own comment says a session that ran and gave a verdict is
+  finished, right or wrong.
+- `The_identity_is_resolved_for_the_candidate_that_actually_runs` — `identityFor` is a callback precisely so
+  a fallthrough names whoever ran, and nothing checks it. With the same two candidates and a rate limit on
+  the first, assert `identityFor` was called for both candidates in order, and that the environment the
+  second process received carries the **second** candidate's identity. `ScriptedProcesses` must therefore
+  also record the `environment` argument, which today it discards.
+
+**2. `WorkerLauncherTests`' existing fallthrough test gains one assertion**: that
+`processes.Started` names claude then codex, in that order. Two attempts happening is also what a
+crash-and-retry would look like; the order of the processes actually started is what distinguishes them.
+Change nothing else about that test.
+
+**3. Neither launcher's production code changes.** `git diff --stat src/` must be empty. If a test cannot be
+written without changing `src/`, stop and report — that would be a finding about the design, not a licence.
+
+### What the verdict must then say, in the founder's words
+
+> Say in the verdict exactly what you told me: pre-run filtering was observed, mid-run fallthrough rests on
+> a test, and here is why an observation was not available. A reader six months from now should not have to
+> reconstruct that distinction.
+
+Recorded above under *the two criteria this verdict claimed wrongly*, and completed here: pre-run filtering
+was **observed** (a limited account is dropped from the candidate list before any attempt); mid-run
+fallthrough rests on **tests**, for both launchers after this amendment; and an observation was not
+available because forcing a real rate limit means exhausting a subscription, which is neither cheap nor
+reproducible for a validator.
