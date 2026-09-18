@@ -174,3 +174,37 @@ project, because the founder settled that it must.
   worth a sweep of the dashboard for inline styles as its own task.
 - Whether the founder should be *warned* at the moment a task auto-validates (as opposed to when the
   project is defined) is a different question, and belongs with T-18's Needs You work rather than here.
+
+## Proof (run 2026-09-18, integrated branch, scratch hub on port 7472)
+
+Built by two `muthur worker run` workers in separate worktrees — Unit A on claude, Unit B on codex — then
+integrated, rebuilt and re-verified here.
+
+```
+dotnet build   0 warnings, 0 errors
+dotnet test    19 + 9 + 3692 + 145 passing   (server suite 139 -> 145: +4 Unit A, +2 Unit B)
+```
+
+End to end through the installed CLI against a scratch `MUTHUR_HOME`/`MUTHUR_URL`, never the live hub:
+
+```
+project add solo   (no validator)          -> ungated = true,  validators = []
+project set solo   --validator win-validator -> ungated = false, validators = [win-validator]
+project add gated  --validator win-validator -> ungated = false, validators = [win-validator]
+project show gated                          -> raw body contains "ungated":false
+```
+
+Dashboard on the same scratch hub, with one ungated project and one gated one:
+
+```
+/projects: pill-ungated appears exactly once
+           "none required — implemented goes straight to validated" present
+```
+
+Exactly once across two projects is the assertion that matters: the pill is on `solo` and not on `gated`.
+
+A first attempt at this check was wrong and is recorded rather than quietly redone — it added a validator
+to `solo` before reading the page, so both projects were gated and no pill appeared. The page was right;
+the check was not.
+
+`land` was not touched, as the founder settled.
