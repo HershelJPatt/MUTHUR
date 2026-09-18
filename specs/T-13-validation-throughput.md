@@ -346,10 +346,10 @@ All five follow the existing `Output.Emit` pattern exactly; none of them interpr
 
 **`HeaderStats.razor`**: the existing `@_validating validating` stat gains the wait behind it. Load
 `Lifecycle.QueueAsync()`, take the smallest non-null `OldestWaitingSince`, and render
-`<b>@_validating</b> validating` followed by ` · oldest @Format.Since(oldest, _now)` when there is one.
-Keep `stat-accent` on the same condition as today. Use the `Format` helper that already exists in
-`Components/Shared/Format.cs`; if it has no "how long ago" method, add one there beside `Until` rather than
-formatting inline.
+`<b>@_validating</b> validating` followed by ` · oldest @Format.Age(oldest, _now)` when there is one.
+Keep `stat-accent` on the same condition as today. `Format.Age(then, now)` in `Components/Shared/Format.cs`
+is already the "how long ago" helper — it is what `AgentsPanel` and `CommsPanel` use — so use it and add
+nothing. Do not format inline.
 
 No new CSS classes. Everything above uses classes that already exist in `wwwroot/app.css`.
 
@@ -455,6 +455,9 @@ Then, as the founder and two registered agents:
   needs; the analysis is T-17.
 - **T-16** (two tasks in flight on the same files) becomes more likely the moment several validators land
   work in parallel. Nothing here makes it worse than the conductor already does, and nothing here addresses it.
+- `HeaderStats` has no `IsRelevant` override, so it reloads on every ledger event, and this task gives it a
+  second query to run each time. Harmless at present scale, and the cheap fix is an `IsRelevant` override on
+  that component — worth doing if the board ever feels slow, not worth doing on suspicion.
 - `muthur role list` output changed shape (`holder` → `holders[]`, plus `capacity`). Any brief in `kit/` or
   prose in `docs/` that quotes the old shape should be swept — check `kit/briefs/validator.md` and
   `kit/core/`. If a sweep is needed beyond one or two lines, file it rather than widening this task.
