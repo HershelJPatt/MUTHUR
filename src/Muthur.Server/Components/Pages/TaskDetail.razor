@@ -42,6 +42,10 @@
                     {
                         <dt>Pull request</dt><dd><a href="@pr">@pr</a></dd>
                     }
+                    @if (task.AttendedReason is { } attended)
+                    {
+                        <dt>Needs a human</dt><dd>@attended</dd>
+                    }
                     @if (task.Parent is { } parent)
                     {
                         <dt>Parent</dt><dd><a href="/tasks/@parent">@parent</a></dd>
