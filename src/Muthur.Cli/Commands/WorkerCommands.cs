@@ -65,6 +65,31 @@ public static class WorkerCommands
                 new AccountLimitRequest(parse.GetValue(account)!, until), MuthurJsonContext.Default.AccountLimitRequest, ct));
         });
         harness.Subcommands.Add(limit);
+
+        AddConductor(root);
+    }
+
+    /// <summary>The conductor staffs validation so a task that passes needs nobody awake.</summary>
+    private static void AddConductor(RootCommand root)
+    {
+        var conductor = new Command("conductor", "Staffs validator sessions for tasks waiting on validation. Off until the founder turns it on.");
+        root.Subcommands.Add(conductor);
+
+        var status = new Command("status", "Whether the conductor is staffing, how many sessions it has running, and its limits.");
+        status.SetAction(async (parse, ct) => Output.Emit(parse, await HubClient.For(parse).GetAsync(Routes.Conductor, ct)));
+        conductor.Subcommands.Add(status);
+
+        foreach (var (name, enabled, description) in new[]
+                 {
+                     ("on", true, "Let the conductor start validator sessions. Needs --founder; recorded in the ledger."),
+                     ("off", false, "Stop staffing. Sessions already running are left to finish. Needs --founder."),
+                 })
+        {
+            var command = new Command(name, description);
+            command.SetAction(async (parse, ct) => Output.Emit(parse, await HubClient.For(parse).PostAsync(
+                Routes.Conductor, new ConductorSwitch(enabled), MuthurJsonContext.Default.ConductorSwitch, ct)));
+            conductor.Subcommands.Add(command);
+        }
     }
 
     private sealed record RunOptions(string Tier, string Spec, string? Unit, string? Task, string? Harness, string? Base, string? Branch, string? Note, int TimeoutMinutes);

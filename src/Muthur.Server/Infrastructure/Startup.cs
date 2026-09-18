@@ -62,12 +62,15 @@ public static class Startup
         builder.Services.AddSingleton<IInboundSource, GitHubIssuesSource>();
         builder.Services.AddSingleton<IInboundSource, DiscordChannelSource>();
         builder.Services.AddSingleton<IProcessRunner, ProcessRunner>();
+        builder.Services.AddSingleton<IValidatorSessionLauncher, ValidatorSessionLauncher>();
+        builder.Services.AddSingleton<ConductorService>();
         builder.Services.AddSingleton<IPullRequestOpener, GhPullRequestOpener>();
         builder.Services.AddSingleton<ITaskLander, GitLander>();
         if (options.BackgroundServices)
         {
             builder.Services.AddHostedService<LeaseSweeper>();
             builder.Services.AddHostedService<IngestWorker>();
+            builder.Services.AddHostedService<ConductorWorker>();
         }
 
         builder.Services.AddRazorComponents().AddInteractiveServerComponents();

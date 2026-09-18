@@ -5,7 +5,12 @@ namespace Muthur.Launch;
 /// <summary>One way to staff a tier: which harness, which model, on whose account.</summary>
 public sealed record HarnessCandidate(string Harness, string Model, string? Account);
 
-public sealed record WorkerAttempt(HarnessCandidate Candidate, WorkerOutcome Outcome, TimeSpan Duration);
+/// <param name="Started">
+/// Whether a process was actually launched. False only for the cases that never reached one — a harness this build
+/// does not know, or a CLI that is not on PATH. A session that started and then failed, crashed or was reaped is a
+/// different fault from one that never began, and callers must be able to tell them apart.
+/// </param>
+public sealed record WorkerAttempt(HarnessCandidate Candidate, WorkerOutcome Outcome, TimeSpan Duration, bool Started = true);
 
 /// <summary>
 /// Runs one headless worker, falling through the tier's candidates when one is unavailable
@@ -32,7 +37,7 @@ public sealed class WorkerLauncher(IProcessRunner processes, Func<string, (strin
             var clock = Stopwatch.StartNew();
             if (Harnesses.Find(candidate.Harness) is not { } adapter)
             {
-                attempts.Add(new(candidate, new WorkerOutcome(false, $"Unknown harness '{candidate.Harness}'.", false), clock.Elapsed));
+                attempts.Add(new(candidate, new WorkerOutcome(false, $"Unknown harness '{candidate.Harness}'.", false), clock.Elapsed, Started: false));
                 continue;
             }
 
@@ -40,7 +45,7 @@ public sealed class WorkerLauncher(IProcessRunner processes, Func<string, (strin
             var invocation = adapter.Build(request);
             if (_resolve(invocation.FileName) is not { } executable)
             {
-                attempts.Add(new(candidate, new WorkerOutcome(false, $"'{invocation.FileName}' is not installed or not on PATH.", false), clock.Elapsed));
+                attempts.Add(new(candidate, new WorkerOutcome(false, $"'{invocation.FileName}' is not installed or not on PATH.", false), clock.Elapsed, Started: false));
                 continue;
             }
 

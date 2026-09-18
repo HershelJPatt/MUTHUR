@@ -14,15 +14,18 @@ public sealed record ProcessResult(int ExitCode, string StdOut, string StdErr)
 public interface IProcessRunner
 {
     /// <param name="scrubEnvironment">Variables removed from the child's environment (e.g. hub credentials a worker must not inherit).</param>
+    /// <param name="environment">Variables set on the child (e.g. the identity a validator session acts as). Applied after scrubbing.</param>
     Task<ProcessResult> RunAsync(string fileName, IReadOnlyList<string> arguments, string workingDirectory,
-        string? stdin = null, TimeSpan? timeout = null, CancellationToken ct = default, IReadOnlyCollection<string>? scrubEnvironment = null);
+        string? stdin = null, TimeSpan? timeout = null, CancellationToken ct = default, IReadOnlyCollection<string>? scrubEnvironment = null,
+        IReadOnlyDictionary<string, string>? environment = null);
 }
 
 /// <summary>Runs a child process to completion, capturing output. Arguments are passed as a list, never through a shell.</summary>
 public sealed class ProcessRunner : IProcessRunner
 {
     public async Task<ProcessResult> RunAsync(string fileName, IReadOnlyList<string> arguments, string workingDirectory,
-        string? stdin = null, TimeSpan? timeout = null, CancellationToken ct = default, IReadOnlyCollection<string>? scrubEnvironment = null)
+        string? stdin = null, TimeSpan? timeout = null, CancellationToken ct = default, IReadOnlyCollection<string>? scrubEnvironment = null,
+        IReadOnlyDictionary<string, string>? environment = null)
     {
         var info = new ProcessStartInfo(fileName)
         {
@@ -38,6 +41,8 @@ public sealed class ProcessRunner : IProcessRunner
         };
         foreach (var argument in arguments) info.ArgumentList.Add(argument);
         foreach (var variable in scrubEnvironment ?? []) info.Environment.Remove(variable);
+        // Set after scrubbing: an identity the launcher grants outranks whatever this process inherited.
+        foreach (var (key, value) in environment ?? new Dictionary<string, string>()) info.Environment[key] = value;
 
         using var process = new Process { StartInfo = info };
         try

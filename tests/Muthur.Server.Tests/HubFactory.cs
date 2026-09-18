@@ -13,7 +13,8 @@ namespace Muthur.Server.Tests;
 /// <summary>A full hub over an isolated temp data directory with a controllable clock.</summary>
 public sealed class HubFactory : WebApplicationFactory<Program>
 {
-    public string DataDir { get; } = Path.Combine(Path.GetTempPath(), "muthur-tests", Guid.NewGuid().ToString("n"));
+    /// <summary>Settable so a test can bring a second hub up over the same database, as a restart does.</summary>
+    public string DataDir { get; init; } = Path.Combine(Path.GetTempPath(), "muthur-tests", Guid.NewGuid().ToString("n"));
     public FakeTimeProvider Clock { get; } = new(new DateTimeOffset(2026, 1, 1, 12, 0, 0, TimeSpan.Zero));
 
     /// <summary>Extra configuration for a test class, e.g. ["Muthur:RequireCrossProviderReview"] = "true".</summary>
@@ -21,6 +22,7 @@ public sealed class HubFactory : WebApplicationFactory<Program>
 
     public FakePullRequestOpener PullRequests { get; } = new();
     public FakeInboundSource Source { get; } = new();
+    public FakeValidatorSessions Validators { get; } = new();
 
     protected override void ConfigureWebHost(IWebHostBuilder builder)
     {
@@ -34,6 +36,8 @@ public sealed class HubFactory : WebApplicationFactory<Program>
             services.RemoveAll<IPullRequestOpener>();
             services.AddSingleton<IPullRequestOpener>(PullRequests);
             services.AddSingleton<IInboundSource>(Source);
+            services.RemoveAll<IValidatorSessionLauncher>();
+            services.AddSingleton<IValidatorSessionLauncher>(Validators);
         });
     }
 
@@ -96,4 +100,32 @@ public sealed class FakeInboundSource : IInboundSource
         var newest = matching.Count > 0 ? matching[^1].UpdatedAt : cursor;
         return Task.FromResult(new SourceFetch(matching.Select(i => i.Item).ToList(), newest));
     }
+}
+
+/// <summary>Records what the conductor asked to start, without starting anything.</summary>
+public sealed class FakeValidatorSessions : IValidatorSessionLauncher
+{
+    private readonly List<ConductorAssignment> _started = [];
+    private readonly SemaphoreSlim _release = new(0);
+
+    /// <summary>When true, a started session blocks until <see cref="Finish"/>, so a test can hold the budget full.</summary>
+    public bool Block { get; set; }
+
+    public IReadOnlyList<ConductorAssignment> Started { get { lock (_started) return [.. _started]; } }
+
+    /// <summary>When set, every start throws it — a harness that is not installed, or no candidate left.</summary>
+    public Exception? Throw { get; set; }
+
+    /// <summary>When set, the real launcher answers instead, so a test can see how it actually fails.</summary>
+    public IValidatorSessionLauncher? Delegate { get; set; }
+
+    public async Task StartAsync(ConductorAssignment assignment, CancellationToken ct = default)
+    {
+        lock (_started) _started.Add(assignment);
+        if (Throw is { } failure) throw failure;
+        if (Delegate is { } real) await real.StartAsync(assignment, ct);
+        if (Block) await _release.WaitAsync(ct);
+    }
+
+    public void Finish(int count = 1) => _release.Release(count);
 }

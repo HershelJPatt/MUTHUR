@@ -104,6 +104,27 @@ muthur ask "Monthly or annual billing first?" --task T-12 --option monthly --opt
 Questions and messages for you appear on the dashboard's **Needs you** page (one-click answers); answering unblocks the
 task and wakes the agent.
 
+## The conductor
+
+A task that reaches `validating` waits for a validator to take the role. The conductor starts one, so a task that
+passes needs nobody awake:
+
+```bash
+muthur conductor on --founder      # off by default: upgrading a hub never starts spending on its own
+muthur conductor status            # running sessions, and the limits it staffs within
+```
+
+Each pass it looks for a task in `validating` whose required role nobody holds, and starts a session that takes
+that role — an ordinary registered agent with an ordinary token, no more authority than a terminal you open
+yourself. It prefers a harness *different* from the one that built the task, so one vendor checks another's work.
+It never staffs a `blocked` task, never contends for a held role, and after three failed verdicts on one task it
+stops and asks you instead. If it cannot *start* a session at all — no candidate, a harness missing — it gives up on
+that task after the same three attempts and tells you why, then quietly tries once more every half hour: the cause is
+usually something you fixed outside the hub, and you should not have to remember an incantation to resume.
+
+Workers have their hub credentials scrubbed because they have no authority; a validator is given an identity
+because its verdict decides whether work ships. Those are two launchers on purpose.
+
 ## Any model, any vendor
 
 `%LOCALAPPDATA%\Muthur\harnesses.json` maps tiers to an ordered list of `{harness, model, account}`. `muthur worker run`
@@ -146,6 +167,12 @@ on a different vendor than the author.
 | `Muthur:ClaimLeaseMinutes` / `RoleLeaseMinutes` | 30 / 30 | appsettings or `Muthur__…` environment variables |
 | `Muthur:IngestIntervalSeconds` | 180 | |
 | `Muthur:RequireCrossProviderReview` | false | |
+| `Muthur:ConductorEnabled` | false | the starting value only; `muthur conductor on --founder` is stored in the database and outlives a restart |
+| `Muthur:ConductorMaxSessions` | 2 | validator sessions running at once |
+| `Muthur:ConductorSessionMinutes` | 45 | a session that has not finished by then is killed |
+| `Muthur:ConductorMaxAttempts` | 3 | failed verdicts on one task before it stops and asks you |
+| `Muthur:ConductorIntervalSeconds` | 60 | how often it looks; floored at 15s, and `conductor status` reports the floored value |
+| `Muthur:ConductorStallProbeMinutes` | 30 | after it gives up on a task, how long before it quietly tries once more |
 | `Muthur:DiscordBotToken` | — | bot token for `discord:` ingest; set it as `Muthur__DiscordBotToken`, never in a file |
 
 A build under test must never share the live hub's port or data: prefix **every** command with its own

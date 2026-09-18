@@ -33,6 +33,7 @@ public static class Routes
     public static string RequestAction(int id, string action) => $"{Requests}/{id}/{action}";
 
     public const string Tiers = Api + "/harness/tiers";
+    public const string Conductor = Api + "/conductor";
     public const string AccountLimits = Api + "/harness/limits";
     public const string WorkerRuns = Api + "/workers/runs";
 

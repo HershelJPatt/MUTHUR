@@ -21,6 +21,24 @@ public sealed class MuthurOptions
     public bool BackgroundServices { get; set; } = true;
 
     /// <summary>
+    /// Whether the conductor may start validator sessions. Off by default: upgrading a hub must never begin
+    /// spending the founder's subscription on its own.
+    /// </summary>
+    public bool ConductorEnabled { get; set; }
+    /// <summary>How many validator sessions the conductor may have running at once.</summary>
+    public int ConductorMaxSessions { get; set; } = 2;
+    /// <summary>A validator session that has not finished by then is killed; the role's lease then lapses on its own.</summary>
+    public int ConductorSessionMinutes { get; set; } = 45;
+    /// <summary>Failed verdicts on one task before the conductor stops restaffing it and asks the founder.</summary>
+    public int ConductorMaxAttempts { get; set; } = 3;
+    public int ConductorIntervalSeconds { get; set; } = 60;
+    /// <summary>The interval the conductor actually runs at: a floor, so a small number cannot turn it into a spin.</summary>
+    public int EffectiveConductorIntervalSeconds => Math.Max(MinimumConductorIntervalSeconds, ConductorIntervalSeconds);
+    public const int MinimumConductorIntervalSeconds = 15;
+    /// <summary>After a pair gives up starting, how long before one probe is let through. Its cause is usually fixed from outside the hub.</summary>
+    public int ConductorStallProbeMinutes { get; set; } = 30;
+
+    /// <summary>
     /// Bot token for <c>discord:</c> ingest, in practice set as the environment variable
     /// <c>Muthur__DiscordBotToken</c>. It is never recorded in the ledger, logged, or returned by an endpoint.
     /// </summary>
