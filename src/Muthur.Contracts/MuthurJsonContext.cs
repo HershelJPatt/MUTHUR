@@ -33,6 +33,8 @@ namespace Muthur.Contracts;
 [JsonSerializable(typeof(DefineRoleRequest))]
 [JsonSerializable(typeof(RoleDto))]
 [JsonSerializable(typeof(IReadOnlyList<RoleDto>))]
+[JsonSerializable(typeof(RoleHolderDto))]
+[JsonSerializable(typeof(IReadOnlyList<RoleHolderDto>))]
 [JsonSerializable(typeof(RoleBriefDto))]
 [JsonSerializable(typeof(ImplementedRequest))]
 [JsonSerializable(typeof(VerdictRequest))]

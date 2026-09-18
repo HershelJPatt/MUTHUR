@@ -1,13 +1,16 @@
 namespace Muthur.Contracts;
 
-public sealed record DefineRoleRequest(string Key, string? Brief = null, bool? IsValidator = null);
+public sealed record DefineRoleRequest(string Key, string? Brief = null, bool? IsValidator = null, int? Holders = null);
 
+/// <param name="Agent">The agent holding it. One row per live hold.</param>
+public sealed record RoleHolderDto(string Agent, DateTimeOffset HeldSince, DateTimeOffset LeaseExpires);
+
+/// <param name="Capacity">How many agents may hold this role at once. Always 1 for a non-validator role.</param>
 public sealed record RoleDto(
     string Key,
     bool IsValidator,
-    string? Holder,
-    DateTimeOffset? HeldSince,
-    DateTimeOffset? LeaseExpires,
+    int Capacity,
+    IReadOnlyList<RoleHolderDto> Holders,
     bool HasBrief,
     DateTimeOffset UpdatedAt);
 
