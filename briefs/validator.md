@@ -19,7 +19,8 @@ will report on the organization's own data without noticing. Prefix every comman
 
 ```bash
 T="MUTHUR_HOME=$SCRATCH MUTHUR_URL=http://127.0.0.1:7461"    # SCRATCH: a per-run subdirectory of your scratchpad
-env $T ./artifacts/validate/muthur.exe status
+M=./artifacts/validate/muthur.exe                            # always the installed CLI, never a build output
+env $T $M status
 ```
 
 **Always pass `-Destination` to `scripts/install.ps1`, and never `-RestartRunning`.** Its default destination is the
@@ -40,11 +41,15 @@ From the repository root, never in the main checkout — the agent that built it
 git worktree add --detach .worktrees/validate-T-n <branch>
 cd .worktrees/validate-T-n
 dotnet build        # 0 warnings, 0 errors. Warnings are errors here.
-dotnet test         # ~3900 tests, about 30 seconds
+dotnet test         # ~3900 tests, a minute or so (59-71s observed) - nearly all of it the server suite
 powershell -NoProfile -File scripts/install.ps1 -Destination ./artifacts/validate
 ```
 
-A clean `dotnet test` is table stakes, not evidence. It is what the agent that built this already ran.
+A clean `dotnet test` is table stakes, not evidence. It is what the agent that built this already ran. The server
+suite sits for most of that minute with nothing on screen; that is normal, not a hang.
+
+Run every command block in this brief, rather than reading it and agreeing. A brief whose commands were only ever
+read is how `$X` — a variable defined nowhere — survived six validation rounds in the brief this one replaces.
 
 **The server suite is flaky under parallel load** (T-22). A single failure that passes on a re-run is probably that;
 a failure that repeats is not. Say which you saw, and never let "re-run until green" become the habit — that is
@@ -53,7 +58,7 @@ precisely how a real regression gets through.
 ## Launch and drive it
 
 ```bash
-env $T ./artifacts/validate/muthur.exe up        # JSON status, exit 0; `status` answers in well under a second
+env $T $M up        # JSON status, exit 0; `status` answers in well under a second
 ```
 
 Then build a small organization in scratch and use it. From the worktree root:
@@ -72,8 +77,8 @@ testing the gate and it is not firing, check that first.
 Races are how the leases are proven:
 
 ```bash
-(env $T $X task claim T-1 --as-agent a1 >/dev/null 2>&1; echo "a1=$?") & \
-(env $T $X task claim T-1 --as-agent a2 >/dev/null 2>&1; echo "a2=$?") & wait      # exactly one 0, one 3
+(env $T $M task claim T-1 --as-agent a1 >/dev/null 2>&1; echo "a1=$?") & \
+(env $T $M task claim T-1 --as-agent a2 >/dev/null 2>&1; echo "a2=$?") & wait      # exactly one 0, one 3
 ```
 
 **The dashboard**: `curl -s http://127.0.0.1:<port>/<path>` gives server-rendered HTML. Virtualized lists and
