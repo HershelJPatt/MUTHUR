@@ -100,6 +100,9 @@ public sealed class FakeInboundSource : IInboundSource
         var newest = matching.Count > 0 ? matching[^1].UpdatedAt : cursor;
         return Task.FromResult(new SourceFetch(matching.Select(i => i.Item).ToList(), newest));
     }
+
+    public Task ProbeAsync(string location, CancellationToken ct = default) =>
+        FailWith is not null ? throw new InvalidOperationException(FailWith) : Task.CompletedTask;
 }
 
 /// <summary>Records what the conductor asked to start, without starting anything.</summary>

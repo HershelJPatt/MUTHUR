@@ -21,6 +21,19 @@ public sealed class FileChannel(TimeProvider clock) : IOutboundChannel
         // The body goes out byte for byte: it is what was hashed and reviewed.
         await File.AppendAllTextAsync(address, $"--- {clock.GetUtcNow():O}\n{body}\n", ct);
     }
+
+    public Task ProbeAsync(string address, CancellationToken ct = default)
+    {
+        try
+        {
+            Directory.CreateDirectory(Path.GetDirectoryName(address)!);
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or NotSupportedException)
+        {
+            throw new ChannelException("the directory cannot be created or written");
+        }
+        return Task.CompletedTask;
+    }
 }
 
 /// <summary>Posts to a Discord channel through a webhook URL (the target's address, a credential the agents never see).</summary>
@@ -46,6 +59,15 @@ public sealed class DiscordWebhookChannel(IHttpClientFactory http) : IOutboundCh
         if (!response.IsSuccessStatusCode)
             throw new ChannelException($"Discord answered HTTP {(int)response.StatusCode}");
     }
+
+    public async Task ProbeAsync(string address, CancellationToken ct = default)
+    {
+        using var client = http.CreateClient(nameof(DiscordWebhookChannel));
+        // A webhook URL answers a GET with the webhook's own metadata and posts nothing.
+        using var response = await client.GetAsync(address, ct);
+        if (!response.IsSuccessStatusCode)
+            throw new ChannelException($"Discord answered HTTP {(int)response.StatusCode}");
+    }
 }
 
 /// <summary>Comments on a GitHub issue or pull request. Address: "owner/repo#123". Uses the GitHub CLI's authentication.</summary>
@@ -60,6 +82,15 @@ public sealed class GitHubIssueChannel(IProcessRunner processes) : IOutboundChan
         var (repo, number) = Parse(address);
         var result = await processes.RunAsync("gh", ["api", "--method", "POST", $"repos/{repo}/issues/{number}/comments", "--input", "-"],
             Environment.CurrentDirectory, stdin: System.Text.Json.JsonSerializer.Serialize(new { body }), timeout: TimeSpan.FromSeconds(60), ct: ct);
+        if (!result.Ok) throw new ChannelException($"the GitHub CLI failed (exit {result.ExitCode}); is it logged in? gh auth status");
+    }
+
+    public async Task ProbeAsync(string address, CancellationToken ct = default)
+    {
+        var (repo, number) = Parse(address);
+        // Reading the issue proves both that gh is logged in and that the issue is still there to comment on.
+        var result = await processes.RunAsync("gh", ["api", $"repos/{repo}/issues/{number}"],
+            Environment.CurrentDirectory, timeout: TimeSpan.FromSeconds(60), ct: ct);
         if (!result.Ok) throw new ChannelException($"the GitHub CLI failed (exit {result.ExitCode}); is it logged in? gh auth status");
     }
 
