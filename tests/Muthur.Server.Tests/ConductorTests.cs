@@ -1,6 +1,9 @@
 using System.Net.Http.Json;
+using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.DependencyInjection;
 using Muthur.Contracts;
+using Muthur.Core.Entities;
+using Muthur.Data;
 using Muthur.Server.Services;
 
 namespace Muthur.Server.Tests;
@@ -56,6 +59,26 @@ public sealed class ConductorTests : IDisposable
         while (Conductor.RunningCount > 0 && Environment.TickCount64 < deadline) await Task.Yield();
         Assert.Equal(0, Conductor.RunningCount);
     }
+
+    /// <summary>One rejection: the checker takes the role, votes no, and the task goes back to its owner.</summary>
+    private static async Task RejectAsync(HttpClient checker, string id, string evidence)
+    {
+        (await checker.PostAsync(Routes.RoleAction("win-validator", "take"), null)).EnsureSuccessStatusCode();
+        (await checker.PostActionAsync(id, "fail", new VerdictRequest("win-validator", evidence))).EnsureSuccessStatusCode();
+        (await checker.PostAsync(Routes.RoleAction("win-validator", "release"), null)).EnsureSuccessStatusCode();
+    }
+
+    /// <summary>A real commit on the task branch, so the next `implemented` records a head the cap can tell apart.</summary>
+    private void MoveHead(string branch = "task/T-1-feature")
+    {
+        _repo.Git("checkout", "-q", branch);
+        _repo.Write("feature.txt", $"fixed at {_repo.Git("rev-parse", "HEAD")}\n");
+        _repo.Commit($"{branch}: another fix");
+        _repo.Git("checkout", "-q", "main");
+    }
+
+    private async Task<IReadOnlyList<EventDto>> EventsAsync() =>
+        (await _hub.Founder().GetFromJsonAsync(Routes.Events, MuthurJsonContext.Default.IReadOnlyListEventDto))!;
 
     private async Task<IReadOnlyList<MessageDto>> FounderMessagesAsync() =>
         (await _hub.Founder().GetFromJsonAsync($"{Routes.Messages}?founder=true", MuthurJsonContext.Default.IReadOnlyListMessageDto))!;
@@ -214,6 +237,143 @@ public sealed class ConductorTests : IDisposable
         var events = await _hub.Founder().GetFromJsonAsync(Routes.Events, MuthurJsonContext.Default.IReadOnlyListEventDto);
         Assert.Contains(events!, e => e.Type == "conductor.exhausted");
         Assert.DoesNotContain(events!, e => e.Type == "conductor.staffing");
+    }
+
+    [Fact]
+    public async Task A_task_fixed_on_a_new_commit_is_staffed_again_however_often_it_failed_before()
+    {
+        // T-13's own history: three rejections on three commits, each finding a different real defect, each
+        // fixed before the next attempt. The whole-history count excluded it from unattended validation for
+        // good - the loop working exactly as designed, punished as though it were going nowhere.
+        _hub.Settings["Muthur:ConductorMaxAttempts"] = "3";
+        await SetUpAsync("win-validator");
+        await DefineAsync("win-validator");
+        var (owner, id) = await OwnedTaskInValidationAsync();
+        var checker = await _hub.RegisterAgentAsync("checker");
+
+        for (var round = 1; round <= 3; round++)
+        {
+            await RejectAsync(checker, id, $"broken, round {round}");
+            MoveHead();
+            (await owner.PostActionAsync(id, "implemented", new ImplementedRequest("task/T-1-feature"))).EnsureSuccessStatusCode();
+        }
+
+        Assert.Equal(3, (await EventsAsync()).Count(e => e.Type == "validation.failed"));
+        Assert.Equal(1, await Conductor.RunPassAsync());
+        await SettledAsync();
+
+        var events = await EventsAsync();
+        Assert.DoesNotContain(events, e => e.Type == "conductor.exhausted");
+        Assert.Single(events, e => e.Type == "conductor.staffing");
+        Assert.Empty(await FounderMessagesAsync());
+    }
+
+    [Fact]
+    public async Task A_task_that_comes_back_on_the_same_commit_is_stopped_and_the_founder_is_told_why()
+    {
+        // The ceiling the founder asked for: an owner resubmitting the identical commit is the pathology the
+        // cap was built for, and it costs one `rev-parse` to tell apart from a task that is converging.
+        _hub.Settings["Muthur:ConductorMaxAttempts"] = "3";
+        await SetUpAsync("win-validator");
+        await DefineAsync("win-validator");
+        var (owner, id) = await OwnedTaskInValidationAsync();
+        var checker = await _hub.RegisterAgentAsync("checker");
+
+        for (var round = 1; round <= 3; round++)
+        {
+            await RejectAsync(checker, id, $"broken, round {round}");
+            (await owner.PostActionAsync(id, "implemented", new ImplementedRequest("task/T-1-feature"))).EnsureSuccessStatusCode();
+        }
+
+        Assert.Equal(0, await Conductor.RunPassAsync());
+        Assert.Empty(_hub.Validators.Started);
+
+        var events = await EventsAsync();
+        Assert.Single(events, e => e.Type == "conductor.exhausted");
+        Assert.DoesNotContain(events, e => e.Type == "conductor.staffing");
+        Assert.StartsWith(
+            $"{id} \"Build the feature\" has failed validation 3 times and came back on the same commit, so the " +
+            "conductor has stopped restaffing it. Change the branch and mark it implemented again, re-spec it, " +
+            "cancel it, or raise Muthur:ConductorMaxAttempts.",
+            Assert.Single(await FounderMessagesAsync()).Body);
+    }
+
+    [Fact]
+    public async Task A_later_resubmission_on_the_same_commit_is_new_information_and_is_announced_again()
+    {
+        _hub.Settings["Muthur:ConductorMaxAttempts"] = "3";
+        await SetUpAsync("win-validator");
+        await DefineAsync("win-validator");
+        var (owner, id) = await OwnedTaskInValidationAsync();
+        var checker = await _hub.RegisterAgentAsync("checker");
+
+        for (var round = 1; round <= 3; round++)
+        {
+            await RejectAsync(checker, id, $"broken, round {round}");
+            (await owner.PostActionAsync(id, "implemented", new ImplementedRequest("task/T-1-feature"))).EnsureSuccessStatusCode();
+        }
+
+        await Conductor.RunPassAsync();
+        await Conductor.RunPassAsync();   // the same round says it once, however often the conductor passes
+        Assert.Single(await FounderMessagesAsync());
+
+        // Rejected a fourth time, and resubmitted on that same commit again. That is a new round, and the
+        // founder hearing about it a second time is the point: nothing has changed, again.
+        await RejectAsync(checker, id, "broken, round 4");
+        (await owner.PostActionAsync(id, "implemented", new ImplementedRequest("task/T-1-feature"))).EnsureSuccessStatusCode();
+        await Conductor.RunPassAsync();
+
+        var messages = await FounderMessagesAsync();
+        Assert.Equal(2, messages.Count);
+        Assert.Contains(messages, m => m.Body.StartsWith($"{id} \"Build the feature\" has failed validation 4 times and came back on the same commit", StringComparison.Ordinal));
+        Assert.Equal(2, (await EventsAsync()).Count(e => e.Type == "conductor.exhausted"));
+        Assert.Empty(_hub.Validators.Started);
+    }
+
+    [Fact]
+    public async Task A_round_recorded_before_heads_were_kept_is_staffed_rather_than_stalled_on_the_absence()
+    {
+        // Every `task.implemented` already in the ledger when this shipped carries no head. A task must never
+        // be stopped for evidence nobody wrote down, and T-13 - the task this rule was written for - is
+        // exactly that case.
+        _hub.Settings["Muthur:ConductorMaxAttempts"] = "3";
+        await SetUpAsync("win-validator");
+        await DefineAsync("win-validator");
+        var (owner, id) = await OwnedTaskInValidationAsync();
+        var checker = await _hub.RegisterAgentAsync("checker");
+
+        // Three real rejections on one commit, ending with the task back in progress with its owner.
+        for (var round = 1; round <= 3; round++)
+        {
+            if (round > 1)
+                (await owner.PostActionAsync(id, "implemented", new ImplementedRequest("task/T-1-feature"))).EnsureSuccessStatusCode();
+            await RejectAsync(checker, id, $"broken, round {round}");
+        }
+
+        // The round before the current one was recorded by the code this task replaces: same event, same
+        // moment - the task is in progress, so this is a legal place for one - but no head in the payload.
+        // Appending is the only way to produce it, because the ledger refuses to be rewritten and the new
+        // code always records a head.
+        await using (var db = await _hub.Services.GetRequiredService<IDbContextFactory<MuthurDb>>().CreateDbContextAsync())
+        {
+            db.Events.Add(new LedgerEvent
+            {
+                At = _hub.Clock.GetUtcNow(),
+                Actor = "owner",
+                Type = "task.implemented",
+                TaskId = (await db.Tasks.SingleAsync()).Id,
+                PayloadJson = """{"branch":"task/T-1-feature","spec":"specs/T-1.md","validators":["win-validator"]}""",
+            });
+            await db.SaveChangesAsync();
+        }
+
+        (await owner.PostActionAsync(id, "implemented", new ImplementedRequest("task/T-1-feature"))).EnsureSuccessStatusCode();
+
+        Assert.Equal(1, await Conductor.RunPassAsync());
+        await SettledAsync();
+
+        Assert.DoesNotContain(await EventsAsync(), e => e.Type == "conductor.exhausted");
+        Assert.Empty(await FounderMessagesAsync());
     }
 
     [Fact]
