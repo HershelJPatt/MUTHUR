@@ -255,3 +255,55 @@ The Verification section now says all this in advance, so the next validator is 
 to press a button that is one line long.
 
 `dotnet build`: clean, 0 warnings. `dotnet test`: 3708 Core, 23 Launch, 65 Cli, 293 Server — all green.
+
+## Amendment after the second validation round (2026-09-19, top-right)
+
+`conductor-validator` failed `8783ade` with the finding this task is named for, built on a real installed hub
+with 210 open requests:
+
+> At 210 open requests the oldest, most costly blocking question disappears and the badge undercounts.
+> `GET requests?limit=1000` confirms all 210 and #1 ranked first.
+
+Both halves were right, and both were mine.
+
+### The cap was applied before the ranking
+
+`ListAsync` took `.OrderByDescending(r => r.Id).Take(200)` and *then* ranked the survivors. So at 210 open the
+newest 200 were kept and ranked beautifully, while the one question that mattered most — the oldest, with
+three tasks stopped behind it — was discarded by an id sort before the ranking ever saw it. The feature was
+correct on every queue small enough not to need it.
+
+The cap now runs **after** the ranking: the read is bounded by `Ceiling` (5000, an order of magnitude above
+any real queue and far above what is shown), the ranking is over all of it, and `Take(limit)` then keeps the
+200 costliest rather than the 200 newest.
+
+### The badge counted the page, not the queue
+
+`Total` was `Requests.Count + Outbound.Count + Unread` over the **capped** lists, so 210 waiting read as 200.
+A badge reading 200 while 210 wait is worse than no badge, because it is believable — and T-18 says plainly
+that the number itself is the metric.
+
+`RequestService.OpenSummaryAsync` and `OutboundService.SummaryAsync` now return the count and the earliest
+`CreatedAt` over everything waiting. `FounderAttentionDto` carries `RequestsWaiting`, `OutboundWaiting` and
+`OldestWaitingSince` as values rather than deriving them from the lists, and `Total` is built from those. The
+panel's "N open" comes from the same summary.
+
+### Tests
+
+- `At_two_hundred_and_ten_the_costliest_question_is_still_the_first_one_shown` — the validator's scenario:
+  210 open, the first-asked question blocking a task with three children, 209 newer routine ones. The list is
+  still 200 long, the critical one is `[0]`, the badge and the panel both say 210. With the cap put back
+  before the ranking it fails, naming the wrong request as first.
+- `The_summary_the_badge_is_built_from_counts_everything_open` — the summary's count and age, and the age
+  moving on when the oldest is answered.
+
+### One test I wrote and removed
+
+I first wrote `The_oldest_wait_is_read_from_everything_waiting_not_from_the_shown_page`, asserting the oldest
+request was absent from the capped list while still setting the age. It failed, and it was the test that was
+wrong: among equally costly questions the tiebreak is oldest-first, so the oldest is never the one dropped.
+Constructing a queue where it *is* dropped needs 200-odd requests that all outrank it, which proves nothing
+the first test does not. It is replaced by an assertion at `OpenSummaryAsync`, where the behaviour actually
+lives. A test that cannot fail for the reason it claims is worse than no test.
+
+`dotnet build`: clean, 0 warnings. `dotnet test`: 3708 Core, 23 Launch, 65 Cli, 295 Server — all green.

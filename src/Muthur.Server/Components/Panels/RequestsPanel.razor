@@ -5,7 +5,7 @@
 <section class="panel">
     <div class="panel-head">
         <span class="panel-title">Waiting on you</span>
-        <span class="panel-sub">@_requests.Count open</span>
+        <span class="panel-sub">@_open open</span>
     </div>
     <div class="panel-body">
         @if (_requests.Count == 0)
@@ -61,6 +61,8 @@
     // The same, for the one box that answers a whole group; keyed by the group rather than by a request.
     private readonly Dictionary<string, string> _groupDrafts = [];
     private IReadOnlyList<FounderRequestDto> _requests = [];
+    // What is waiting, not what fitted on the page: at 210 open the list is capped and this is not.
+    private int _open;
     private IReadOnlyList<IReadOnlyList<FounderRequestDto>> _groups = [];
     private DateTimeOffset _now;
 
@@ -74,6 +76,7 @@
     {
         _now = Clock.GetUtcNow();
         _requests = await Requests.ListAsync(openOnly: true);
+        _open = (await Requests.OpenSummaryAsync()).Count;
 
         // Exact question and exact options, never a near match: guessing that two questions are the same is how
         // a founder answers one they did not read. The service has already put them in cost order, and grouping

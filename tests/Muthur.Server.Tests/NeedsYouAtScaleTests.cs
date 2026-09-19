@@ -295,4 +295,72 @@ public sealed class NeedsYouAtScaleTests : IDisposable
             Assert.Single(inbox.Messages, m => m.Body.Contains($"#{id}") && m.Body.Contains("hold"));
         }
     }
+
+    /// <summary>
+    /// The defect a validator found at two hundred and ten, which is the number this task is named for: the
+    /// cap was applied in id order before the ranking, so the newest 200 were kept and the oldest, costliest
+    /// question — the one three tasks were stopped behind — fell off the page it exists to be at the top of.
+    /// </summary>
+    [Fact]
+    public async Task At_two_hundred_and_ten_the_costliest_question_is_still_the_first_one_shown()
+    {
+        await _hub.AddProjectAsync();
+        var agent = await _hub.RegisterAgentAsync("asker");
+
+        // Asked first, so an id-ordered cap is exactly what drops it.
+        var parent = await TaskAsync(agent, "Critical parent");
+        foreach (var n in new[] { 1, 2, 3 }) await TaskAsync(agent, $"Child {n}", parent);
+        var critical = await AskAsync(agent, "Critical policy?", parent, "hold", "go");
+
+        for (var i = 0; i < 209; i++) await AskAsync(agent, $"Routine policy {i}?", null, "hold", "go");
+
+        var summary = await Requests.OpenSummaryAsync();
+        Assert.Equal(210, summary.Count);
+
+        var shown = await Requests.ListAsync(openOnly: true);
+        Assert.Equal(200, shown.Count);                 // the page is still capped
+        Assert.Equal(critical, shown[0].Id);            // but it is capped by cost, not by age
+        Assert.Equal(3, shown[0].Dependents);
+
+        // The founder is told what is waiting, not what fitted: a badge reading 200 while 210 wait is worse
+        // than no badge, because it is believable.
+        var attention = await Attention.ReadAsync();
+        Assert.Equal(210, attention.Total);
+        Assert.Equal(210, attention.RequestsWaiting);
+        Assert.Equal(200, attention.Requests.Count);
+
+        var page = await _hub.CreateClient().GetStringAsync("/needs-you");
+        Assert.Contains("210 open", page);
+        Assert.Contains($"blocking {parent}", page);
+        Assert.Contains("3 behind it", page);
+        Assert.Contains("class=\"badge\">210<", await _hub.CreateClient().GetStringAsync("/"));
+    }
+
+    /// <summary>
+    /// The count and the age both come from a summary over everything open, not from the capped list. The
+    /// count is the half a page can disagree about — the age cannot, because among equally costly questions
+    /// the oldest ranks first and so is never the one dropped. Asserted at the summary rather than pretended
+    /// at the page: a test that cannot fail for the reason it claims is worse than no test.
+    /// </summary>
+    [Fact]
+    public async Task The_summary_the_badge_is_built_from_counts_everything_open()
+    {
+        await _hub.AddProjectAsync();
+        var agent = await _hub.RegisterAgentAsync("asker");
+        Assert.Equal((0, null), await Requests.OpenSummaryAsync());
+
+        var asked = _hub.Clock.GetUtcNow();
+        var first = await AskAsync(agent, "The very first question?");
+        _hub.Clock.Advance(TimeSpan.FromHours(9));
+        await AskAsync(agent, "A later one?");
+
+        Assert.Equal((2, asked), await Requests.OpenSummaryAsync());
+        Assert.Equal(asked, (await Attention.ReadAsync()).OldestWaitingSince);
+
+        // Answering the oldest moves the age on, rather than leaving the queue looking older than it is.
+        await Requests.AnswerAsync(Caller.Founder, first, new AnswerRequest("yes"));
+        var after = await Requests.OpenSummaryAsync();
+        Assert.Equal(1, after.Count);
+        Assert.Equal(asked + TimeSpan.FromHours(9), after.Oldest);
+    }
 }

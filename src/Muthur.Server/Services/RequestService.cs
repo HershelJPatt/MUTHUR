@@ -132,7 +132,14 @@ public sealed class RequestService(Ledger ledger, LeasePolicy leases)
         {
             var query = db.FounderRequests.AsQueryable();
             if (openOnly) query = query.Where(r => r.Status == RequestStatus.Open);
-            var rows = await query.OrderByDescending(r => r.Id).Take(Math.Clamp(limit, 1, 1000)).ToListAsync(ct);
+            // The cap on the open queue is applied *after* the ranking, never before it. Taking the newest 200
+            // and then sorting them by cost is how the one question that mattered most — the oldest, with three
+            // tasks stopped behind it — fell off the page at 210 open. The read is still bounded: Ceiling is an
+            // order of magnitude above any queue a founder has, and far above the number they are shown.
+            var rows = await query
+                .OrderByDescending(r => r.Id)
+                .Take(openOnly ? Ceiling : Math.Clamp(limit, 1, 1000))
+                .ToListAsync(ct);
             var taskIds = rows.Where(r => r.TaskId != null).Select(r => r.TaskId!.Value).Distinct().ToList();
             var tasks = await db.Tasks.Where(t => taskIds.Contains(t.Id)).ToDictionaryAsync(t => t.Id, t => t, ct);
 
@@ -160,9 +167,26 @@ public sealed class RequestService(Ledger ledger, LeasePolicy leases)
                     .ThenByDescending(r => r.BlocksTask)
                     .ThenBy(r => r.CreatedAt)
                     .ThenBy(r => r.Id)          // a total order, so two reads of the same queue never disagree
+                    .Take(Math.Clamp(limit, 1, 1000))
                     .ToList()
                 : dtos.OrderBy(r => r.Id).ToList();
         }, ct);
+
+    /// <summary>How many questions are open and when the oldest was asked, whatever the page is showing.</summary>
+    /// <remarks>
+    /// The count the founder is told must be the number that is waiting, not the number that fitted: a badge
+    /// reading 200 while 210 wait is worse than no badge, because it is believable.
+    /// </remarks>
+    public Task<(int Count, DateTimeOffset? Oldest)> OpenSummaryAsync(CancellationToken ct = default) =>
+        ledger.ReadAsync(async (db, _) =>
+        {
+            var open = db.FounderRequests.Where(r => r.Status == RequestStatus.Open);
+            var count = await open.CountAsync(ct);
+            return (count, count == 0 ? null : (DateTimeOffset?)await open.MinAsync(r => r.CreatedAt, ct));
+        }, ct);
+
+    /// <summary>The most open requests one read will rank. Far above any real queue, and far above what is shown.</summary>
+    private const int Ceiling = 5000;
 
     /// <summary>A task that leaves its owner's hands takes its open questions with it; nobody is waiting for the answer any more.</summary>
     public static async Task WithdrawForTaskAsync(Mutation m, int taskId, string reason, CancellationToken ct)
