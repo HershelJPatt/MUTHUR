@@ -437,3 +437,142 @@ Read that sentence as *"exactly as stored"*.
 
 **Not fixed here:** whether registration should lower-case the harness at all is a separate question, and
 changing it would alter what every existing agent row means. Left alone deliberately — a follow-up below.
+
+## Amendment 2 — a catalog that cannot be *read* is a source that could not be read (2026-09-19)
+
+Validation failed the branch, and correctly. The finding, reproduced twice on an installed build: hold
+`harnesses.json` open with `FileShare.None` and `muthur doctor --offline` exits 1 with a single
+`category=doctor`, `subject=DoctorAgentCheck`, `status=fail` line reading *"This check itself failed: The
+process cannot access the file … because it is being used by another process."* Every `agent` row vanishes.
+The Design calls reaching that line a defect in this task (§Patterns, *"`DoctorAgentCheck` must never
+throw"*), and the check's own doc comment promises *"a source that could not be read costs this check its
+confidence, never its honesty"*. Both are broken by the one case the spec did not foresee.
+
+**The gap was in the spec, not the implementation.** Design §4 says *"Catch `MuthurException` only. Anything
+else is a defect and belongs in `DoctorService`'s own net."* That sentence was written believing
+`HarnessService.ReadCatalog` could only fail by failing to parse. It cannot only fail that way:
+
+```csharp
+// src/Muthur.Server/Services/HarnessService.cs:87-114
+private List<CatalogTier> ReadCatalog()
+{
+    EnsureCatalogExists();                                   // File.WriteAllText — outside the try
+    try { … JsonDocument.Parse(File.ReadAllText(CatalogPath) …) … }
+    catch (Exception ex) when (ex is JsonException or KeyNotFoundException or InvalidOperationException)
+    { throw Fail.Rule("catalog_invalid", …); }                // IOException is not in this filter
+}
+```
+
+`File.ReadAllText` on a locked, deleted, or directory-shaped path throws `IOException` or
+`UnauthorizedAccessException`, and neither is caught.
+
+**The fix belongs at the source, not at the four call sites.** `ReadCatalog` already has a contract — *a
+catalog it cannot use is reported as a `MuthurException`* — and every caller is written to that contract:
+`HarnessPanel.LoadAsync:54` and `Console.razor:424` each catch `MuthurException` with a comment saying in as
+many words that a bad catalog must not take the page down. The escaping `IOException` is a hole in the
+contract, which is why the validator also saw `GET /operations` return HTTP 500 under the same lock. Adding
+a second catch clause to `DoctorAgentCheck` would patch one caller and leave the dashboard, the tiers
+endpoint and both session launchers holding the same hole. One change closes all of them, and adds no new
+behaviour anywhere: a 422 naming the file is what those callers already handle.
+
+### Design §4a — `src/Muthur.Server/Services/HarnessService.cs`
+
+`ReadCatalog` becomes total over its failure modes:
+
+- Move `EnsureCatalogExists();` **inside** the `try`, so a data directory that cannot be written to is
+  reported the same way rather than escaping.
+- Add a second catch clause, before the existing one — a file is read before it is parsed:
+
+  ```csharp
+  catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+  {
+      throw Fail.Rule("catalog_unreadable", $"{CatalogPath} could not be read: {ex.Message}");
+  }
+  ```
+
+  The two filters are disjoint; neither `IOException` nor `UnauthorizedAccessException` appears in the
+  existing one. `catalog_unreadable` is a new stable code and is deliberately not `catalog_invalid`: the
+  founder's file may be perfectly good and merely held open by something else, and the remedy is different.
+- Give `ReadCatalog` a one-line XML doc stating the guarantee callers depend on: it throws `MuthurException`
+  and nothing else. That is the sentence this amendment exists to make true.
+
+Nothing else in `HarnessService` changes. `Startup.cs:137`'s direct call to `EnsureCatalogExists` is left
+alone: a hub that cannot write its own catalog at startup should fail to start.
+
+### Design §4b — `src/Muthur.Server/Services/DoctorAgentCheck.cs`
+
+One comment. Line 39's `// catalog_invalid; the Tiers panel reports the same thing` becomes
+`// catalog_invalid or catalog_unreadable; the Tiers panel reports the same thing`. The `catch
+(MuthurException ex)` itself is now correct and stays exactly as it is — *"anything else is a defect"* is
+the right rule once `ReadCatalog` keeps its side of it. Do not widen it.
+
+The `harness`/`harnesses.json` warn line needs no change: `{catalogProblem}` renders
+`HarnessService`'s message verbatim, and the new one names the path and the reason as the old one does.
+
+### Unit B — an unreadable catalog is a warning, not a crash
+
+The whole of this amendment, with three tests. Files modified only; nothing is created.
+
+- `src/Muthur.Server/Services/HarnessService.cs` (§4a)
+- `src/Muthur.Server/Services/DoctorAgentCheck.cs` (§4b — the comment, nothing else)
+- `tests/Muthur.Server.Tests/DoctorAgentTests.cs` (one added test)
+- `tests/Muthur.Server.Tests/HarnessTests.cs` (one added test)
+- `tests/Muthur.Server.Tests/DashboardOperationsTests.cs` (one added test)
+
+**How the tests make the catalog unreadable.** A `FileShare.None` lock is not a portable way to do this — on
+Unix .NET's file locking is advisory and a second read succeeds. Put a **directory** at the catalog's path
+instead: `File.Exists` is then false, so `EnsureCatalogExists` reaches `File.WriteAllText`, which throws
+`UnauthorizedAccessException` on both platforms. That arrangement also proves the `EnsureCatalogExists` move,
+which a read-side lock would not. The hub writes the real catalog at startup, so each test does this *after*
+the first request that starts the host — the same ordering
+`A_catalog_that_will_not_parse_is_reported_rather_than_thrown` already uses:
+
+```csharp
+File.Delete(CatalogPath);
+Directory.CreateDirectory(CatalogPath);
+```
+
+#### `tests/Muthur.Server.Tests/DoctorAgentTests.cs`
+
+Add `A_catalog_that_cannot_be_read_costs_the_check_its_fail`, beside the parse test it mirrors. A kit holding
+`claude`; a live `straight` on `claude` and a live `corner` on `cladue` registered through the API; then the
+catalog path replaced by a directory. Assert:
+
+- exactly one `harness` check, subject `MuthurEnvironment.HarnessFile`, `Warn`, detail containing
+  `CatalogPath`;
+- no check has category `"doctor"` — that is what `DoctorService` emits when a check throws, and its absence
+  is the finding this test exists for;
+- `straight` is `Ok`, judged by the kit alone;
+- `corner` is **`Warn`, not `Fail`**, and `report.Fail == 0`: it is live and in neither source the check could
+  read, but one of those sources never answered, so a fail is not available. Say that in a comment.
+
+#### `tests/Muthur.Server.Tests/HarnessTests.cs`
+
+Add `A_catalog_that_cannot_be_read_is_reported_rather_than_crashing_the_endpoint`. Call `TierAsync` once so
+the host is up and the catalog exists, replace the path with a directory, then `GET Routes.Tiers` with a raw
+client and assert `HttpStatusCode.UnprocessableEntity` — `ErrorMiddleware.cs:34` maps a rule violation there —
+rather than a 500. `GetFromJsonAsync` will not do; use `GetAsync` and read `StatusCode`.
+
+#### `tests/Muthur.Server.Tests/DashboardOperationsTests.cs`
+
+Add `The_operations_page_still_renders_when_the_catalog_cannot_be_read`. Fetch `/operations` once, replace
+the catalog path with a directory, fetch it again: `GetStringAsync` throws on a 500, so the second fetch
+succeeding is the assertion, and the page must still contain the Tiers panel's error text — the message
+`HarnessPanel` puts on screen, which now names the file. This is the validator's second observation, and the
+only reason it was ever separable from the first is that they share one cause.
+
+**Acceptance:** `dotnet build` clean with no warnings, `dotnet test` green, all three tests above present and
+passing, and the whole of Unit A's suite unchanged and still passing.
+
+**Re-verification.** The end-to-end block under Verification is re-run as written, plus the validator's own
+reproduction, which must now be quiet:
+
+```powershell
+$lock = [IO.File]::Open((Join-Path $env:MUTHUR_HOME 'harnesses.json'), 'Open', 'Read', 'None')
+./artifacts/t61/muthur.exe doctor --offline    # a harness/harnesses.json warn; every agent row still there
+$lock.Dispose()
+```
+
+Passing is: no `category=doctor` line, an `agent` row for every standing agent, and `corner` reported `warn`
+rather than `fail` while the lock is held — the catalog could not be read, so the check has lost its
+confidence but not its honesty.
