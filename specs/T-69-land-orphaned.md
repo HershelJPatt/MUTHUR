@@ -215,3 +215,22 @@ rather than queueing it, so a slow land delays staffing and never doubles it. Bo
 and `gh`. MUTHUR's own project is `merge`, so nothing is exposed today — but this is an authority change
 nobody has signed off, and it is recorded here so the first PR-mode project meets the decision rather than
 discovers it.
+
+## Amendment 2 — accepted, including the part I did not ask for
+
+The bounded retry is built on the `_stalls` shape rather than a second mechanism, keyed on `(task, branch
+head)`, and a head that moves clears the cooldown outright rather than waiting it out. A conflict arms no
+cooldown, correctly: a conflict takes the task out of `validated` and therefore out of the state this plan
+looks at, so there is nothing to hold back and cooling it would only have delayed a genuine resubmission.
+
+**`SetEnabledAsync` now clears `_landStalls` alongside `_stalls`, and that was required rather than extra.**
+The founder message ends by promising that `muthur conductor off --founder && muthur conductor on --founder`
+retries at once. A message that tells the founder an incantation which does not work is worse than no message,
+so making it true is part of shipping the sentence. It follows the rule already written beside `_stalls` —
+turning the conductor on is the founder saying try again — and it has its own test.
+
+The dropped `Failures` count is right too: a land refused once has told the founder everything a land refused
+three times would, so the cooldown arms on the first refusal and there is no `ConductorMaxAttempts` here.
+
+The residual `task.land_refused` from `LifecycleService` is bounded as a consequence — one per probe instead
+of one per pass — without touching `LifecycleService.cs` or `GitLander.cs`.
