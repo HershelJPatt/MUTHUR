@@ -285,3 +285,30 @@ The mutation this spec asks for — drop the check and confirm the tests fail �
 `if (false && !RoleKey.IsValid(key))`, and the sandbox's auto-mode classifier refused the test run as
 security-test removal. The honest equivalent was allowed: point the call sites back at `Normalize`, which is
 literally `main`'s own code. Worth knowing before someone concludes the verification is impossible.
+
+## Proof (2026-09-18)
+
+```
+dotnet build   0 warnings, 0 errors
+dotnet test    Launch 23 + Cli 40 + Core 3708 (+16) + Server 223 (+17), all passing
+```
+
+The assertion test carries no numbers. `ConductorTests.The_longest_role_key_there_can_be_still_makes_an_agent_name_the_hub_accepts`
+probes the key limit by growing a string while `RoleKey.IsValid` accepts it, then takes the identity form and
+the name limit from `ValidatorSessionLauncher.IdentityFor`, which builds `conductor-{role}` itself and
+registers it — so `AgentService.NamePattern` is what accepts or refuses. One character too long and
+`RegisterAsync` throws `invalid_name`.
+
+Mutation-checked in both directions, by the implementer:
+
+- `RoleKey` set to 48 / `{0,47}` — the "fix" this spec warns against — fails with
+  `Agent names are 1-48 chars ...` thrown from `AgentService.RegisterAsync` via `IdentityFor`.
+- the call sites pointed back at `Normalize` (literally `main`'s code) — all six
+  `A_validator_no_role_could_ever_be_is_refused_when_a_project_is_added` cases fail.
+
+Both reverted and the suite re-run, so nothing mutated survives. `RoleKey.Rule`'s founder-facing text is
+pinned to `MaxLength` by a Core test, so the sentence cannot drift from the enforced limit either.
+
+Not verified here: the end-to-end section, which needs an installed CLI and a scratch hub. No worker may run
+`muthur`, and the orchestrator has not run it either — the CLI surface is unchanged, but that is an
+expectation, not a measurement. It is the validator's.
