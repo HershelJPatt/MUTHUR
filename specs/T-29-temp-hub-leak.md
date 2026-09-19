@@ -320,3 +320,50 @@ real EF error in a test that did not expect one.
 
 A test that forgets the flag gets a retained directory and a `kept` line naming it. That is the intended
 behavior — visible, not silent — and no fallback may hide it.
+
+## Amendment 3 — the cleanup script needed an age guard (2026-09-19)
+
+The script as frozen would delete a hub directory another agent's test run was using at that moment. This
+machine runs a dozen agents against one shared `%TEMP%\muthur-tests`, and `Remove-Item -Recurse` deletes files
+as it walks: against a live hub it takes `muthur.db` and `muthur.db-wal` and only then hits the still-locked
+`muthur.log` and throws. The script would count one `failed` and move on, leaving the other agent a corrupted
+database under a running test. That is a worse failure than the leak, and silent on our side.
+
+`clean-test-temp.ps1` therefore takes `-OlderThanMinutes` (default 60) and skips any subdirectory whose own
+`LastWriteTimeUtc` is newer than the cutoff. Skipped directories are counted and reported separately from kept
+ones — they are not evidence, they are simply not ours to touch yet, and a later pass takes them.
+`-All` overrides the retention rule, not the age guard.
+
+## Proof (2026-09-19)
+
+Integrated branch, `TEMP`/`TMP` pointed at a fresh scratch directory:
+
+```
+dotnet build   →  0 Warning(s), 0 Error(s)
+dotnet test -v n
+  Muthur.Launch.Tests    23/23      Test Run Successful.
+  Muthur.Core.Tests      3708/3708  Test Run Successful.
+  Muthur.Cli.Tests       55/55      Test Run Successful.
+  Muthur.Server.Tests    240/240    Test Run Successful.
+
+muthur-tests: 187 removed, 0 kept (logged an error), 0 could not be removed. Root: ...\final2\muthur-tests
+```
+
+Leftovers afterwards: `muthur-tests` **0**, `muthur-cli-tests` **0**.
+
+The one-off cleanup, run against the real root at 50,670 directories:
+
+```
+C:\Users\hersh\AppData\Local\Temp\muthur-tests: examined 50670, deleted 48845, kept 474, skipped (too recent) 1351, failed 0.
+```
+
+474 directories kept because their logs recorded an error, 1,351 skipped because other agents were writing to
+them — the guard doing exactly the job it was added for.
+
+### Open question, not blocking
+
+`muthur ask` #14 is with the founder: the summary line is visible at `dotnet test -v n` but **not** at plain
+`dotnet test`, because VSTest's console logger at minimal verbosity prints only the result line and failing
+tests. The options offered were (A) a cleanup failure fails the run, (B) leave it at `-v n` and document that,
+(C) `VSTestVerbosity=normal` for the server test project. The branch implements B's behavior, which is the
+status quo of the three and the only one that needs no further change. A and C are each a small follow-up.
