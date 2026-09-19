@@ -70,8 +70,14 @@ All of this happens **before** the first `dotnet publish`, so a refusal costs no
 - `git -C $source rev-parse --short HEAD` → the commit.
 - `git -C $source rev-parse --git-common-dir` and `--git-dir`: when they differ, `$source` is a **linked
   worktree**, and its path is named in the line.
-- If `$source` is not a git repository at all, print `published from a non-git directory <path>` and carry
+- If `$source` is not a git repository at all, print `Published from a non-git directory <path>` and carry
   on. That is unusual but not wrong — it must not fail.
+- **A repository with no commits is not a non-git directory.** When `rev-parse --git-dir` succeeds but
+  `rev-parse --abbrev-ref HEAD` fails (an unborn HEAD), print
+  `Published from <path>, a repository with no commits.` Reported by Unit A's implementer, who found the
+  first version of this spec would call it a non-git directory — wrong, and wrong in the direction this task
+  is about. Practically unreachable, since the script lives in the repository, but a sentence that is wrong
+  when it is finally reached is worse than one that refuses.
 
 **2. Refuse a dirty tree.** `git -C $source status --porcelain --untracked-files=no`. If it returns
 anything, throw:
@@ -82,8 +88,27 @@ Commit them, or pass -Ref <ref> to publish a named commit instead.
 <the first 10 lines of git status --short>
 ```
 
-**Untracked files must not count** — `bin/`, `obj/` and `artifacts/` are untracked by design and every run
-would otherwise fail. This is why `--untracked-files=no` is not optional.
+**A blanket untracked check must not be used** — but a narrow one is required. This was refined after Unit
+A's implementer found the gap it leaves.
+
+- Tracked modifications anywhere: `git -C $source status --porcelain --untracked-files=no`, as above.
+- **Plus** untracked files in what actually gets published:
+  `git -C $source status --porcelain --untracked-files=normal -- src kit`.
+
+An untracked `.cs` under `src/` is compiled into the published binary, and an untracked file under `kit/` is
+copied into the install, while the provenance line names a commit containing neither. That is the same
+silently-wrong answer this task exists to remove, and it is squarely within the founder's stated reason for
+refusing a dirty tree at all: *publishing uncommitted work produces a binary that corresponds to no commit,
+which is unreproducible and unattributable.* Uncommitted work is uncommitted whether or not git has been
+told about it yet.
+
+Scoping it to `src` and `kit` is what keeps it safe. `bin/`, `obj/` and `artifacts/` are **gitignored**, and
+an ignored file never appears under `--untracked-files=normal` — proved by Unit A's implementer, whose first
+attempt at this case used a probe file under `artifacts/` and correctly threw the evidence away as worthless
+for exactly that reason. So this check is quiet in normal operation and fires only on genuinely new,
+uncommitted source.
+
+Both results are concatenated into the refusal's tail, which already shows what is wrong.
 
 **3. `-Ref <ref>`** (new `[string]$Ref` parameter). When given:
 
