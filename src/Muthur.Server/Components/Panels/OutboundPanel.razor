@@ -4,13 +4,20 @@
 
 <section class="panel">
     <div class="panel-head">
-        <span class="panel-title">Outbound</span>
-        <span class="panel-sub">@_awaiting need you · @_open in the gate</span>
+        <span class="panel-title">@(AwaitingOnly ? "Needs you · outbound" : "Outbound")</span>
+        @if (AwaitingOnly)
+        {
+            <span class="panel-sub">@_awaiting waiting</span>
+        }
+        else
+        {
+            <span class="panel-sub">@_awaiting need you · @_open in the gate</span>
+        }
     </div>
     <div class="panel-body">
         @if (_messages.Count == 0)
         {
-            <div class="empty">nothing wants to leave</div>
+            <div class="empty">@(AwaitingOnly ? "nothing is waiting to be sent" : "nothing wants to leave")</div>
         }
         @foreach (var message in _messages)
         {
@@ -24,6 +31,10 @@
                         <a class="event-task" href="/tasks/@task">@task</a>
                     }
                     <span class="card-age">@Format.Age(message.CreatedAt, _now)</span>
+                    @if (AwaitingOnly)
+                    {
+                        <span class="event-detail">· waiting @Format.Age(message.CreatedAt, _now)</span>
+                    }
                 </div>
                 @if (message.Flags.Count > 0)
                 {
@@ -79,6 +90,9 @@
 
     private const int Settled = 10;
 
+    /// <summary>Show only what the founder must decide. The gate's own page shows everything.</summary>
+    [Parameter] public bool AwaitingOnly { get; set; }
+
     // Kept per message id, so a reload triggered by someone else's event does not wipe what the founder is typing.
     private readonly Dictionary<string, string> _notes = [];
     private readonly Dictionary<string, string> _errors = [];
@@ -97,13 +111,15 @@
     {
         _now = Clock.GetUtcNow();
         // The service answers oldest first; the gate is read newest first, with only a tail of what is already decided.
-        var newestFirst = (await Outbound.ListAsync("all", 200)).Reverse().ToList();
-        _messages =
-        [
-            .. newestFirst.Where(m => m.Status == AwaitingFounder), // what needs the founder is never below the fold
-            .. newestFirst.Where(m => InTheGate.Contains(m.Status) && m.Status != AwaitingFounder),
-            .. newestFirst.Where(m => !InTheGate.Contains(m.Status)).Take(Settled),
-        ];
+        var newestFirst = (await Outbound.ListAsync(AwaitingOnly ? AwaitingFounder : "all", AwaitingOnly ? 500 : 200)).Reverse().ToList();
+        _messages = AwaitingOnly
+            ? newestFirst
+            :
+            [
+                .. newestFirst.Where(m => m.Status == AwaitingFounder), // what needs the founder is never below the fold
+                .. newestFirst.Where(m => InTheGate.Contains(m.Status) && m.Status != AwaitingFounder),
+                .. newestFirst.Where(m => !InTheGate.Contains(m.Status)).Take(Settled),
+            ];
         _awaiting = _messages.Count(m => m.Status == AwaitingFounder);
         _open = _messages.Count(m => InTheGate.Contains(m.Status));
 

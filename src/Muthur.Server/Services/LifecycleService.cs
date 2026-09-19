@@ -196,12 +196,22 @@ public sealed class LifecycleService(Ledger ledger, LeasePolicy leases, ITaskLan
             return lapsed.Count;
         }, ct);
 
-    public Task<TaskDto> VerdictAsync(Caller caller, string id, VerdictRequest request, bool pass, CancellationToken ct = default)
+    /// <summary><paramref name="outcome"/> is the verdict being recorded: yes, no, or blocked — the validator could not run at all.</summary>
+    public Task<TaskDto> VerdictAsync(Caller caller, string id, VerdictRequest request, Verdict outcome, CancellationToken ct = default)
     {
         caller.RequireIdentified();
+        var recorded = outcome switch
+        {
+            Verdict.Yes => "validation.passed",
+            Verdict.No => "validation.failed",
+            Verdict.Blocked => "validation.blocked",
+            _ => throw new ArgumentOutOfRangeException(nameof(outcome), outcome, "A recorded verdict is yes, no or blocked."),
+        };
         var validator = (request.Validator ?? "").Trim().ToLowerInvariant();
-        if (!pass && string.IsNullOrWhiteSpace(request.Evidence))
-            throw Fail.Rule("evidence_required", "A failed validation needs evidence: what you ran, what you saw, how to reproduce.");
+        if (outcome != Verdict.Yes && string.IsNullOrWhiteSpace(request.Evidence))
+            throw Fail.Rule("evidence_required", outcome == Verdict.Blocked
+                ? "A blocked validation needs evidence: what you tried, what stopped you, and what would let the next validator get further."
+                : "A failed validation needs evidence: what you ran, what you saw, how to reproduce.");
 
         return ledger.MutateAsync(caller, async m =>
         {
@@ -224,17 +234,17 @@ public sealed class LifecycleService(Ledger ledger, LeasePolicy leases, ITaskLan
                 throw Fail.Conflict("validation_claimed",
                     $"{Wire.TaskId(task.Id)} is being validated for '{validator}' by '{row.ClaimedBy?.Name}'.");
 
-            row.Verdict = pass ? Verdict.Yes : Verdict.No;
+            row.Verdict = outcome;
             row.Evidence = request.Evidence;
             row.AgentId = caller.AgentId;
             row.At = m.Now;
             ClearClaim(row);   // decided: nobody is working this pair any more
             task.UpdatedAt = m.Now;
-            m.Record(pass ? "validation.passed" : "validation.failed", task.Id, new { validator, by = caller.Name, evidence = request.Evidence });
+            m.Record(recorded, task.Id, new { validator, by = caller.Name, evidence = request.Evidence });
 
             await m.Db.SaveChangesAsync(ct);
             var rows = await m.Db.TaskValidations.Where(v => v.TaskId == task.Id).ToListAsync(ct);
-            if (!pass)
+            if (outcome == Verdict.No)
             {
                 // The round is over, so no claim on this task survives it.
                 foreach (var other in rows) ClearClaim(other);
@@ -245,6 +255,25 @@ public sealed class LifecycleService(Ledger ledger, LeasePolicy leases, ITaskLan
                 if (task.Owner is { } owner)
                     MessageService.PostFromHub(m, Recipient.Agent, owner.Name,
                         $"{Wire.TaskId(task.Id)} failed validation by {validator}; it is back in progress with you. Evidence: muthur task show {Wire.TaskId(task.Id)}", task.Id);
+            }
+            else if (outcome == Verdict.Blocked)
+            {
+                // The same return to the owner a failure does, and the reason a blocked task is heard once rather
+                // than restaffed forever: the conductor staffs only Validating, so nothing picks this up again.
+                task.State = TaskState.InProgress;
+                task.ClaimExpires = m.Now + leases.ClaimLease;
+                m.Record("task.validation_blocked", task.Id, new { validator, owner = task.Owner?.Name });
+                if (task.Owner is { } owner)
+                    MessageService.PostFromHub(m, Recipient.Agent, owner.Name,
+                        $"{Wire.TaskId(task.Id)} could not be validated by {validator}: it is back in progress with you. " +
+                        $"This is not a verdict on the work. Why: muthur task show {Wire.TaskId(task.Id)}", task.Id);
+
+                // And the founder: that a task needs something the organization cannot supply unattended is a fact
+                // only they can act on, and the failure this closes was exactly that it reached one inbox and stopped.
+                MessageService.PostFromHub(m, Recipient.Founder, null,
+                    $"{Wire.TaskId(task.Id)} \"{task.Title}\" needs something a validator could not supply: " +
+                    $"{Evidence.FirstLine(request.Evidence)}. It is back with {task.Owner?.Name ?? "its owner"}. " +
+                    $"Full evidence: muthur task show {Wire.TaskId(task.Id)}", task.Id);
             }
             else if (rows.All(v => v.Verdict == Verdict.Yes))
             {

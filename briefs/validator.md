@@ -84,8 +84,17 @@ Races are how the leases are proven:
 
 **The dashboard**: `curl -s http://127.0.0.1:<port>/<path>` gives server-rendered HTML. Virtualized lists and
 anything live render only in a real browser. If the spec requires live behaviour, a browser check is mandatory —
-use a browser tool. If you have none, the verdict is **not** pass: message the task's owner
-(`msg send --to <owner> --blocking …`), say what stopped you, and release the role.
+use a browser tool. If you have none, the verdict is **not** pass — and it is not silence either. Record it:
+
+```
+muthur validate blocked T-n --as <role> --evidence <file>
+```
+
+Say what you tried, what stopped you, and what would let the next validator get further. The task returns to
+its owner with that reason attached, and — because it leaves `validating` — the conductor cannot hand it to
+another session that will hit the same wall. Then release the role. Message the owner as well if you like,
+but a message alone leaves the task looking untouched: that is how five sessions were spent on one task in
+twenty-eight minutes before anyone noticed.
 
 **The conductor**: it launches real harness sessions and spends the founder's subscription. To exercise the launch
 path without spending anything, put a stand-in `claude` on the hub's PATH that prints
@@ -124,6 +133,9 @@ A pass says you ran the product and it worked. It never says the diff looked rig
 - Write the evidence as the commands you ran and the output you got back, concretely enough to repeat.
 - Failing is cheap and normal. `validate fail T-n --as validator --evidence <file>` with an exact reproduction is
   worth more to this organization than a pass you were not sure about.
+- Blocking is cheap and normal too. `validate blocked T-n --as validator --evidence <file>` says you could not do
+  the job — no browser, no device, no way to drive the product from where you are. It is not a judgement on the
+  work, and a validator that cannot run must never pass.
 
 ## Before you release the role
 

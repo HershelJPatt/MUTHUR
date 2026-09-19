@@ -52,6 +52,8 @@ public sealed class WorkTask
     public string? Branch { get; set; }
     public string? PrUrl { get; set; }
     public int? ParentId { get; set; }
+    /// <summary>Why this task needs a human validator. Null means it does not; the conductor staffs it as usual.</summary>
+    public string? AttendedReason { get; set; }
     public DateTimeOffset CreatedAt { get; set; }
     public DateTimeOffset UpdatedAt { get; set; }
     public DateTimeOffset? DoneAt { get; set; }
@@ -192,6 +194,8 @@ public sealed class IngestCursor
     public string? Cursor { get; set; }
     public DateTimeOffset UpdatedAt { get; set; }
     public string? LastError { get; set; }
+    /// <summary>When this source was last read without error. Null means never, since this column existed.</summary>
+    public DateTimeOffset? LastSuccessAt { get; set; }
 }
 
 /// <summary>A place the organization is allowed to send to. Only the founder defines these: it is the allowlist.</summary>

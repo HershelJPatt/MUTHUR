@@ -32,6 +32,30 @@ Every `muthur` call renews your leases. When idle for long stretches, run
    Give it: the spec path, the unit it owns, the exact verification commands. Nothing else — no hub access,
    no authority to merge or push. Use a stronger (mastermind-tier) sub-orchestrator instead of an implementer
    when the unit is itself a large or risky problem space.
+
+   `worker run` works — T-5 was built entirely this way, one unit on claude and one on codex. Three things
+   it will not tell you, learned by exercising it (T-15):
+
+   - **A worker cannot run `muthur`.** Hub commands are denied and it has no identity, deliberately. So the
+     `build` / `test` half of your spec's Verification is run by the worker, and **everything involving the
+     CLI, a scratch hub or a browser is run by you**. Never hand work to validation assuming a worker
+     executed an end-to-end block. It did not.
+   - **Check `committedByLauncher` on every report.** When it is true, the worker finished without
+     committing and the launcher committed on its behalf. Nothing is lost, but the report still says
+     `done`, so the worker's account of itself is already known to be incomplete — read that diff harder.
+   - **`skipped[]` does not list candidates passed over for being out of quota.** A limited account is
+     filtered out before any attempt, so the report names the harness that ran and gives no sign that your
+     first choice was skipped. If which vendor built a unit matters, record it yourself.
+
+   A worker that cannot do what it was asked returns `success: false`, `status: spec-problem`, no commits
+   and a clean tree, and says what was missing — enough to choose between re-spec and retry without opening
+   the worktree. Its *inputs*, though, degrade silently: a `muthur.project.json` that does not parse leaves
+   the worker with no build or test commands, and the report will not mention it. Verify the work yourself
+   before you trust a green report.
+
+   Check every branch a worker names, and verify your own base before you dispatch: worktree tooling has
+   handed implementers a stale base three times in a row here. Tell them to check `git log` rather than
+   trusting what you said the base was.
 5. **Review like it's going to production, because it is.** Read every diff. Run the build and the tests
    yourself. Check the change against the spec line by line, and against the codebase's conventions.
    Send work back with specific corrections until it is right. Fix trivial things by instructing the

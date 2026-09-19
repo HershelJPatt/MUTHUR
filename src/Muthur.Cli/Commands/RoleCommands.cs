@@ -76,6 +76,7 @@ public static class RoleCommands
 
         validate.Subcommands.Add(Verdict("pass", "The task works end to end on your platform."));
         validate.Subcommands.Add(Verdict("fail", "The task does not pass; it returns to its owner with your evidence."));
+        validate.Subcommands.Add(Verdict("blocked", "You could not validate it at all — say what stopped you. The task returns to its owner; this is not a verdict on the work."));
     }
 
     /// <summary>
@@ -104,7 +105,7 @@ public static class RoleCommands
     {
         var id = new Argument<string>("id") { Description = "Task id, e.g. T-12." };
         var asRole = new Option<string>("--as") { Description = "The validator role you are acting as.", Required = true };
-        var evidence = new Option<string?>("--evidence") { Description = "File with what you ran and saw (required for fail)." };
+        var evidence = new Option<string?>("--evidence") { Description = "File with what you ran and saw (required for fail and blocked)." };
         var note = new Option<string?>("--note") { Description = "Inline evidence instead of a file." };
         var command = new Command(name, description) { id, asRole, evidence, note };
         command.SetAction(async (parse, ct) =>

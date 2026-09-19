@@ -51,6 +51,7 @@ public static class Startup
         builder.Services.AddSingleton<LifecycleService>();
         builder.Services.AddSingleton<MessageService>();
         builder.Services.AddSingleton<RequestService>();
+        builder.Services.AddSingleton<FounderAttention>();
         builder.Services.AddSingleton<HarnessService>();
         builder.Services.AddSingleton<InboundService>();
         builder.Services.AddSingleton<OutboundService>();
@@ -66,6 +67,13 @@ public static class Startup
         builder.Services.AddSingleton<ConductorService>();
         builder.Services.AddSingleton<IPullRequestOpener, GhPullRequestOpener>();
         builder.Services.AddSingleton<ITaskLander, GitLander>();
+        builder.Services.AddSingleton<DoctorService>();
+        // Registered in the order DoctorService reports them, so the list reads like the report.
+        builder.Services.AddSingleton<IDoctorCheck, DoctorIngestCheck>();
+        builder.Services.AddSingleton<IDoctorCheck, DoctorOutboundCheck>();
+        builder.Services.AddSingleton<IDoctorCheck, DoctorProjectCheck>();
+        builder.Services.AddSingleton<IDoctorCheck, DoctorRepoCheck>();
+        builder.Services.AddSingleton<IDoctorCheck, DoctorRoleCheck>();
         if (options.BackgroundServices)
         {
             builder.Services.AddHostedService<LeaseSweeper>();
@@ -86,15 +94,18 @@ public static class Startup
         return options;
     }
 
-    /// <summary>Migrates the database and establishes instance identity. Runs before the server accepts requests.</summary>
+    /// <summary>Copies the database aside, migrates it, and establishes instance identity. Runs before the server accepts requests.</summary>
     public static async Task InitializeMuthurAsync(this WebApplication app)
     {
         var options = app.Services.GetRequiredService<MuthurOptions>();
         var clock = app.Services.GetRequiredService<TimeProvider>();
         var instance = app.Services.GetRequiredService<InstanceInfo>();
+        var backupLogger = app.Services.GetRequiredService<ILoggerFactory>().CreateLogger(typeof(DatabaseBackup));
+        var stopping = app.Lifetime.ApplicationStopping;
 
         await using (var db = await app.Services.GetRequiredService<IDbContextFactory<MuthurDb>>().CreateDbContextAsync())
         {
+            await DatabaseBackup.BeforeMigratingAsync(db, options, clock, backupLogger, stopping);
             await db.Database.MigrateAsync();
             if (db.Database.IsSqlite())
                 await db.Database.ExecuteSqlRawAsync("PRAGMA journal_mode=WAL;");

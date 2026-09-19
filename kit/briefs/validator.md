@@ -44,8 +44,10 @@ without a human, and where the credentials for a test identity come from.
 TODO(founder): the flows worth walking for a change of each kind, and anything that needs a real browser rather
 than a fetched page.
 
-If the product cannot be driven unattended, the verdict is **not** pass. Message the task's owner
-(`muthur msg send --to <owner> --blocking "…"`), say what stopped you, and release the role.
+If the product cannot be driven unattended, the verdict is **not** pass. Record it —
+`muthur validate blocked T-n --as <role> --evidence <file>` — saying what stopped you and what would let the
+next validator get further, then release the role. Message the owner too if you like, but the verdict is what
+the organization can see; a message alone leaves the task looking untouched.
 
 ## Healthy looks like
 
@@ -63,6 +65,8 @@ A pass says you ran the product and it worked. It never says the diff looked rig
   else could repeat it. Verdicts without that are worthless to the founder six weeks from now.
 - Failing is cheap and normal. `muthur validate fail T-n --as <role> --evidence <file>` with an exact
   reproduction is worth more to this organization than a pass you were not sure about.
+- Blocking is cheap and normal too. `muthur validate blocked T-n --as <role> --evidence <file>` says you
+  could not do the job, not that the work is bad. A validator that cannot run must never pass.
 
 ## Before you release the role
 

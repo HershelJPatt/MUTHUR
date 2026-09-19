@@ -30,7 +30,7 @@ public sealed class LifecycleTests : IDisposable
         var owner = await _hub.RegisterAgentAsync("owner");
         var task = await owner.AddTaskAsync("Build the feature");
         (await owner.ClaimAsync(task.Id)).EnsureSuccessStatusCode();
-        (await owner.PostActionAsync(task.Id, "spec", new SetSpecRequest("specs/T-1.md"))).EnsureSuccessStatusCode();
+        (await owner.PostActionAsync(task.Id, "spec", new SetSpecRequest(_repo.WriteSpec()))).EnsureSuccessStatusCode();
         _repo.BranchWithFile(branch, file, content);
         return (owner, task.Id);
     }
@@ -116,6 +116,99 @@ public sealed class LifecycleTests : IDisposable
     }
 
     [Fact]
+    public async Task A_blocked_validation_returns_the_task_to_its_owner_and_says_so_to_the_founder()
+    {
+        await _hub.AddProjectAsync(repoPath: _repo.Path, validators: ["win-validator"]);
+        await DefineRolesAsync("win-validator");
+        var (owner, id) = await ImplementableTaskAsync();
+        var validator = await _hub.RegisterAgentAsync("validator");
+        (await TakeAsync(validator, "win-validator")).EnsureSuccessStatusCode();
+        (await owner.PostActionAsync(id, "implemented", new ImplementedRequest("task/T-1-feature"))).EnsureSuccessStatusCode();
+
+        var silent = await validator.PostActionAsync(id, "blocked", new VerdictRequest("win-validator"));
+        Assert.Equal(HttpStatusCode.UnprocessableEntity, silent.StatusCode);
+        var refusal = await silent.ReadErrorAsync();
+        Assert.Equal("evidence_required", refusal.Code);
+        Assert.Contains("what stopped you", refusal.Message);
+
+        const string Reason = "No browser in this session, so the dashboard panel could not be opened.\nTried: the CLI, curl, the test suite.";
+        var blocked = await (await validator.PostActionAsync(id, "blocked", new VerdictRequest("win-validator", Reason))).ReadTaskAsync();
+
+        Assert.Equal(TaskState.InProgress, blocked.State);
+        Assert.Equal("owner", blocked.Owner);
+        Assert.NotNull(blocked.ClaimExpires);   // a fresh claim: the task is not instantly up for grabs
+        Assert.Equal("blocked", Assert.Single(blocked.Validations).Verdict);
+
+        var detail = await owner.GetTaskAsync(id);
+        Assert.Contains(detail.Events, e => e.Type == "validation.blocked"
+            && e.Payload.GetProperty("evidence").GetString()!.Contains("No browser in this session"));
+        Assert.Contains(detail.Events, e => e.Type == "task.validation_blocked"
+            && e.Payload.GetProperty("owner").GetString() == "owner");
+
+        var toOwner = Assert.Single((await owner.GetFromJsonAsync(Routes.Inbox, MuthurJsonContext.Default.InboxDto))!.Messages);
+        Assert.Contains("could not be validated by win-validator", toOwner.Body);
+        Assert.Contains("not a verdict on the work", toOwner.Body);
+
+        var toFounder = (await _hub.Founder().GetFromJsonAsync(Routes.Messages + "?founder=true", MuthurJsonContext.Default.IReadOnlyListMessageDto))!;
+        var told = Assert.Single(toFounder, x => x.Body.Contains("needs something a validator could not supply"));
+        Assert.Contains("No browser in this session, so the dashboard panel could not be opened.", told.Body);
+        Assert.DoesNotContain("Tried:", told.Body);   // one line, not the whole report
+        Assert.Contains("It is back with owner.", told.Body);
+    }
+
+    /// <summary>
+    /// The thing that must never happen: a validator that could not run must not be counted as one that approved.
+    /// </summary>
+    [Fact]
+    public async Task A_task_one_validator_blocked_is_not_validated_however_the_others_voted()
+    {
+        await _hub.AddProjectAsync(repoPath: _repo.Path, validators: ["win-validator", "web-validator"]);
+        await DefineRolesAsync("win-validator", "web-validator");
+        var (owner, id) = await ImplementableTaskAsync();
+        var validator = await _hub.RegisterAgentAsync("validator");
+        (await TakeAsync(validator, "win-validator")).EnsureSuccessStatusCode();
+        (await TakeAsync(validator, "web-validator")).EnsureSuccessStatusCode();
+        (await owner.PostActionAsync(id, "implemented", new ImplementedRequest("task/T-1-feature"))).EnsureSuccessStatusCode();
+
+        (await validator.PostActionAsync(id, "pass", new VerdictRequest("web-validator", "ran it, works"))).EnsureSuccessStatusCode();
+        var blocked = await (await validator.PostActionAsync(id, "blocked", new VerdictRequest("win-validator", "no Windows box in this session"))).ReadTaskAsync();
+
+        Assert.Equal(TaskState.InProgress, blocked.State);
+        Assert.NotEqual(TaskState.Validated, blocked.State);
+        Assert.Equal(["blocked", "yes"], blocked.Validations.Select(v => v.Verdict).Order());
+
+        // And it cannot be nudged over the line afterwards: the task has left validation.
+        var late = await validator.PostActionAsync(id, "pass", new VerdictRequest("win-validator", "changed my mind"));
+        Assert.Equal("not_validating", (await late.ReadErrorAsync()).Code);
+        Assert.Equal(TaskState.InProgress, (await owner.GetTaskAsync(id)).Task.State);
+
+        var land = await owner.PostAsync(Routes.TaskAction(id, "land"), null);
+        Assert.Equal("not_validated", (await land.ReadErrorAsync()).Code);
+    }
+
+    [Fact]
+    public async Task Blocking_needs_the_role_and_is_not_open_to_the_owner_either()
+    {
+        await _hub.AddProjectAsync(repoPath: _repo.Path, validators: ["win-validator"]);
+        await DefineRolesAsync("win-validator");
+        var (owner, id) = await ImplementableTaskAsync();
+        var stranger = await _hub.RegisterAgentAsync("stranger");
+        (await owner.PostActionAsync(id, "implemented", new ImplementedRequest("task/T-1-feature"))).EnsureSuccessStatusCode();
+
+        var noRole = await stranger.PostActionAsync(id, "blocked", new VerdictRequest("win-validator", "cannot run it"));
+        Assert.Equal("role_not_held", (await noRole.ReadErrorAsync()).Code);
+
+        (await TakeAsync(owner, "win-validator")).EnsureSuccessStatusCode();
+        var self = await owner.PostActionAsync(id, "blocked", new VerdictRequest("win-validator", "cannot run it"));
+        Assert.Equal("self_validation", (await self.ReadErrorAsync()).Code);
+
+        var unknown = await stranger.PostActionAsync(id, "blocked", new VerdictRequest("nobody-validator", "cannot run it"));
+        Assert.Equal("validator_not_required", (await unknown.ReadErrorAsync()).Code);
+
+        Assert.Equal(TaskState.Validating, (await owner.GetTaskAsync(id)).Task.State);
+    }
+
+    [Fact]
     public async Task Implemented_needs_a_spec_and_a_real_branch()
     {
         await _hub.AddProjectAsync(repoPath: _repo.Path);
@@ -133,7 +226,7 @@ public sealed class LifecycleTests : IDisposable
         var noSpec = await owner.PostActionAsync(task.Id, "implemented", new ImplementedRequest("task/T-1-x"));
         Assert.Equal("spec_required", (await noSpec.ReadErrorAsync()).Code);
 
-        (await owner.PostActionAsync(task.Id, "spec", new SetSpecRequest("specs/T-1.md"))).EnsureSuccessStatusCode();
+        (await owner.PostActionAsync(task.Id, "spec", new SetSpecRequest(_repo.WriteSpec()))).EnsureSuccessStatusCode();
         var ok = await (await owner.PostActionAsync(task.Id, "implemented", new ImplementedRequest("task/T-1-x"))).ReadTaskAsync();
         Assert.Equal(TaskState.Validated, ok.State); // the project requires no validators
     }

@@ -1,0 +1,76 @@
+@inherits LivePanel
+@inject DoctorService Doctor
+@inject TimeProvider Clock
+
+<section class="panel">
+    <div class="panel-head">
+        <span class="panel-title">Doctor</span>
+        <span class="panel-sub">@(_fail == 0 && _warn == 0 ? "all ok" : $"{_fail} fail · {_warn} warn")</span>
+    </div>
+    <div class="panel-body">
+        @if (_checks.Count == 0)
+        {
+            <div class="empty">nothing to check</div>
+        }
+        @foreach (var category in _checks.GroupBy(c => c.Category, StringComparer.Ordinal))
+        {
+            <div class="section-label">@category.Key</div>
+            @foreach (var check in category)
+            {
+                <div class="role-row">
+                    <span class="tag check-@Wire(check.Status)">@Wire(check.Status)</span>
+                    <span>@check.Subject</span>
+                    <span class="role-holder">@check.Detail@(check.LastSuccess is { } read ? " · last read " + Format.Age(read, _now) : "")</span>
+                </div>
+            }
+        }
+        <div class="btn-row">
+            <button class="btn" @onclick="RecheckAsync">Re-check</button>
+        </div>
+    </div>
+</section>
+
+@code {
+    private IReadOnlyList<CheckDto> _checks = [];
+    private int _fail;
+    private int _warn;
+    private DateTimeOffset _now;
+
+    // Roles go stale and leases lapse with time alone, so ask again even when nothing is written.
+    protected override TimeSpan? ClockInterval => TimeSpan.FromSeconds(60);
+
+    protected override bool IsRelevant(Muthur.Core.Entities.LedgerEvent e) =>
+        e.Type.StartsWith("ingest.", StringComparison.Ordinal)
+        || e.Type.StartsWith("role.", StringComparison.Ordinal)
+        || e.Type.StartsWith("project.", StringComparison.Ordinal)
+        || e.Type.StartsWith("outbound.", StringComparison.Ordinal)
+        || e.Type.StartsWith("task.", StringComparison.Ordinal);
+
+    // The panel refreshes on a timer and on events, so it reads what the hub already knows and never probes.
+    protected override async Task LoadAsync() => Apply(await Doctor.RunAsync(probe: false));
+
+    // The founder asked for the network to be touched; ReloadNowAsync would reload and discard the probed report.
+    private async Task RecheckAsync()
+    {
+        Apply(await Doctor.RunAsync(probe: true));
+        StateHasChanged();
+    }
+
+    // Stamped here rather than in LoadAsync so that the re-check path shares it too, and every age on one render
+    // is measured from the same instant.
+    private void Apply(DoctorDto report)
+    {
+        _now = Clock.GetUtcNow();
+        _checks = report.Checks;
+        _fail = report.Fail;
+        _warn = report.Warn;
+    }
+
+    /// <summary>The status as the wire spells it, which is also the suffix of its class in app.css.</summary>
+    private static string Wire(CheckStatus status) => status switch
+    {
+        CheckStatus.Warn => "warn",
+        CheckStatus.Fail => "fail",
+        _ => "ok",
+    };
+}

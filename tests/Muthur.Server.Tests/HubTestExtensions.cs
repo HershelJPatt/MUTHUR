@@ -45,6 +45,18 @@ public static class HubTestExtensions
         return (await response.Content.ReadFromJsonAsync(MuthurJsonContext.Default.TaskDto))!;
     }
 
+    /// <summary>The ledger once <paramref name="settled"/> holds — the conductor writes its outcome events from a detached task.</summary>
+    public static Task<IReadOnlyList<EventDto>> EventsWhenAsync(this HubFactory hub,
+        Func<IReadOnlyList<EventDto>, bool> settled, string because)
+    {
+        var founder = hub.Founder();
+        return Eventually.TrueAsync(async () =>
+        {
+            var events = await founder.GetFromJsonAsync(Routes.Events, MuthurJsonContext.Default.IReadOnlyListEventDto);
+            return events is not null && settled(events) ? events : null;
+        }, because);
+    }
+
     public static async Task<ErrorResponse> ReadErrorAsync(this HttpResponseMessage response) =>
         (await response.Content.ReadFromJsonAsync(MuthurJsonContext.Default.ErrorResponse))!;
 }

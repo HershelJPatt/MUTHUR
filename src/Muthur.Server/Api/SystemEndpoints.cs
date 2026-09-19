@@ -2,6 +2,7 @@ using System.Reflection;
 using Muthur.Contracts;
 using Muthur.Server.Auth;
 using Muthur.Server.Infrastructure;
+using Muthur.Server.Services;
 
 namespace Muthur.Server.Api;
 
@@ -23,6 +24,9 @@ public static class SystemEndpoints
                 options.DataDir,
                 options.DbProvider,
                 AppContext.BaseDirectory.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar)));
+
+        // Unauthenticated, exactly like status: nothing doctor returns is a secret.
+        app.MapGet(Routes.Doctor, (bool? probe, DoctorService doctor, CancellationToken ct) => doctor.RunAsync(probe ?? true, ct));
 
         app.MapPost(Routes.Shutdown, (IHostApplicationLifetime lifetime) =>
         {
