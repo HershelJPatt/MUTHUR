@@ -20,6 +20,12 @@ public static class Startup
         Directory.CreateDirectory(options.DataDir);
 
         builder.WebHost.UseUrls(options.Url);
+        // CreateBuilder registers Console, Debug, EventSource and — on Windows — EventLog. The Event Log is the
+        // problem: the hub never reads it, nothing in this repository does, and a session with ordinary user rights
+        // or a sandbox that denies it fails at a layer that has nothing to do with what MUTHUR does. Start from
+        // nothing and add back the two that have a reader.
+        builder.Logging.ClearProviders();
+        builder.Logging.AddConsole();
         builder.Logging.AddProvider(new FileLoggerProvider(Path.Combine(options.DataDir, MuthurEnvironment.LogFile)));
 
         builder.Services.AddSingleton(TimeProvider.System);
@@ -70,6 +76,7 @@ public static class Startup
         builder.Services.AddSingleton<DoctorService>();
         // Registered in the order DoctorService reports them, so the list reads like the report.
         builder.Services.AddSingleton<IDoctorCheck, DoctorIngestCheck>();
+        builder.Services.AddSingleton<IDoctorCheck, DoctorLoggingCheck>();
         builder.Services.AddSingleton<IDoctorCheck, DoctorOutboundCheck>();
         builder.Services.AddSingleton<IDoctorCheck, DoctorProjectCheck>();
         builder.Services.AddSingleton<IDoctorCheck, DoctorRepoCheck>();
