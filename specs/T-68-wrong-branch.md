@@ -74,7 +74,7 @@ writes a line, that it woke up somewhere else. Nothing in step 1's resolution pr
 
 ## Design
 
-Five edits. Every block below is verbatim: copy it, do not paraphrase it. The test in edit 5 pins phrases
+Six edits. Every block below is verbatim: copy it, do not paraphrase it. The test in edit 6 pins phrases
 from edits 1–4, so a reworded sentence is a failing build.
 
 ### 1. `kit/core/orchestrate.md` — step 4 says where the worktree comes from
