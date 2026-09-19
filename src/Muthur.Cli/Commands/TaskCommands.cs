@@ -8,6 +8,13 @@ public static class TaskCommands
 {
     private static Argument<string> Id() => new("id") { Description = "Task id, e.g. T-12." };
 
+    /// <summary>
+    /// The branch of the repository holding <paramref name="path"/>, or null when there is not one to name —
+    /// outside a repository, or on a detached HEAD, where git answers with the word "HEAD" and not a branch.
+    /// </summary>
+    private static string? StandingBranch(string path) =>
+        FileProvenance.Describe(path) is { Ref: { Length: > 0 } reference } && reference != "HEAD" ? reference : null;
+
     public static void AddTo(RootCommand root)
     {
         var task = new Command("task", "The task ledger: add, claim, and move work through its lifecycle.");
@@ -71,9 +78,18 @@ public static class TaskCommands
 
         var specId = Id();
         var specPath = new Argument<string>("path") { Description = "Spec file path relative to the repository root, e.g. specs/T-12.md." };
-        var spec = new Command("spec", "Attach the frozen spec to a task you own.") { specId, specPath };
-        spec.SetAction(async (parse, ct) => Output.Emit(parse, await HubClient.For(parse).PostAsync(
-            Routes.TaskAction(parse.GetValue(specId)!, "spec"), new SetSpecRequest(parse.GetValue(specPath)!), MuthurJsonContext.Default.SetSpecRequest, ct)));
+        var specBranch = new Option<string?>("--branch") { Description = "The branch the spec is committed on (default: the branch this checkout is on)." };
+        var spec = new Command("spec", "Attach the frozen spec to a task you own.") { specId, specPath, specBranch };
+        spec.SetAction(async (parse, ct) =>
+        {
+            // An orchestrator runs this from its own worktree, standing on the task branch, so the branch it is
+            // standing on is the answer almost every time. The hub treats it as a hint and looks elsewhere when
+            // that branch does not hold the file, so guessing wrong here costs nothing.
+            var path = parse.GetValue(specPath)!;
+            var branch = parse.GetValue(specBranch) ?? StandingBranch(path);
+            return Output.Emit(parse, await HubClient.For(parse).PostAsync(
+                Routes.TaskAction(parse.GetValue(specId)!, "spec"), new SetSpecRequest(path, branch), MuthurJsonContext.Default.SetSpecRequest, ct));
+        });
         task.Subcommands.Add(spec);
 
         var priorityId = Id();
