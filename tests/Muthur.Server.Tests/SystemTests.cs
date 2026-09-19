@@ -7,6 +7,7 @@ using Microsoft.Extensions.Hosting;
 using Muthur.Contracts;
 using Muthur.Server.Infrastructure;
 using Muthur.Server.Services;
+using Xunit.Sdk;
 
 namespace Muthur.Server.Tests;
 
@@ -75,11 +76,15 @@ public sealed class SystemTests : IDisposable
         using var hub = StoppingHub(out var founder, out var release);
         try
         {
+            // Every hub in this class appends to one muthur.log, and a sibling test puts an ErrorMiddleware
+            // line into it on purpose — so the claim is about what this request appended, not about the file.
+            var before = ReadHubLog().Length;
+
             Assert.Equal(HttpStatusCode.ServiceUnavailable, (await DefineTargetAsync(founder)).StatusCode);
 
             // An error line here is the same false alarm in the log that the 500 was on the wire — and
             // searching hub logs for exactly this line is how T-41 was found in the first place.
-            Assert.DoesNotContain(nameof(ErrorMiddleware), ReadHubLog(), StringComparison.Ordinal);
+            Assert.DoesNotContain(nameof(ErrorMiddleware), ReadHubLog()[before..], StringComparison.Ordinal);
         }
         finally
         {
@@ -167,13 +172,105 @@ public sealed class SystemTests : IDisposable
         // would stop being a 500 with a stack in the log and start saying "the hub is shutting down".
         using var hub = _hub.WithWebHostBuilder(b => b.ConfigureServices(s =>
             s.AddSingleton<IOutboundChannel>(new DisposedChannel(stopFirst: null))));
+        var founder = Founder(hub);
+        var before = ReadHubLog().Length;
 
-        var response = await DefineTargetAsync(Founder(hub), DisposedChannel.ChannelName);
+        var response = await DefineTargetAsync(founder, DisposedChannel.ChannelName);
 
         Assert.Equal(HttpStatusCode.InternalServerError, response.StatusCode);
         Assert.Equal("internal_error", (await response.ReadErrorAsync()).Code);
-        Assert.Contains(nameof(ErrorMiddleware), ReadHubLog(), StringComparison.Ordinal);
+        Assert.Contains(nameof(ErrorMiddleware), ReadHubLog()[before..], StringComparison.Ordinal);
     }
+
+    // ---- T-49: and what a request in flight when the hub is really disposed is told ---------------------
+    //
+    // Everything above holds disposal off with a StopGate, which is what makes it deterministic and also what
+    // leaves the case the guard exists for unexercised. Below, the host is disposed underneath a live request.
+
+    [Fact]
+    public async Task A_request_inside_a_hub_that_is_really_disposed_is_never_told_the_hub_broke()
+    {
+        // Parked inside the mutation rather than before it: DraftAsync calls Validate after the context and
+        // the transaction are open, so releasing it walks the request into SaveChangesAsync against a
+        // disposed hub — the step whose failures arrive wrapped. Parking before the mutation instead only
+        // ever reaches the first line of MutateAsync, which is not where any of this is decided.
+        var channel = new ParkedChannel(parkOn: DraftBody);
+        var hub = _hub.WithWebHostBuilder(b => b.ConfigureServices(s => s.AddSingleton<IOutboundChannel>(channel)));
+        var founder = Founder(hub);
+        (await DefineTargetAsync(founder, ParkedChannel.ChannelName)).EnsureSuccessStatusCode();
+        var before = ReadHubLog().Length;
+
+        var request = founder.PostAsJsonAsync(Routes.Outbound, new DraftOutboundRequest("news", DraftBody));
+        // Three observations, no sleeps: the channel says the request is parked, Dispose returning says the
+        // host is gone, and only then is the request let go into what is left of the hub.
+        await Eventually.TrueAsync(() => channel.Entered, "the draft never reached the channel");
+        await Eventually.CompletesAsync(Task.Run(() => { hub.Dispose(); return true; }), "disposing the hub never finished");
+        channel.Release();
+
+        // A disposed TestServer aborts what is still inside it rather than draining it, so this request ends
+        // at the transport instead of with a response — the connection going away is teardown, not an answer.
+        // What must not happen is the hub handing back a failure of its own, and that is exactly what a guard
+        // matched on the exception's type allows: the AggregateException raised out of SaveChangesAsync is
+        // not an ObjectDisposedException, so it walks out of the middleware unanswered and arrives here.
+        try
+        {
+            using var response = await Eventually.CompletesAsync(request, "the draft never came back");
+            Assert.False(response.StatusCode is HttpStatusCode.InternalServerError,
+                $"a request that met a disposed hub was told it broke: {await response.Content.ReadAsStringAsync()}");
+        }
+        catch (Exception ex) when (ex is not XunitException)
+        {
+            Assert.True(ex is HttpRequestException or TaskCanceledException,
+                $"a request that met a disposed hub was answered with the hub's own failure: {ex}");
+        }
+
+        Assert.DoesNotContain(nameof(ErrorMiddleware), ReadHubLog()[before..], StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task A_teardown_failure_is_refused_even_when_it_arrives_wrapped()
+    {
+        // What a really-disposed hub raises out of SaveChangesAsync is not an ObjectDisposedException but an
+        // AggregateException over one — measured, not assumed. Matching the type rather than the cause let
+        // exactly that shape through to be logged as an unhandled error and answered "the hub broke".
+        var gate = new StopGate();
+        using var hub = Gated(gate, s => s.AddSingleton<IOutboundChannel>(
+            sp => new DisposedChannel(sp.GetRequiredService<IHostApplicationLifetime>(), wrapped: true)));
+        try
+        {
+            var before = ReadHubLog().Length;
+
+            var response = await DefineTargetAsync(Founder(hub), DisposedChannel.ChannelName);
+
+            Assert.Equal(HttpStatusCode.ServiceUnavailable, response.StatusCode);
+            Assert.Equal("hub_stopping", (await response.ReadErrorAsync()).Code);
+            Assert.DoesNotContain(nameof(ErrorMiddleware), ReadHubLog()[before..], StringComparison.Ordinal);
+        }
+        finally
+        {
+            gate.Release();
+        }
+    }
+
+    [Fact]
+    public async Task A_wrapped_disposed_object_on_a_hub_that_is_not_stopping_is_still_an_internal_error()
+    {
+        // The mirror of the test above, and the reason matching the cause is not a blanket forgiveness: the
+        // same wrapped exception on a hub nobody has asked to stop is still a 500 with its stack in the log.
+        using var hub = _hub.WithWebHostBuilder(b => b.ConfigureServices(s =>
+            s.AddSingleton<IOutboundChannel>(new DisposedChannel(stopFirst: null, wrapped: true))));
+        var founder = Founder(hub);
+        var before = ReadHubLog().Length;
+
+        var response = await DefineTargetAsync(founder, DisposedChannel.ChannelName);
+
+        Assert.Equal(HttpStatusCode.InternalServerError, response.StatusCode);
+        Assert.Equal("internal_error", (await response.ReadErrorAsync()).Code);
+        Assert.Contains(nameof(ErrorMiddleware), ReadHubLog()[before..], StringComparison.Ordinal);
+    }
+
+    /// <summary>A draft body with nothing in it for the outbound gate to object to.</summary>
+    private const string DraftBody = "parked draft";
 
     /// <summary>The target definition T-41 was filed against.</summary>
     private Task<HttpResponseMessage> DefineTargetAsync(HttpClient founder, string channel = "file") =>
@@ -281,7 +378,12 @@ public sealed class SystemTests : IDisposable
     /// lifetime it raises the stopping signal before failing, which is the shutdown race; without one it is
     /// an ordinary defect on a hub nobody has asked to stop.
     /// </summary>
-    private sealed class DisposedChannel(IHostApplicationLifetime? stopFirst) : IOutboundChannel
+    /// <param name="wrapped">
+    /// Fails the way the layers between the middleware and the connection really do. A hub disposed
+    /// underneath a live request does not answer with an ObjectDisposedException: EF Core raises it out of
+    /// SaveChangesAsync wrapped in an AggregateException, which is the shape this reproduces.
+    /// </param>
+    private sealed class DisposedChannel(IHostApplicationLifetime? stopFirst, bool wrapped = false) : IOutboundChannel
     {
         public const string ChannelName = "disposed";
 
@@ -290,8 +392,44 @@ public sealed class SystemTests : IDisposable
         public void Validate(string address, string body)
         {
             stopFirst?.StopApplication();
-            throw new ObjectDisposedException("SQLitePCL.sqlite3");
+            Exception disposed = new ObjectDisposedException("SQLitePCL.sqlite3");
+            throw wrapped ? new AggregateException("An error occurred while writing to logger(s).", disposed) : disposed;
         }
+
+        public Task SendAsync(string address, string body, CancellationToken ct = default) => throw new NotSupportedException();
+
+        public Task ProbeAsync(string address, CancellationToken ct = default) => throw new NotSupportedException();
+    }
+
+    /// <summary>
+    /// A channel that holds a request inside the pipeline until a test lets it go, so the hub can be disposed
+    /// underneath it. <c>DraftAsync</c> validates from inside the mutation, which puts the parked request
+    /// past ErrorMiddleware's front guard and between <c>BeginTransactionAsync</c> and <c>SaveChangesAsync</c>.
+    /// </summary>
+    private sealed class ParkedChannel(string parkOn) : IOutboundChannel
+    {
+        public const string ChannelName = "parked";
+
+        private readonly TaskCompletionSource _entered = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        private readonly TaskCompletionSource _release = new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        /// <summary>The body whose validation parks; every other call passes straight through.</summary>
+        private readonly string _parkOn = parkOn;
+
+        public string Name => ChannelName;
+
+        /// <summary>True once a request is really inside the pipeline — the test's signal, not a guess at timing.</summary>
+        public bool Entered => _entered.Task.IsCompleted;
+
+        public void Validate(string address, string body)
+        {
+            if (body != _parkOn) return;
+            _entered.TrySetResult();
+            _release.Task.GetAwaiter().GetResult();
+        }
+
+        /// <summary>Lets the parked request walk on into whatever is left of the hub.</summary>
+        public void Release() => _release.TrySetResult();
 
         public Task SendAsync(string address, string body, CancellationToken ct = default) => throw new NotSupportedException();
 
