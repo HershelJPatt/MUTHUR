@@ -117,6 +117,26 @@ public static class TaskCommands
         task.Subcommands.Add(attended);
 
         var cancelId = Id();
+        var holdId = Id();
+        var holdReason = new Option<string?>("--reason") { Description = "Why this should not be landed yet. Required unless --clear." };
+        var holdClear = new Option<bool>("--clear") { Description = "Lift the hold." };
+        var hold = new Command("hold",
+            "Say this should not be landed yet, and why. Anyone may hold anyone's task; land warns and proceeds, never refuses.")
+            { holdId, holdReason, holdClear };
+        hold.SetAction(async (parse, ct) =>
+        {
+            var reason = parse.GetValue(holdReason);
+            var clear = parse.GetValue(holdClear);
+            // The same refusal as attended, and for the same reason: the wire cannot tell "lift it" from
+            // "set it, but I forgot --reason", so the CLI decides before it sends anything.
+            if (HoldRefusal(parse.GetResult(holdReason) is not null, reason, clear) is { } refusal)
+                return Output.Error(refusal.Code, refusal.Message, ExitCodes.RuleViolation);
+            return Output.Emit(parse, await HubClient.For(parse).PostAsync(
+                Routes.TaskAction(parse.GetValue(holdId)!, "hold"),
+                new HoldRequest(clear ? null : reason!.Trim()), MuthurJsonContext.Default.HoldRequest, ct));
+        });
+        task.Subcommands.Add(hold);
+
         var cancelReason = new Option<string?>("--reason");
         var cancel = new Command("cancel", "Cancel a task.") { cancelId, cancelReason };
         cancel.SetAction(async (parse, ct) => Output.Emit(parse, await HubClient.For(parse).PostAsync(
@@ -161,6 +181,15 @@ public static class TaskCommands
     /// round trip that would silently lift the flag instead. It branches on whether --reason was *supplied*, never
     /// on whether it has content: `--reason "   " --clear` is a contradiction to refuse, not a clear to obey.
     /// </summary>
+    public static (string Code, string Message)? HoldRefusal(bool reasonSupplied, string? reason, bool clear) =>
+        (reasonSupplied, clear) switch
+        {
+            (true, true) => ("reason_required", "Pass --reason or --clear, not both."),
+            (true, false) when !string.IsNullOrWhiteSpace(reason) => null,
+            (false, true) => null,
+            _ => ("reason_required", "Say why this should not be landed yet: --reason \"<why>\", or --clear to lift it."),
+        };
+
     public static (string Code, string Message)? AttendedRefusal(bool reasonSupplied, string? reason, bool clear) =>
         (reasonSupplied, clear) switch
         {

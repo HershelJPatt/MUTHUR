@@ -34,7 +34,13 @@ public sealed record TaskDto(
     DateTimeOffset UpdatedAt,
     DateTimeOffset? DoneAt,
     IReadOnlyList<ValidationDto> Validations,
-    string? AttendedReason);
+    string? AttendedReason,
+    string? HoldReason = null,
+    string? HoldBy = null,
+    DateTimeOffset? HoldExpires = null);
+
+/// <summary>A reason that is null or blank is the clear, the same convention <c>attended</c> uses.</summary>
+public sealed record HoldRequest(string? Reason);
 
 public sealed record ValidationDto(
     string Validator,

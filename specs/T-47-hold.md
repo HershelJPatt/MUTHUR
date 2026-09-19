@@ -35,7 +35,8 @@ Constraints that are not obvious:
 - Every state change goes through `Ledger.MutateAsync` and records an event in the same transaction.
 - Time comes from the injected `TimeProvider`.
 - Everything crossing HTTP is registered in `MuthurJsonContext`; the CLI is Native AOT.
-- The board card is not inside a `<Virtualize>`, so the pill is in the prerendered HTML.
+- `BoardPanel` **does** render its cards inside a `<Virtualize>`, which emits nothing to a fetch. The task
+  detail page does not, and is where a lander deciding whether to override is reading anyway.
 - Warnings are errors.
 
 ## Non-goals
@@ -131,15 +132,19 @@ somebody clears it, because the next lander should see that this task has alread
     the holder, the reason verbatim and when it was placed.
   - The founder and the holder are each told, and the message contains the reason verbatim.
   - An **expired** hold does not warn, is not counted and is not shown.
-  - The board shows the pill with the holder and the age while live, and does not once it has expired.
+  - The task page shows the holder, the age and the reason while live, and shows nothing once it has expired.
 - **Depends on:** Units A–C.
 - **Acceptance:** each test fails with its unit reverted.
 
 ## Verification
 
 Every command here runs with no browser, no GUI and no human — the sessions that validate this are started by
-a conductor, and the board card is in the prerendered HTML. Nothing here can only be seen by eye, so it is
-not marked `attended`.
+a conductor. Nothing here can only be seen by eye, so it is not marked `attended`, and there is no
+`needs:` line.
+
+The hold is asserted on **`/tasks/T-n`**, not on the board. `BoardPanel` renders its cards inside a
+`<Virtualize>`, which emits nothing during a prerender — settled on T-16, and true again here. The card
+still carries a pill for a human reading the board; the detail page is what a test and a lander both read.
 
 ```
 dotnet build
@@ -153,3 +158,33 @@ muthur task hold T-1 --reason "collides with T-2's migration" --as-agent other
 muthur task land T-1 --as-agent owner      # exit 0
 muthur log --since 0 | Select-String 'hold_overridden'
 ```
+
+## Proof
+
+`dotnet build`: clean, 0 warnings. `dotnet test`: 3736 Core, 23 Launch, 159 Cli, 388 Server — all green.
+
+The migration adds three columns and rebuilds nothing on the way up, so it produces no
+`PRAGMA foreign_keys` warning — T-13's lesson, checked rather than assumed.
+
+### One claim in this spec was wrong, and the test found it
+
+The Context section first said the board card "is not inside a `<Virtualize>`, so the pill is in the
+prerendered HTML". It is, and it isn't. `The_board_says_who_holds_it_and_for_how_long` failed on exactly
+that, which is the same limit T-16 recorded and I restated from memory instead of checking.
+
+The fix is not to weaken the assertion. The hold now also renders on `/tasks/T-n`, which is not virtualized
+and is the page a lander is actually reading when they decide whether to override — so the test asserts the
+thing a human would read, and the card keeps its pill for the board. Both sections above are corrected.
+
+### What is countable now
+
+```
+task.held              { reason, by, expires }
+task.hold_cleared      { was, by }
+task.hold_overridden   { by, reason, placedAt, landedBy }
+task.landed            { …, overrodeHold: { by, reason, placedAt } }
+```
+
+`task.hold_overridden` is the row request #16 asked for: "the event you actually wanted counted — a hold
+that a land later overrode — exists in the ledger, and the next time someone asks this question they can
+answer it with a number instead of a sketch."
