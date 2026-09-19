@@ -98,6 +98,22 @@ also makes `muthur down`'s own wait loop correct for free: it already treats `No
   (`ApplicationStopping` → `ApplicationStopped`) and only then disposes the container. So the lifetime signal
   is always raised before the objects go, which is what makes the fix reliable rather than a guess.
 
+  **Amendment 1, from the implementer, and the one thing this spec got wrong.** That bullet is true and it
+  invites a false inference, which acceptance 1 below then acted on: that a test can call
+  `StopApplication()` to raise the signal and look around. It cannot. `WebApplicationFactory` drives
+  `Program`'s `app.RunAsync()`, so `WaitForShutdownAsync` observes `ApplicationStopping` and tears the whole
+  host down. Written that way, acceptance 1 fails **with the fix in place**, differently on consecutive runs
+  — once a 500, once `ObjectDisposedException: 'Microsoft.AspNetCore.TestHost.TestServer'` with no HTTP
+  response at all. By the time the request lands there is no server to answer it, and no middleware can fix
+  that.
+
+  The state this task is about — *asked to stop, signal up, nothing disposed yet* — has to be held open
+  deliberately. A one-shot `IHostedService` whose `StopAsync` blocks on a `TaskCompletionSource`, registered
+  through `_hub.WithWebHostBuilder` (the pattern `DashboardOperationsTests` already uses), does it with no
+  sleep: hosted services stop before `GenericWebHostService`, so the gate parks the host in exactly that
+  state. It must be one-shot, because disposal stops the host a second time and a gate that blocks twice
+  deadlocks both calls into the shutdown timeout.
+
 Constraints that are not obvious:
 
 - `IHostApplicationLifetime` is already injectable in the server; `MessageService` takes it.
@@ -186,15 +202,23 @@ Nothing else in the CLI changes. The body is already passed through to stderr, s
 - **Does:** everything above.
 - **Depends on:** nothing.
 - **Acceptance:** `dotnet build` and `dotnet test` clean, plus:
-  1. **The defect.** Bring up a `HubFactory` hub, resolve `IHostApplicationLifetime` from its services and
-     call `StopApplication()`, then issue an ordinary request — `PUT /api/v1/outbound-targets`, the endpoint
-     T-41 was filed against. It answers **503** with code `hub_stopping`, not 500 and not `internal_error`.
-     Mutation-check it: remove the short circuit and the `ObjectDisposedException` arm and confirm the test
-     fails; say in the report whether it failed with a 500 or with something else, because "something else"
-     means the test is not reaching the race.
-  2. **The long poll.** The same, for `GET /api/v1/messages/inbox?wait=...` — the fifteen-of-thirty-two case.
-     Use `HubFactory.Clock`'s record of what has started waiting to know the request is really inside the
-     wait before stopping the hub; **do not sleep**.
+  1. **The policy.** Hold a `HubFactory` hub open in the stopping state with the one-shot gate described in
+     Amendment 1, then issue an ordinary request — `PUT /api/v1/outbound-targets`, the endpoint T-41 was
+     filed against. It answers **503** with code `hub_stopping`, not 500 and not `internal_error`.
+
+     **Amendment 1 again, because it changes what the mutation check means here.** Mutating this test gives
+     **200, not 500**, and that is correct rather than a weak test: the short circuit is a refusal policy,
+     not a repair, so with disposal held off there is nothing for the request to trip over. This acceptance
+     proves the policy. Item 6 proves the race.
+  2. **The long poll.** `GET /api/v1/messages/inbox?wait=...` — the fifteen-of-thirty-two case. Use
+     `HubFactory.Clock`'s record of what has started waiting to know the request is really parked before
+     stopping the hub; **do not sleep**.
+
+     Two halves, because `InboxAsync` already returns `TimedOut: true` on the stopping signal and so a poll
+     that is *already inside its wait* is answered **200**, never 503. That is the Verification section's
+     "both are correct" made concrete: assert the in-wait half is **never a 500** and is either
+     200-`TimedOut` or 503-`hub_stopping`. Then assert the deterministic half — a **fresh** inbox request
+     issued while the hub is stopping is 503 `hub_stopping`.
   3. **A real `ObjectDisposedException` is still a 500.** On a hub that is *not* stopping, an endpoint that
      throws `ObjectDisposedException` answers 500 `internal_error` and logs it. This is the test that keeps
      the fix from being a silencer; write it so its purpose is legible.
@@ -204,6 +228,16 @@ Nothing else in the CLI changes. The body is already passed through to stderr, s
      in the table (200, 0, 422, 409, 404, 401) so the whole mapping reads as one thing. Also assert that a
      503's body still reaches stderr through `Output.Emit`, since that is what carries `hub_stopping` and its
      sentence to the caller.
+  6. **The race itself** — added by Amendment 1, and the only acceptance whose mutation is a 500. A request
+     that is already **past** the short circuit when the stop arrives: a fake `IOutboundChannel` that raises
+     the stopping signal and then throws `ObjectDisposedException`, so the failure lands squarely in the
+     `catch` arm. 503 `hub_stopping` with the fix, 500 `internal_error` without it, deterministic both ways.
+     This is the reported defect reproduced exactly, and it is why item 3's second condition is load-bearing:
+     the same fake channel without a lifetime is item 3, so the two sit side by side and the reason for the
+     gate on the `catch` is legible from the file.
+
+     Items 1 and 6 cannot be one test. Holding disposal off is what makes item 1 deterministic; letting the
+     disposal happen is what makes the 500 appear.
 
 ## Verification
 
@@ -227,6 +261,28 @@ $env:MUTHUR_HOME = "$PWD/artifacts/t41-home"; $env:MUTHUR_URL = "http://127.0.0.
   either a clean empty inbox (the long poll's own shutdown path won the race) or exit 4 with `hub_stopping`.
   **Both are correct** — the point is that neither says the hub broke.
 - Run it a few times. The race lands on different sides; no run produces a 500.
+
+### What the end-to-end actually showed
+
+Run on an installed build (`artifacts/t41`, published from `6255741`) against a scratch home on port 7462.
+The live hub was never contacted.
+
+- **`muthur msg inbox --wait 900` against `muthur down`, 5 rounds:** every round exit 0,
+  `{"messages":[],"timedOut":true}`, empty stderr. The long poll's own shutdown path won every time — which
+  is why acceptance 2 asserts "never 500" rather than a bare 503.
+- **Four tight in-process pollers on `/api/v1/status` during `down`, 6 rounds:** every round caught
+  `503 {"code":"hub_stopping","message":"The hub is shutting down and did not do this. ..."}` on the wire.
+  The rest got connection-refused. **No 500 and no `internal_error`, in any round.**
+- **Six parallel `muthur status` CLI hammers, 6 rounds:** never landed inside the window — always exit 4
+  `not_running` from a refused connection. Correct, and the same exit code, which is the whole argument for
+  mapping 503 to `NotRunning`.
+- **The installed Native AOT CLI against a stand-in hub answering 503 `hub_stopping`:** exit 4, stdout empty,
+  the body verbatim on stderr.
+- **The scratch hub's `muthur.log` afterwards:** no error line at all.
+
+The window is a few milliseconds and a CLI invocation costs about thirty, so a founder running `muthur down`
+will keep seeing exit 4 `not_running`. The 503 protects the request that is **already inside** the hub — the
+fifteen-of-thirty-two inbox case this task was filed from.
 - The hub's `muthur.log` contains no error line for the refused request.
 
 ## Out of scope / follow-ups
