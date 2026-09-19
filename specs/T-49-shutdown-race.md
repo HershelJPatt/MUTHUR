@@ -286,6 +286,69 @@ deterministic pair — the wrapped exception on a stopping hub, which without `I
 `Error` line, and its mirror on a hub nobody asked to stop, which must stay a 500. Both must be run reverted
 and the report must say what they did.
 
+## Amendment 3 — the draft has now been run, and amendment 2 guessed one thing wrong
+
+Run by me (the orchestrator) on `task/T-49-a-real-disposal`, which carries the draft as the dead session left
+it. Reviewing means building and running it myself, and this is what it did.
+
+**With the change in.** `dotnet build`: 0 warnings, 0 errors. `dotnet test`: 4,487 passed, 0 failed, across
+all four projects (511 in `Muthur.Server.Tests`). `muthur-tests: 418 removed, 0 kept (logged an error), 0
+could not be removed`.
+
+**With `ErrorMiddleware.cs` reverted to its pre-draft version** (tests untouched), both new claims fail:
+
+- `A_teardown_failure_is_refused_even_when_it_arrives_wrapped` — *Assert.Equal() Failure: Expected:
+  ServiceUnavailable, Actual: InternalServerError.*
+- `A_request_inside_a_hub_that_is_really_disposed_is_never_told_the_hub_broke` — *a request that met a
+  disposed hub was answered with the hub's own failure: System.AggregateException: An error occurred while
+  writing to logger(s). (Cannot write to a closed TextWriter…)*
+
+**So amendment 2 was wrong about the real-disposal harness, and this supersedes it.** It predicted that the
+abort would hide the defect and the harness would pass either way. It does not: the type-matched guard lets
+the exception out of `ErrorMiddleware` entirely, and what is outside the middleware — the test host's
+diagnostics — hands it to the client. The abort suppresses the middleware's *own* last catch; it does not
+suppress an exception that never reached it. The harness is evidence, and it is the strongest evidence this
+task has: it is the only test in the suite that disposes a host underneath a live request.
+
+**Acceptance criterion 2, answered from my run.** The parked request met an `AggregateException` over an
+`ObjectDisposedException` ("Cannot write to a closed TextWriter", `FileLoggerProvider.Write`), raised from
+`DbContext.SaveChangesAsync` at `OutboundService.cs:102`, inside `Ledger.MutateAsync` (`Ledger.cs:25`, the
+work delegate, nested under `:29`) — the `SaveChangesAsync` step, as amendment 2 said. Note what the disposed
+object is: the **log file's writer**, which EF reached through its own `SaveChangesFailedAsync` logging while
+already on its failure path, not the store connection. The rule still classifies it correctly — a closed log
+writer is the hub's own teardown — but no test reproduces that path, and one comment currently implies
+otherwise. See below.
+
+`A_wrapped_disposed_object_on_a_hub_that_is_not_stopping_is_still_an_internal_error` passes both ways, by
+design: it is the silencer guard, and it claims that today's behaviour is *unchanged*, not that the fix
+works. Criterion 3 does not apply to it.
+
+### Unit B — what is left, and it is small
+
+Test-only polish plus one question to answer by observation. No production file may change.
+
+1. **Say exactly what the client gets.** `A_request_inside_a_hub_that_is_really_disposed_…` currently
+   tolerates three outcomes (a non-500 response, `HttpRequestException`, `TaskCanceledException`). One of
+   them is what actually happens. Find out which, deterministically, and assert *that* — per "Tests to end
+   with" item 1, a 503 `hub_stopping` is asserted exactly if that is what arrives; if instead the connection
+   is gone and there is no response at all, assert that, and say in the comment why a hub that answered
+   correctly still cannot be heard. A test that accepts three answers cannot notice when the answer changes.
+2. **Correct the `wrapped` XML doc on `DisposedChannel`.** It says EF raises the wrapper out of
+   `SaveChangesAsync`; what the sighting shows is EF's *failure logging* raising it while inside
+   `SaveChangesAsync`, over a disposed log writer. The pair is still the right evidence — the middleware's
+   contract is over the shape of the exception, not its provenance, and reproducing the EF-logging path would
+   test EF and `FileLoggerProvider` rather than the middleware — but the doc must say what it stands in for
+   instead of claiming to be it.
+3. **`ParkedChannel.Release()` belongs in a `finally`.** `Release` is reached only on the happy path today,
+   so a failing budget strands a thread-pool thread inside an open transaction for the rest of the process.
+4. **Report, do not fix: the teardown branch has no `RequestAborted` guard.** `StoppingAsync` will try to
+   write 503 to a connection that may already be gone, and the cause-match now routes more shapes into it.
+   The hole predates this task (the type-matched catch had it too) and the frozen rule says nothing about it,
+   so **it is not changed here**. Say in the report whether that write throws in the real-disposal test, and
+   what happens to the exception if it does. If it can escape `InvokeAsync` on a Kestrel hub — where an
+   escaped exception is logged at `Error` by the server, which is the very thing T-49 is named for — that
+   becomes its own ledger task with this evidence attached.
+
 ## Out of scope / follow-ups
 
 - **Draining**, still. T-41 named it; this task's rule is what a drain's own deadline needs behind it.
