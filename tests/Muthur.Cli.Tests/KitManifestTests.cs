@@ -388,41 +388,98 @@ public sealed class KitManifestTests : IDisposable
     }
 
     /// <summary>
-    /// A reserved device name as a *directory* component, one level above rule 18: it holds no forbidden
-    /// character, resolves cleanly, and then Windows follows it into the device namespace rather than creating
-    /// a directory. Measured on this platform: only NUL actually kills Directory.CreateDirectory, but the whole
-    /// device namespace is refused rather than the one name that happens to fail on this build of Windows.
+    /// The null device as a *directory* component, one level above rule 18: it holds no forbidden character,
+    /// resolves cleanly, and then Windows follows it into the device namespace rather than creating a
+    /// directory. The whole device namespace was refused first; measuring Directory.CreateDirectory on each
+    /// name showed only NUL fails, so only NUL is named here. Trailing dots and spaces come off first, because
+    /// Win32 takes them off before it looks the name up.
     /// </summary>
     [Fact]
-    public async Task A_reserved_device_name_used_as_a_directory_is_refused()
+    public async Task The_null_device_used_as_a_directory_is_refused()
     {
-        // These names mean nothing to a filesystem that does not reserve them, where "NUL/x.md" is an ordinary
+        // The name means nothing to a filesystem that does not reserve it, where "NUL/x.md" is an ordinary
         // path and refusing it would be this validator inventing a rule the platform does not have.
         if (!OperatingSystem.IsWindows()) return;
 
-        foreach (var name in new[] { "NUL", "CON", "PRN", "AUX", "COM1", "LPT9", "nul", "Com1" })
+        foreach (var name in new[] { "NUL", "nul", "Nul", "NUL ", "NUL." })
             await Rejects(
                 $$"""{"files":[{"from":"source.md","to":"{{name}}/x.md"}]}""",
                 $": entry 0 writes \"{name}/x.md\", whose component \"{name}\" is a reserved device name on this platform.");
     }
 
     /// <summary>
-    /// The behaviour Amendment 3 measured and this rule must not take away: a reserved name as a *file* name
-    /// installs as an ordinary file inside the repository, so the check asks only about the components before
-    /// the last one. COM0 is not reserved and is a directory like any other.
+    /// The over-refusal that measurement retired. Every reserved name but NUL creates an ordinary directory
+    /// here, so a manifest naming one installs — refusing the whole device namespace refused manifests that
+    /// work, and contradicted the same question already settled the other way for file names below.
+    /// </summary>
+    [Theory]
+    [InlineData("CON/x.md")]
+    [InlineData("PRN/x.md")]
+    [InlineData("AUX/x.md")]
+    [InlineData("COM1/x.md")]
+    [InlineData("LPT1/x.md")]
+    // COM0 is not in the device namespace at all, and never was.
+    [InlineData("COM0/x.md")]
+    public Task A_reserved_name_other_than_the_null_device_is_a_directory_like_any_other(string to) =>
+        Installs(to);
+
+    /// <summary>
+    /// A reserved name as a *file* name installs as an ordinary file inside the repository, which is why the
+    /// device check asks only about the components before the last one.
     /// </summary>
     [Theory]
     [InlineData("docs/CON")]
     [InlineData("COM1")]
     [InlineData("docs/NUL.md")]
-    [InlineData("COM0/x.md")]
-    public async Task A_reserved_name_as_a_file_name_still_installs(string to)
+    public Task A_reserved_name_as_a_file_name_still_installs(string to) => Installs(to);
+
+    /// <summary>Installs a one-entry manifest writing <paramref name="to"/> and reads the file back.</summary>
+    private async Task Installs(string to)
     {
         File.WriteAllText(ManifestPath, $$"""{"files":[{"from":"source.md","to":"{{to}}"}]}""");
 
         Assert.Equal(ExitCodes.Ok, await Invoke("kit", "install", "--harness", Harness, "--repo", Repository));
         Assert.Equal("a procedure", File.ReadAllText(Path.Combine(Repository, to)));
     }
+
+    /// <summary>
+    /// The same class as rules 17, 18 and 19 — a component that resolves but cannot be created — said by what
+    /// Win32 takes off a name. It trims trailing spaces and dots, so a component made only of those trims to
+    /// nothing and the directory beneath it never exists. A "to" of "   " was refused before this as "an
+    /// existing directory in the repository", which was true only because Win32 had trimmed it to the
+    /// repository root; it is now refused for what it is.
+    /// </summary>
+    [Theory]
+    [InlineData(".../x.md", "...")]
+    [InlineData("   /x.md", "   ")]
+    [InlineData(" /x.md", " ")]
+    [InlineData(".. ./x.md", ".. .")]
+    [InlineData("....../x.md", "......")]
+    [InlineData("docs/...", "...")]
+    [InlineData("docs/   ", "   ")]
+    [InlineData("   ", "   ")]
+    public async Task A_component_of_only_spaces_and_dots_is_refused_before_the_write(string to, string component)
+    {
+        if (!OperatingSystem.IsWindows()) return;
+
+        await Rejects(
+            $$"""{"files":[{"from":"source.md","to":"{{to}}"}]}""",
+            $": entry 0 writes \"{to}\", whose component \"{component}\" is only spaces and dots, "
+                + "which this platform trims to nothing.");
+    }
+
+    /// <summary>
+    /// The other side of that rule, and the reason it excludes three spellings: Path.GetFullPath resolves an
+    /// empty segment and the two navigation segments away rather than trimming them to nothing, so all three
+    /// install. A rule that refused them would refuse manifests that work.
+    /// </summary>
+    [Theory]
+    [InlineData("docs//x.md")]
+    [InlineData("./docs/x.md")]
+    [InlineData("docs/./x.md")]
+    [InlineData("a/../docs/x.md")]
+    public Task A_segment_the_platform_resolves_away_is_not_a_component_trimmed_to_nothing(string to) =>
+        Installs(to);
 
     /// <summary>
     /// Rule 21. A lone surrogate is a legal JSON escape that System.Text.Json parses and then refuses to hand

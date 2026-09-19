@@ -429,6 +429,12 @@ public static partial class KitCommands
                 + "is a reserved device name on this platform.";
             return false;
         }
+        if (TrimmedAwayComponent(to) is { } trimmed)
+        {
+            problem = $"{manifestPath}: entry {index} writes \"{to}\", whose component \"{trimmed}\" is only "
+                + "spaces and dots, which this platform trims to nothing.";
+            return false;
+        }
 
         // Decided by the repository rather than by the manifest, which is the question rule 13 already asks one
         // directory over: it calls File.Exists on the source. WriteFile would ask File.WriteAllText to overwrite
@@ -541,23 +547,20 @@ public static partial class KitCommands
     }
 
     /// <summary>
-    /// The Windows device namespace. Rule 18 asks the platform which characters a name may not hold; there is
-    /// no equivalent API for these names, so they are written down: the console, printer and auxiliary
-    /// devices, the null device, and the numbered serial and printer ports.
+    /// The one device name a directory component may not be. The whole Windows device namespace was refused
+    /// first, on an assertion; Directory.CreateDirectory was then measured on each name, and CON, PRN, AUX,
+    /// COM0, COM1 and LPT1 all create ordinary directories. Only NUL is followed into the device namespace,
+    /// so only NUL is refused: the rest install cleanly, and refusing them would both refuse working manifests
+    /// and contradict the measurement that left the same names alone as file names.
     /// </summary>
-    private static readonly string[] ReservedDeviceNames =
-    [
-        "CON", "PRN", "AUX", "NUL",
-        "COM1", "COM2", "COM3", "COM4", "COM5", "COM6", "COM7", "COM8", "COM9",
-        "LPT1", "LPT2", "LPT3", "LPT4", "LPT5", "LPT6", "LPT7", "LPT8", "LPT9",
-    ];
+    private const string NullDevice = "NUL";
 
     /// <summary>
-    /// A reserved name used as a *directory* component, which is one level above rule 18: the name holds no
+    /// The null device used as a *directory* component, which is one level above rule 18: the name holds no
     /// forbidden character and resolves cleanly, and then Windows follows it into the device namespace instead
-    /// of creating a directory. Amendment 3 measured these as file names — they install as ordinary files
-    /// inside the repository — so only the components before the last are asked about. Trailing dots and
-    /// spaces come off first, because Win32 takes them off before it looks the name up.
+    /// of creating a directory. As a file name it is an ordinary file inside the repository, so only the
+    /// components before the last are asked about. Trailing dots and spaces come off first, because Win32
+    /// takes them off before it looks the name up: "NUL " and "NUL." are the same device.
     /// </summary>
     private static string? ReservedComponent(string value)
     {
@@ -565,9 +568,25 @@ public static partial class KitCommands
 
         var components = Components(value);
         for (var i = 0; i < components.Length - 1; i++)
-            if (ReservedDeviceNames.Contains(components[i].TrimEnd(' ', '.'), StringComparer.OrdinalIgnoreCase))
+            if (string.Equals(components[i].TrimEnd(' ', '.'), NullDevice, StringComparison.OrdinalIgnoreCase))
                 return components[i];
         return null;
+    }
+
+    /// <summary>
+    /// The same class as rules 17, 18 and 19 — a component that resolves but cannot be created — said by what
+    /// Win32 takes off a name. It trims trailing spaces and dots, so a component made only of those trims to
+    /// nothing and the directory beneath it never exists: "   /x.md" and ".../x.md" passed every other rule
+    /// and died in the write phase. The empty component and the two navigation segments are excluded because
+    /// Path.GetFullPath resolves them away rather than trimming them: "docs//x.md", "./docs/x.md" and
+    /// "a/../docs/x.md" all install, and refusing them would refuse manifests that work.
+    /// </summary>
+    private static string? TrimmedAwayComponent(string value)
+    {
+        if (!OperatingSystem.IsWindows()) return null;
+
+        return Components(value).FirstOrDefault(part =>
+            part is not ("" or "." or "..") && part.TrimEnd(' ', '.').Length == 0);
     }
 
     private static string Expand(string template, string kitDir) =>
