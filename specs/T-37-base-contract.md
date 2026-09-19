@@ -22,6 +22,7 @@ wrong, and the evidence for it was one observation over-generalised.** Eight cas
 | `8687d37`, an older landed commit | ancestor: clean fast-forward (×4) |
 | `980b4bb`, local `main`, one commit behind the task branch | ancestor: clean fast-forward |
 | `c15a6a0`, current `main`, task branch based 17 commits earlier | divergent: 17 one side, 1 the other |
+| `d7a2db7`, a landed commit one behind the task branch | ancestor: clean fast-forward (case nine, found while building this) |
 
 The bases differ; the source is not consistently `origin/main`. **What every case shares is the only claim
 worth making: the worktree is never created from the task branch the orchestrator named, so the frozen spec
@@ -74,8 +75,26 @@ reading the spec, because a spec read from the wrong tree is the wrong spec.
 ```
 
 Renumber the existing steps 1-4 so the list reads 0-4, or renumber 1 → 2 and so on if that reads better in
-context — the implementer building this decides which, since it is formatting. Nothing else in the file
-changes.
+context — the implementer building this decides which, since it is formatting.
+
+**"Stop and report" must name the status**: `blocked`. The report format offers `done | blocked |
+spec-problem`, and a bad base carrying your own commits is none of them cleanly, so a fresh implementer will
+guess and different ones will guess differently — which makes the case invisible in aggregate exactly when
+someone wants to count how often it happens. Say `blocked` in the step.
+
+### Two further files, because the step is defeated without them
+
+**`kit/claude/agents/muthur-implementer.md`** states as fact that the worktree is "based on the
+orchestrator's task branch". That sentence has been false in all nine observed cases, and because it sits
+*below* the `{{core:implementer.md}}` include, it is the document's **last word** on the subject — a fresh
+implementer reads the new step and then reads a reassurance that the step exists to distrust. Change "based
+on" to "intended to be based on", and nothing else in that file.
+
+**`kit/core/orchestrate.md`** — the recovery path substitutes a `<base>` the prompt must have supplied. The
+step detects a bad base robustly (the spec file is either present or it is not) but cannot *recover* from
+one unless the orchestrator named the branch. Add to step 4's list of what to give an implementer: the base
+branch it should be on, by name. One clause, in the existing sentence that already lists the spec path, the
+unit and the verification commands.
 
 Add one line to the **Report** block's template so the answer is always present rather than volunteered:
 
@@ -86,13 +105,14 @@ BASE: <the commit you started from, and what you had to do to get there, if anyt
 ## Units of work
 
 ### Unit A — the whole change
-- **Files:** modified `kit/core/implementer.md`
+- **Files:** modified `kit/core/implementer.md`, `kit/claude/agents/muthur-implementer.md`,
+  `kit/core/orchestrate.md`
 - **Does:** the Design section above, exactly.
 - **Depends on:** nothing.
 - **Acceptance:**
   - `dotnet build` and `dotnet test` still green — this is a documentation change and must not touch code,
     so the point of running them is to prove it did not.
-  - `git diff --stat` names exactly one file.
+  - `git diff --stat` names exactly three files, all under `kit/`.
   - `kit/core/implementer.md` still reads as one document: the new step is in the same voice as the rest,
     the numbering is consistent, and the Report block matches what the procedure now asks for.
   - `muthur kit install` is **not** run by the implementer — the kit is installed into the live hub's
