@@ -168,3 +168,50 @@ The negative that matters: repeat with `a1` heartbeating, and confirm the task s
 
 - Pushing the landed commit (T-63).
 - Whether `_lastAction` should distinguish a land from a staffing on the founder's card.
+
+## Amendment 1 — the retry must be bounded, and four things the spec got wrong
+
+### The one change to make
+
+**A refusal must stop being retried every pass.** The implementer kept the spec literally — message the
+founder once — and then pointed out that the sentence beside it ("retrying every minute helps nobody") argues
+for bounding the *attempt* as well, which the spec never actually said. It is right, and the consequence is
+not hypothetical: a refusal leaves the task `validated`, so every pass retries for ever, writing
+`task.land_refused` from `LifecycleService` **and** `conductor.land_refused` from the conductor, roughly
+fourteen hundred times a day, for a fault only a human can clear. That is the T-45 pathology moved from the
+inbox into the ledger, and shipping it into an unattended hub is exactly the thing this task exists to avoid.
+
+The refusal is also reachable rather than exotic: `dirty_checkout` fires whenever the shared main checkout has
+uncommitted changes, which happens routinely here, and `branch_missing` fires whenever a branch is cleaned up.
+
+Bound it the way the conductor already bounds a wedged pair: a half-open probe keyed on `(task, branch head)`,
+letting one attempt through per `ConductorStallProbeMinutes`. A head that moves clears the cooldown, because a
+new commit is new information. Reuse the `_stalls` shape rather than inventing a second one.
+
+### Accepted as built
+
+- **The silent skip on `not_validated`.** If the owner revives between the plan and the land and ships its own
+  work, the spec as written would have recorded a refusal and told the founder a land failed for a task that
+  had in fact just landed. `catch (MuthurException gone) when (gone.Code == "not_validated") { continue; }` is
+  correct, and the honest note that it is the one branch without a test — because covering it means a seam
+  through `HubFactory`, outside this unit's files — is the right trade to name rather than paper over.
+- **README placement** in `## The conductor` rather than the settings table, which has no row for this.
+- **Recording `branch` as its own field and `message` verbatim.** `LandResult` is
+  `(Outcome, Commit, PrUrl, Code, Message)` and carries no file list — the conflicting paths exist only inside
+  `GitLander.ConflictMessage`'s prose. The spec asked for something that does not exist. Structured files
+  would be a `GitLander.cs` change and belong to their own task.
+- **Real git instead of a fake lander.** The spec cited "the fake-lander patterns in `ConductorTests.cs`";
+  there is no fake `ITaskLander` anywhere in `tests/`. Driving real git through `TestRepo` is better here, and
+  it covered a failure mode the spec only asked about in passing: a validated task whose branch no longer
+  exists refuses with `branch_missing`, stays `validated`, and tells the founder once.
+
+### Known and accepted, not fixed here
+
+**Landing can hold the pass.** `GitLander` allows two minutes per git invocation and `LandAsync` runs several,
+so several orphaned tasks could occupy `_pass` for minutes. `_pass.WaitAsync(0)` drops the overlapping tick
+rather than queueing it, so a slow land delays staffing and never doubles it. Bounded, and tolerable.
+
+**Unattended landing now reaches `LandMode.Pr` projects**, where the existing path shells out to `git push`
+and `gh`. MUTHUR's own project is `merge`, so nothing is exposed today — but this is an authority change
+nobody has signed off, and it is recorded here so the first PR-mode project meets the decision rather than
+discovers it.
