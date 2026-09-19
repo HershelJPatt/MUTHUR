@@ -34,7 +34,7 @@ public sealed partial class ProjectService(Ledger ledger, IEnumerable<IInboundSo
                 RepoPath = Path.GetFullPath(request.RepoPath),
                 DefaultBranch = string.IsNullOrWhiteSpace(request.DefaultBranch) ? "main" : request.DefaultBranch.Trim(),
                 LandMode = request.LandMode ?? LandMode.Merge,
-                RequiredValidators = Normalize(request.RequiredValidators),
+                RequiredValidators = ValidValidators(request.RequiredValidators),
                 IngestSources = ValidSources(request.IngestSources),
                 CreatedAt = m.Now,
             };
@@ -54,7 +54,7 @@ public sealed partial class ProjectService(Ledger ledger, IEnumerable<IInboundSo
             if (!string.IsNullOrWhiteSpace(request.RepoPath)) project.RepoPath = Path.GetFullPath(request.RepoPath);
             if (!string.IsNullOrWhiteSpace(request.DefaultBranch)) project.DefaultBranch = request.DefaultBranch.Trim();
             if (request.LandMode is { } mode) project.LandMode = mode;
-            if (request.RequiredValidators is not null) project.RequiredValidators = Normalize(request.RequiredValidators);
+            if (request.RequiredValidators is not null) project.RequiredValidators = ValidValidators(request.RequiredValidators);
             if (request.IngestSources is not null) project.IngestSources = ValidSources(request.IngestSources);
             m.Record("project.updated", payload: new { project = project.Key, project.RepoPath, landMode = project.LandMode.ToWire(), project.RequiredValidators, project.IngestSources });
             return project.ToDto();
@@ -95,6 +95,21 @@ public sealed partial class ProjectService(Ledger ledger, IEnumerable<IInboundSo
             if (colon <= 0 || colon == source.Length - 1 || !sources.Any(s => s.Scheme == source[..colon]))
                 throw Fail.Rule("unknown_ingest_source", $"'{source}' is not a source this hub can poll. Expected scheme:location with scheme one of: {string.Join(", ", sources.Select(s => s.Scheme))}.");
         }
+        return normalized;
+    }
+
+    /// <summary>
+    /// A required validator names a role, so a string no role key could ever be names nothing and would gate
+    /// nothing. Whether the role exists yet is not checked here — `muthur doctor` says that out loud instead,
+    /// because setting a project up before defining its roles is reasonable.
+    /// </summary>
+    private static List<string> ValidValidators(IReadOnlyList<string>? requested)
+    {
+        var normalized = Normalize(requested);
+        foreach (var key in normalized)
+            if (!RoleKey.IsValid(key))
+                throw Fail.Rule("invalid_validator",
+                    $"'{key}' cannot name a role, so no validator could ever hold it. Role keys are {RoleKey.Rule}.");
         return normalized;
     }
 
