@@ -23,6 +23,16 @@ internal static class TestHubDirectories
     /// <summary>The directory every hub's <c>DataDir</c> is created under, named so a reader can go and look.</summary>
     private static string Root => Path.Combine(Path.GetTempPath(), "muthur-tests");
 
+    /// <summary>
+    /// Attempts before a delete counts as a failure, and how long to wait between them. This is the one place
+    /// in the suite that spends real time on purpose: a virus scanner holding a handle for a moment is an
+    /// external resource, and waiting on it is a budget, not synchronization with the system under test. The
+    /// rule that tests never sleep to synchronize is intact — nothing here waits for the hub to do anything.
+    /// </summary>
+    private const int DeleteAttempts = 3;
+
+    private static readonly TimeSpan[] DeleteBackoff = [TimeSpan.FromMilliseconds(50), TimeSpan.FromMilliseconds(100)];
+
     internal static void Release(string dataDir, bool expectsLoggedErrors = false)
     {
         // A restart test brings a second hub up over the same DataDir; whichever disposes second finds it
@@ -40,19 +50,27 @@ internal static class TestHubDirectories
     private static Outcome Attempt(string dataDir, bool expectsLoggedErrors)
     {
         if (!expectsLoggedErrors && Evidence(dataDir) is { } note) return new(Disposition.Kept, note);
-        try
+        var lastFailure = "";
+        for (var attempt = 0; attempt < DeleteAttempts; attempt++)
         {
-            Directory.Delete(dataDir, recursive: true);
-            return new(Disposition.Removed, "");
+            // Nothing is waited for on the happy path, which is every directory today: the backoff is only
+            // ever paid by a directory that has already lost the delete once.
+            if (attempt > 0) Thread.Sleep(DeleteBackoff[attempt - 1]);
+            try
+            {
+                Directory.Delete(dataDir, recursive: true);
+                return new(Disposition.Removed, "");
+            }
+            catch (IOException ex)
+            {
+                lastFailure = ex.Message;
+            }
+            catch (UnauthorizedAccessException ex)
+            {
+                lastFailure = ex.Message;
+            }
         }
-        catch (IOException ex)
-        {
-            return new(Disposition.Failed, ex.Message);
-        }
-        catch (UnauthorizedAccessException ex)
-        {
-            return new(Disposition.Failed, ex.Message);
-        }
+        return new(Disposition.Failed, lastFailure);
     }
 
     /// <summary>
@@ -126,6 +144,9 @@ internal static class TestHubDirectories
     [ModuleInitializer]
     internal static void ReportAtExit() => AppDomain.CurrentDomain.ProcessExit += (_, _) =>
     {
+        // Reporting is all this does. dotnet test derives its exit code from the test results and ignores the
+        // host's, so a failure code set here would never reach the shell — measured, and the reason CLAUDE.md
+        // says to read these lines at -v n rather than wait for the run to redden.
         foreach (var line in Summary()) Console.Error.WriteLine(line);
     };
 }
