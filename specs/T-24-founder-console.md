@@ -461,3 +461,58 @@ same afternoon: an assertion nobody has ever seen fail is not evidence.
 page ever contains a task title.** A headless assertion that looks for one in `/` will fail against a hub where
 the task plainly exists. Unit C's `The_console_is_not_a_second_task_list` proves the task through
 `GET /tasks/{id}` instead, which is the shape such a check has to take here.
+
+## Proof — the headless half (2026-09-19)
+
+Rebased onto `main` at `989e18a` (main moved twice during this task), built and tested with `TEMP`/`TMP` on a
+private scratch root:
+
+```
+dotnet build   →  0 Warning(s), 0 Error(s)
+dotnet test
+  Muthur.Launch.Tests      28/28
+  Muthur.Core.Tests      3736/3736
+  Muthur.Cli.Tests        193/193
+  Muthur.Server.Tests     500/500     (453 before unit C)
+```
+
+Then against a scratch hub installed from this branch — never the live hub — with a project and an outbound
+target added through the CLI first, because the Projects and Outbound controls render per row and an empty hub
+renders neither:
+
+```
+PASS  fixture: target added            PASS  console: Set priority button (tasks)
+PASS  fixture: project added           PASS  console: Cancel button (tasks)
+PASS  console: Register button         PASS  console: Reopen button (tasks)
+PASS  console: Define button           PASS  home links to /console
+PASS  console: Save button             PASS  address absent from /console
+PASS  console: Add button              PASS  address absent as a full path
+T24-HEADLESS: ALL PASS
+```
+
+The security check is the one that carries weight, and it is not vacuous here: the same run reports
+**`target KEY visible on page = True`**, where the run before unit C reported `False`. The row renders, the key
+and channel are on it, and neither `secret-drop-a7f3e9b1` nor the full address appears anywhere in the HTML.
+An address-absence assertion against a page with no outbound row measures nothing; this one had a row to be
+absent from.
+
+### The harness lied twice before it was trusted
+
+Recorded because the failures are reusable, not because they were interesting:
+
+1. **A false pass.** `$html -match 'Add'` went green against a page with no Add button. PowerShell's `-match`
+   is **case-insensitive** and was matching `padding`. Every content assertion now uses `-cmatch` and anchors
+   on the button's own markup (`>Add</button>`), which no stylesheet can satisfy by accident.
+2. **A false fail.** `Save` failed against working code, because the fixture never created the project the
+   control renders per row. The page was right and the harness was asserting against a state it had not built.
+
+Between them those two errors covered both directions — a check that passes when the feature is missing, and a
+check that fails when the feature is present — which is the whole space of ways a harness can be useless. The
+intermediate run (8 pass, 2 fail, the two being exactly unit C's unmerged sections) is what established it
+could tell present from absent before any of this was believed.
+
+### What a human still has to do
+
+The attended checklist stands, with Amendment 4's correction: **add a project first**, or the brief-file step
+refuses. Nothing above touches a button; the dashboard is `InteractiveServer` and its controls ride a SignalR
+circuit, so what is proven here is that every control renders and that the address never does.
