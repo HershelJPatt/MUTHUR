@@ -502,3 +502,31 @@ Amendment 2, and it is what the next person should do to this section rather tha
 Four wrong instructions in one Verification section, across three owners: the field that was said to be
 absent, "open" for "fetch", `&#8212;` for a literal dash, and now a command order that contradicts its own
 assertions. Every one was fluent prose about a check nobody had executed as written.
+
+## Proof of Amendment 3 (2026-09-19)
+
+```
+dotnet build   →  0 Warning(s), 0 Error(s)
+dotnet test
+  Muthur.Launch.Tests    23/23
+  Muthur.Core.Tests      3708/3708
+  Muthur.Cli.Tests       60/60
+  Muthur.Server.Tests    281/281
+```
+
+The Verification section, executed by lifting its own lines out of this file (see Amendment 3) and running
+them against a clean scratch hub on port 7499, in order, with nothing added:
+
+```
+project add solo   →  "requiredValidators":[],                "ungated":true
+project add gated  →  "requiredValidators":["win-validator"], "ungated":false
+
+[regex]::Matches($html,'pill-ungated').Count   →  1
+$html -match 'goes straight to validated'      →  True
+
+project set solo --validator win-validator  →  "requiredValidators":["win-validator"], "ungated":false
+
+[regex]::Matches($html,'pill-ungated').Count   →  0
+```
+
+Six lines, six expected values, no seventh command. Scratch hub stopped afterwards.
