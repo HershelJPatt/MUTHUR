@@ -163,6 +163,46 @@ In `SystemTests.cs`, beside T-41's, named so the file reads as one argument:
 No test may leave a hub data directory behind. `SystemTests`'s own `HubFactory` already sets
 `ExpectsLoggedErrors`; if a new test needs its own hub, it decides that flag deliberately and says why.
 
+### Amendment 1 — "assert no `Error` line" is a trap in this file, and the harness's shape
+
+From the first specialist, who read the file properly before being stopped by a tooling failure, and was
+right about both.
+
+**The log is shared.** Every hub built by `_hub.WithWebHostBuilder(...)` uses `_hub.DataDir`, and
+`FileLoggerProvider` opens `muthur.log` with `FileMode.Append` — so all of `SystemTests`' hubs append to one
+file. `A_disposed_object_on_a_hub_that_is_not_stopping_is_still_an_internal_error` puts an `ErrorMiddleware`
+line into it on purpose, and `Refusing_a_request_because_the_hub_is_stopping_is_not_logged_as_an_error`
+asserts `DoesNotContain(nameof(ErrorMiddleware), ReadHubLog())` over the **whole** file — which holds only
+because xunit happens to run it first within the class. A new test that copies that assertion inherits the
+order dependence and will fail for a reason that has nothing to do with this task.
+
+So: **every new log assertion takes the log's length before the request and asserts only on the text
+appended after it.** If that makes the existing assertion look fragile beside the new ones, tighten the
+existing one the same way; it is a test-only change and it is in scope.
+
+**The harness, drafted.** The shape below compiles nothing and proves nothing yet — it is the instrument for
+step 2, and step 3 turns it into the test that stays. `Assert.Fail` is how the measurement leaves the
+process, and it goes away once the answer is known.
+
+```csharp
+var channel = new ParkedChannel();                       // IOutboundChannel, Validate parks on a TCS
+var hub = _hub.WithWebHostBuilder(b => b.ConfigureServices(s => s.AddSingleton<IOutboundChannel>(channel)));
+var founder = /* Founder(hub) */;
+var before = ReadHubLog().Length;
+var request = founder.PutAsJsonAsync(Routes.OutboundTargets, new DefineTargetRequest("news", "parked", ...));
+await Eventually.TrueAsync(() => channel.Entered, "the request never reached the channel");
+await Eventually.CompletesAsync(Task.Run(() => { hub.Dispose(); return true; }), "disposal never finished");
+channel.Release();                                        // now it walks into a disposed Ledger
+// then: what the client got, and ReadHubLog()[before..]
+```
+
+Parking in `Validate` puts the request before `ledger.MutateAsync`, so it meets whichever of
+`CreateDbContextAsync` / `BeginTransactionAsync` / `SaveChangesAsync` / `CommitAsync` fails first. If that
+turns out to be `CreateDbContextAsync` — the shape T-41 already covers — park later as well, so the
+`SaveChangesAsync` step the rule's `InnerException` clause is about is actually reached. A channel that
+returns normally and a seam inside the mutation are both legitimate ways to get there; finding one is part of
+step 2.
+
 ## Units of work
 
 ### Unit A — the whole task
