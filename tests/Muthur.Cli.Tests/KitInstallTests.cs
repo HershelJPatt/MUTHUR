@@ -10,6 +10,7 @@ namespace Muthur.Cli.Tests;
 /// added to `kit/core/` could silently fail to reach the harness most of this organization runs on. These
 /// install this repository's own kit into throwaway repositories and read back what a session would be given.
 /// </summary>
+[Collection(KitEnvironment.Name)]
 public sealed class KitInstallTests : IDisposable
 {
     private static string RepositoryRoot =>
@@ -21,8 +22,8 @@ public sealed class KitInstallTests : IDisposable
     private readonly string? previousKit = Environment.GetEnvironmentVariable(KitCommands.KitVariable);
     private readonly List<string> repositories = [];
 
-    // xUnit runs the tests of one class sequentially and no other class in this assembly reads MUTHUR_KIT,
-    // so pointing it at the kit beside this repository's manifest for the life of the class is safe.
+    // xUnit runs the tests of one class sequentially, and KitEnvironment keeps the other class that points
+    // MUTHUR_KIT somewhere from running alongside this one, so holding it for the life of the class is safe.
     public KitInstallTests() =>
         Environment.SetEnvironmentVariable(KitCommands.KitVariable, Path.Combine(RepositoryRoot, "kit"));
 

@@ -29,6 +29,7 @@ public sealed class HubFactory : WebApplicationFactory<Program>
     public FakePullRequestOpener PullRequests { get; } = new();
     public FakeInboundSource Source { get; } = new();
     public FakeValidatorSessions Validators { get; } = new();
+    public FakeOrchestratorSessions Orchestrators { get; } = new();
 
     protected override void ConfigureWebHost(IWebHostBuilder builder)
     {
@@ -48,6 +49,8 @@ public sealed class HubFactory : WebApplicationFactory<Program>
             services.AddSingleton<IInboundSource>(Source);
             services.RemoveAll<IValidatorSessionLauncher>();
             services.AddSingleton<IValidatorSessionLauncher>(Validators);
+            services.RemoveAll<IOrchestratorSessionLauncher>();
+            services.AddSingleton<IOrchestratorSessionLauncher>(Orchestrators);
         });
     }
 
@@ -154,6 +157,37 @@ public sealed class FakeValidatorSessions : IValidatorSessionLauncher
         lock (_started) _started.Add(assignment);
         if (Throw is { } failure) throw failure;
         if (Delegate is { } real) await real.StartAsync(assignment, ct);
+        if (Block) await _release.WaitAsync(ct);
+    }
+
+    public void Finish(int count = 1) => _release.Release(count);
+}
+
+/// <summary>
+/// Records what the conductor asked to orchestrate, without starting anything. A real session's first act is to
+/// claim the task, so <see cref="Claim"/> is how a test says "and this one did".
+/// </summary>
+public sealed class FakeOrchestratorSessions : IOrchestratorSessionLauncher
+{
+    private readonly List<OrchestratorAssignment> _started = [];
+    private readonly SemaphoreSlim _release = new(0);
+
+    /// <summary>When true, a started session blocks until <see cref="Finish"/>, so a test can hold the ceiling full.</summary>
+    public bool Block { get; set; }
+
+    public IReadOnlyList<OrchestratorAssignment> Started { get { lock (_started) return [.. _started]; } }
+
+    /// <summary>When set, every start throws it — a harness that is not installed, or no candidate left.</summary>
+    public Exception? Throw { get; set; }
+
+    /// <summary>When set, the session claims the task the way a real one does before it blocks or returns.</summary>
+    public Func<OrchestratorAssignment, Task>? Claim { get; set; }
+
+    public async Task StartAsync(OrchestratorAssignment assignment, CancellationToken ct = default)
+    {
+        lock (_started) _started.Add(assignment);
+        if (Throw is { } failure) throw failure;
+        if (Claim is { } claim) await claim(assignment);
         if (Block) await _release.WaitAsync(ct);
     }
 

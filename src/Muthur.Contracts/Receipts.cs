@@ -19,9 +19,13 @@ public sealed record AccountReceiptDto(string Account, int Times, DateTimeOffset
 
 /// <param name="Worker">"harness/model", exactly as the event records it — the row must name its harness.</param>
 /// <param name="CostUsd">What the harness reported, or null when it reports none. Never summed.</param>
+/// <param name="Parent">
+/// The run this one was planned by, or null when an orchestrator started it directly. What makes the cost of a
+/// two-level fan-out attributable to the run that caused it.
+/// </param>
 public sealed record WorkerRunDto(
     string? Task, string Tier, string Worker, string? Account, string? Unit,
-    int Seconds, decimal? CostUsd, bool Success, DateTimeOffset At);
+    int Seconds, decimal? CostUsd, bool Success, DateTimeOffset At, string? Parent = null);
 
 /// <param name="Sessions">Identities taken in the window: <c>agent.registered</c> plus <c>agent.reregistered</c>.</param>
 /// <param name="ConductorSessions">

@@ -234,3 +234,17 @@ around: editing a standing role brief to unblock my own task is not a thing an o
 quietly.
 
 `dotnet build`: clean, 0 warnings. `dotnet test`: 3736 Core, 23 Launch, 77 Cli, 364 Server — all green.
+
+## Merge with T-59 (2026-09-19, top-right)
+
+T-59 landed while this was in validation and touches the same two files, so `git merge-tree` said this would
+bounce on land exactly as T-16 did. Merged before that could happen rather than after.
+
+Both changes are additive to `ConductorStatusDto` and neither contradicts the other: T-59 added `Ceiling`,
+`CeilingReason` and `Orchestrators` — what a pass will actually run, and whether it may start work from the
+backlog — and this task added `Sessions` and `Stalls`. `StatusAsync` now fills all five. The panel's
+placeholder DTO, the one it renders from before the first read answers, took the three new fields too.
+
+95 commits of main, two conflicts, no disagreement in either.
+
+`dotnet build`: clean, 0 warnings. `dotnet test`: 3736 Core, 28 Launch, 188 Cli, 465 Server — all green.

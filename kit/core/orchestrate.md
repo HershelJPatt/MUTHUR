@@ -11,6 +11,10 @@ Your session was started with `MUTHUR_AGENT=<name>`. If `muthur agent whoami` fa
 `muthur agent register --name <name> --harness <harness> --model <model> --tier mastermind`.
 Every `muthur` call renews your leases. When idle for long stretches, run
 `muthur agent heartbeat --summary "<what you are doing>"` — the summary is what the founders see.
+Heartbeat before anything that will take more than a few minutes — a full `dotnet test`, an AOT publish, a
+delegated worker — and again when it returns. A heartbeat renews the claim on every task you own; a session
+that is silent for longer than the claim lease looks exactly like one that has died, and the hub returns your
+task to the backlog for someone else to pick up.
 
 ## The loop
 
@@ -49,6 +53,16 @@ Every `muthur` call renews your leases. When idle for long stretches, run
    - **`skipped[]` does not list candidates passed over for being out of quota.** A limited account is
      filtered out before any attempt, so the report names the harness that ran and gives no sign that your
      first choice was skipped. If which vendor built a unit matters, record it yourself.
+
+   A **mastermind-tier** worker may come back with a `PLAN:` block instead of a finished subtree, when the
+   area turned out to be more than one agent should carry. That is the shape working, not a refusal: read the
+   plan as you would read your own units, correct it if it is wrong, and staff each line with an ordinary
+   `worker run` — passing `--parent <the specialist's branch>` so the ledger keeps the tree and receipts can
+   attribute what the fan-out cost. You stay accountable for the result; the specialist supplied the
+   expertise, not the authority.
+
+   Two levels is the reference shape. A third would mean a specialist's plan containing another problem area
+   rather than units — if you find yourself wanting that, the spec is not frozen enough yet.
 
    A worker that cannot do what it was asked returns `success: false`, `status: spec-problem`, no commits
    and a clean tree, and says what was missing — enough to choose between re-spec and retry without opening
@@ -90,9 +104,10 @@ those specs was wrong.
 - **Know what no fetch can check.** `<Virtualize>` renders nothing during prerender, so virtualized rows — and
   anything that depends on them — are not assertable from fetched HTML at all. That is settled; do not
   re-derive it, and do not redesign a component to make a two-word badge testable.
-- **A task that genuinely needs eyes is marked, not shipped and hoped over.** Run
-  `muthur task attended T-n --reason "…"` before you hand it to validation. The reason is the founder's signal
-  that a human must look, and it stops the conductor spending a session to find out.
+- **A task that genuinely needs eyes says so in its spec, on a line of its own:** `needs: browser`. The hub
+  reads that when you freeze the spec, flags the task for a human validator and the conductor never staffs
+  it — so nobody spends a session finding out. `muthur task attended T-n --reason "…"` still works for a need
+  you discover after freezing, and `--clear` lifts either when the reason stops being true.
 
 ## Rules
 

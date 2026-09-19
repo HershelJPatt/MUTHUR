@@ -27,6 +27,29 @@ public sealed class HarnessTests : IDisposable
     }
 
     [Fact]
+    public async Task A_tier_entry_may_say_how_hard_its_model_thinks()
+    {
+        // What a new hub is given: the codex entries name their model, so the ledger stops recording "codex/default".
+        var shipped = (await TierAsync("mastermind")).Candidates.Single(c => c.Harness == "codex");
+        Assert.Equal("gpt-6-astra", shipped.Model);
+        Assert.Equal("high", shipped.ReasoningEffort);
+
+        File.WriteAllText(Path.Combine(_hub.DataDir, MuthurEnvironment.HarnessFile),
+            """
+            { "tiers": { "implementer": [
+              { "harness": "codex", "model": "x", "reasoningEffort": "high", "account": "team" },
+              { "harness": "codex", "model": "y", "account": "team" },
+              { "harness": "codex", "model": "z", "reasoningEffort": "", "account": "team" }
+            ] } }
+            """);
+
+        var edited = (await TierAsync("implementer")).Candidates;
+        Assert.Equal("high", edited[0].ReasoningEffort);
+        Assert.Null(edited[1].ReasoningEffort);   // absent means the harness's own default
+        Assert.Null(edited[2].ReasoningEffort);   // and so does empty
+    }
+
+    [Fact]
     public async Task An_agent_out_of_quota_takes_its_account_out_of_rotation_until_the_limit_passes()
     {
         var first = (await TierAsync("implementer")).Candidates[0];

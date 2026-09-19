@@ -14,8 +14,8 @@ public sealed class HarnessTests : IDisposable
         try { Directory.Delete(_scratch, recursive: true); } catch (IOException) { }
     }
 
-    private WorkerRequest Request(string model = "opus") =>
-        new("C:/repo/.worktrees/w1", "do the unit", model, "C:/repo/.git", ["dotnet *", "git commit *"], ["git push*", "muthur *"], _scratch);
+    private WorkerRequest Request(string model = "opus", string? effort = null) =>
+        new("C:/repo/.worktrees/w1", "do the unit", model, "C:/repo/.git", ["dotnet *", "git commit *"], ["git push*", "muthur *"], _scratch, effort);
 
     [Fact]
     public void Claude_runs_headless_with_permissions_in_a_settings_file_and_the_prompt_on_stdin()
@@ -76,6 +76,58 @@ public sealed class HarnessTests : IDisposable
         Assert.Contains("--oss", args);
         Assert.Equal("ollama", args[args.IndexOf("--local-provider") + 1]);
         Assert.Equal("gpt-oss:20b", args[args.IndexOf("--model") + 1]);
+    }
+
+    [Fact]
+    public void Codex_is_told_how_hard_to_think_when_the_candidate_says_so()
+    {
+        var args = Harnesses.Find("codex")!.Build(Request(model: "gpt-6-astra", effort: "high")).Arguments.ToList();
+
+        // -c and its setting are one pair: a stray "-c" would swallow the next argument instead.
+        var flag = args.IndexOf("-c");
+        Assert.True(flag >= 0);
+        Assert.Equal("model_reasoning_effort=\"high\"", args[flag + 1]);
+        Assert.Equal("gpt-6-astra", args[args.IndexOf("--model") + 1]);
+        Assert.Equal("-", args[^1]);
+    }
+
+    [Theory]
+    [InlineData(null)]
+    [InlineData("")]
+    public void Codex_says_nothing_about_reasoning_effort_when_the_candidate_does_not(string? effort)
+    {
+        var args = Harnesses.Find("codex")!.Build(Request(model: "gpt-6-astra", effort: effort)).Arguments.ToList();
+
+        Assert.DoesNotContain("-c", args);
+        Assert.DoesNotContain(args, a => a.Contains("model_reasoning_effort"));
+    }
+
+    [Fact]
+    public void Claude_has_no_reasoning_effort_and_ignores_the_one_it_is_given()
+    {
+        var args = Harnesses.Find("claude")!.Build(Request(effort: "high")).Arguments.ToList();
+
+        Assert.DoesNotContain("-c", args);
+        Assert.DoesNotContain(args, a => a.Contains("model_reasoning_effort"));
+    }
+
+    [Fact]
+    public void The_catalog_a_new_hub_gets_names_the_codex_model_and_how_hard_it_thinks()
+    {
+        using var doc = JsonDocument.Parse(HarnessDefaults.CatalogJson,
+            new JsonDocumentOptions { CommentHandling = JsonCommentHandling.Skip, AllowTrailingCommas = true });
+
+        var codex = doc.RootElement.GetProperty("tiers").EnumerateObject()
+            .SelectMany(t => t.Value.EnumerateArray())
+            .Where(c => c.GetProperty("harness").GetString() == "codex")
+            .ToList();
+
+        Assert.NotEmpty(codex);
+        Assert.All(codex, c =>
+        {
+            Assert.Equal("gpt-6-astra", c.GetProperty("model").GetString());
+            Assert.Equal("high", c.GetProperty("reasoningEffort").GetString());
+        });
     }
 
     [Fact]

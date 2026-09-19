@@ -2,6 +2,7 @@ using System.Net;
 using System.Net.Http.Json;
 using System.Reflection;
 using System.Text.Json;
+using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.DependencyInjection;
 using Muthur.Contracts;
 using Muthur.Core;
@@ -455,6 +456,57 @@ public sealed class ReceiptsTests : IDisposable
             "reported it and biased anywhere it is aggregated, because the runs that report nothing are every " +
             "claude session and every conductor-started validator.");
     }
+
+    /// <summary>
+    /// The field the founder refused to let this task skip. A run staffed from another run's plan records which
+    /// run that was, so a two-level fan-out is a tree in the ledger and the receipts row can attribute what the
+    /// fan-out cost to the work that caused it. The second half is the half that rots quietly: a run an
+    /// orchestrator started itself records <em>no</em> <c>parent</c> key, not an explicit null. A key present on
+    /// every row would say every run came from somewhere, and then the tree is unreadable again — every run
+    /// would have a parent edge, most of them to nothing.
+    /// </summary>
+    [Fact]
+    public async Task A_planned_run_names_the_run_that_planned_it_and_an_unplanned_one_carries_no_parent_key()
+    {
+        await _hub.AddProjectAsync(repoPath: _repo.Path);
+        var owner = await RegisterAsync("owner", "claude", "opus");
+        var task = await owner.AddTaskAsync("Build the feature");
+        var specialist = $"worker/{task.Id.ToLowerInvariant()}-all-9f1c2e";
+
+        // The specialist an orchestrator staffed directly, and then one of the units it came back planning.
+        (await owner.PostAsJsonAsync(Routes.WorkerRuns, new WorkerRunReport(
+            task.Id, "mastermind", "claude", "opus", "founder@example.com", specialist, null, true, 300, 1.10m))).EnsureSuccessStatusCode();
+        (await owner.PostAsJsonAsync(Routes.WorkerRuns, new WorkerRunReport(
+            task.Id, "implementer", "codex", "gpt", "work@example.com", Branch(task.Id), "unit-a", true, 90, 0.42m, specialist))).EnsureSuccessStatusCode();
+
+        var receipts = await ReceiptsAsync();
+
+        // Newest first by Seq, so the planned unit is the row above the run that planned it.
+        Assert.Equal(["unit-a", null], receipts.Runs.Select(r => r.Unit));
+        Assert.Equal(specialist, receipts.Runs[0].Parent);
+        Assert.Null(receipts.Runs[1].Parent);
+        // And the fan-out's cost is attributable, which is the whole reason the field exists.
+        Assert.Equal(0.42m, receipts.Runs[0].CostUsd);
+
+        var payloads = await PayloadsAsync("worker.finished");
+        var planned = JsonDocument.Parse(payloads[1]).RootElement;
+        Assert.True(planned.TryGetProperty("parent", out var parent), $"the planned run recorded no parent: {payloads[1]}");
+        Assert.Equal(specialist, parent.GetString());
+
+        var unplanned = JsonDocument.Parse(payloads[0]).RootElement;
+        Assert.False(unplanned.TryGetProperty("parent", out _),
+            "a run an orchestrator started directly recorded a parent key anyway: " + payloads[0] +
+            ". Omit the field rather than writing parent: null - every row claiming a parent edge is the same " +
+            "as no row having one, and reading the tree back is the point of recording it.");
+    }
+
+    /// <summary>The payloads of one event type exactly as the ledger stored them, oldest first.</summary>
+    private Task<List<string>> PayloadsAsync(string type) =>
+        Ledger.ReadAsync((db, _) => db.Events
+            .Where(e => e.Type == type)
+            .OrderBy(e => e.Seq)
+            .Select(e => e.PayloadJson)
+            .ToListAsync());
 
     /// <summary>Every property of the receipts contract that carries money, named by the record it sits on.</summary>
     private static IEnumerable<string> CostsIn(Type contract)

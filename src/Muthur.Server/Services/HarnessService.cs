@@ -31,7 +31,7 @@ public sealed class HarnessService(Ledger ledger, MuthurOptions options)
                 .Select(t => new TierDto(t.Tier, t.Candidates.Select(c =>
                 {
                     var until = c.Account is not null && limits.TryGetValue(c.Account, out var u) ? u : (DateTimeOffset?)null;
-                    return new HarnessCandidateDto(c.Harness, c.Model, c.Account, until is not null, until);
+                    return new HarnessCandidateDto(c.Harness, c.Model, c.Account, until is not null, until, c.ReasoningEffort);
                 }).ToList()))
                 .ToList();
         }, ct);
@@ -71,16 +71,14 @@ public sealed class HarnessService(Ledger ledger, MuthurOptions options)
         return ledger.MutateAsync(caller, async m =>
         {
             int? taskId = report.Task is { Length: > 0 } id ? (await TaskService.LoadAsync(m.Db, id, ct)).Id : null;
-            m.Record(report.Success ? "worker.finished" : "worker.failed", taskId, new
-            {
-                report.Tier,
-                worker = $"{report.Harness}/{(report.Model.Length > 0 ? report.Model : "default")}",
-                report.Account,
-                report.Branch,
-                report.Unit,
-                seconds = report.DurationSeconds,
-                report.CostUsd,
-            });
+            var worker = $"{report.Harness}/{(report.Model.Length > 0 ? report.Model : "default")}";
+            var seconds = report.DurationSeconds;
+            // Absent, not null, when an orchestrator started the run itself: a parent key on every row would say
+            // every run came from somewhere, and a tree is only readable while that stays false.
+            object payload = report.Parent is { Length: > 0 } parent
+                ? new { report.Tier, worker, report.Account, report.Branch, report.Unit, seconds, report.CostUsd, parent }
+                : new { report.Tier, worker, report.Account, report.Branch, report.Unit, seconds, report.CostUsd };
+            m.Record(report.Success ? "worker.finished" : "worker.failed", taskId, payload);
         }, ct);
     }
 
@@ -102,7 +100,8 @@ public sealed class HarnessService(Ledger ledger, MuthurOptions options)
                     var harness = c.GetProperty("harness").GetString() ?? "";
                     var model = c.TryGetProperty("model", out var mo) ? mo.GetString() ?? "" : "";
                     var account = c.TryGetProperty("account", out var ac) ? ac.GetString() : null;
-                    if (harness.Length > 0) candidates.Add(new HarnessCandidate(harness, model, account));
+                    var effort = c.TryGetProperty("reasoningEffort", out var re) ? re.GetString() : null;
+                    if (harness.Length > 0) candidates.Add(new HarnessCandidate(harness, model, account, effort is { Length: > 0 } ? effort : null));
                 }
                 tiers.Add(new CatalogTier(tier.Name.ToLowerInvariant(), candidates));
             }

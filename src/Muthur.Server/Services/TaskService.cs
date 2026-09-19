@@ -15,6 +15,10 @@ public sealed partial class TaskService(Ledger ledger, LeasePolicy leases, ITask
     [GeneratedRegex(@"^#\s*(T-\d+)\b")]
     private static partial Regex SpecHeadingPattern();
 
+    /// <summary>A declared need, with any leading list marker, quote marker or emphasis: <c>- **needs:** browser</c>.</summary>
+    [GeneratedRegex(@"^[\s>*_`-]*needs:[\s*_`]*(.+?)\s*$", RegexOptions.IgnoreCase)]
+    private static partial Regex SpecNeedsPattern();
+
     public Task<TaskDto> AddAsync(Caller caller, AddTaskRequest request, CancellationToken ct = default)
     {
         caller.RequireIdentified();
@@ -129,12 +133,22 @@ public sealed partial class TaskService(Ledger ledger, LeasePolicy leases, ITask
             if (string.IsNullOrWhiteSpace(request.Path) || Path.IsPathRooted(request.Path))
                 throw Fail.Rule("relative_path_required", "The spec path must be relative to the project repository.");
             var relative = request.Path.Replace('\\', '/');
-            await RequireSpecBelongsToTaskAsync(task, relative, request.Branch, ct);
+            var spec = await RequireSpecBelongsToTaskAsync(task, relative, request.Branch, ct);
             if (task.State is not (TaskState.InProgress or TaskState.Blocked))
                 throw Fail.Rule("not_in_progress", $"A spec can only be attached while the task is in progress; {Wire.TaskId(task.Id)} is '{task.State.ToWire()}'.");
             task.SpecPath = relative;
             task.UpdatedAt = m.Now;
             m.Record("task.spec_set", task.Id, new { path = task.SpecPath });
+
+            // A spec that says out loud what it needs is flagged the moment it is frozen, rather than
+            // discovered by a validator session that spends a role lease, an account's quota and 45 minutes
+            // of the founder's budget to find out. Nothing the conductor can staff has a browser, so any
+            // declared need is a human's — and the conductor already leaves an attended task alone.
+            if (SpecNeeds(spec) is { } need && string.IsNullOrWhiteSpace(task.AttendedReason))
+            {
+                task.AttendedReason = $"The spec declares 'needs: {need}'. No unattended session has one, so this waits for a human validator.";
+                m.Record("task.attended", task.Id, new { reason = task.AttendedReason, source = "spec_needs", need });
+            }
             return task.ToDto();
         }, ct);
 
@@ -237,7 +251,7 @@ public sealed partial class TaskService(Ledger ledger, LeasePolicy leases, ITask
     /// A spec must be a file inside the project's checkout, and if its first heading names a task it must name
     /// this one: ledger ids get reused, so attaching another task's spec is how implementers build the wrong thing.
     /// </summary>
-    private async Task RequireSpecBelongsToTaskAsync(WorkTask task, string relative, string? branch, CancellationToken ct)
+    private async Task<string> RequireSpecBelongsToTaskAsync(WorkTask task, string relative, string? branch, CancellationToken ct)
     {
         var root = Path.GetFullPath(task.Project!.RepoPath);
         var full = Path.GetFullPath(Path.Combine(root, relative));
@@ -256,18 +270,22 @@ public sealed partial class TaskService(Ledger ledger, LeasePolicy leases, ITask
                   "and not in the working tree. If the spec is committed on a different branch, pass --branch <that branch>."
                 : $"No file at '{relative}' in {task.Project.RepoPath}. If the spec is committed on a task branch, pass --branch task/T-n-<slug>.");
 
-        if (FirstHeadingTaskId(content) is { } found && found != Wire.TaskId(task.Id))
+        // The heading check keeps its own small window: its question is about the first non-blank line, and a
+        // mistaken path to something enormous stays cheap to reject.
+        if (FirstHeadingTaskId(content[..Math.Min(content.Length, Head)]) is { } found && found != Wire.TaskId(task.Id))
             throw Fail.Rule("spec_id_mismatch", $"'{relative}' is the spec for {found}, not {Wire.TaskId(task.Id)}. Attaching it here would point implementers at the wrong work — and writing over it would destroy that record.");
+        return content;
 
         async Task<string?> FromBranchAsync(string? candidate)
         {
             if (candidate is not { Length: > 0 } || tried.Contains(candidate)) return null;
             tried.Add(candidate);
-            // Capped to the same head the working tree is read in, so which source answered can never change
-            // the verdict: the heading check has to see exactly as much either way.
-            return await lander.ReadFileAsync(task.Project!, candidate, relative, ct) is { } text
-                ? text[..Math.Min(text.Length, Head)]
-                : null;
+            // Refused rather than truncated, the same way the working tree is read: a spec too big to read in
+            // full is one whose declared need could be past the cut, and silently scanning a prefix is the
+            // failure this whole rule exists to prevent.
+            if (await lander.ReadFileAsync(task.Project!, candidate, relative, ct) is not { } text) return null;
+            if (text.Length > MaxSpec) throw TooLarge(relative);
+            return text;
         }
 
         string? FromWorkingTree()
@@ -276,8 +294,11 @@ public sealed partial class TaskService(Ledger ledger, LeasePolicy leases, ITask
             try
             {
                 using var reader = new StreamReader(full);
-                var head = new char[Head];
-                return new string(head, 0, reader.ReadBlock(head, 0, head.Length));
+                // One more than the cap, so "it filled the buffer" and "there was more" are different answers.
+                var buffer = new char[MaxSpec + 1];
+                var read = reader.ReadBlock(buffer, 0, buffer.Length);
+                if (read > MaxSpec) throw TooLarge(relative);
+                return new string(buffer, 0, read);
             }
             catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
             {
@@ -288,6 +309,18 @@ public sealed partial class TaskService(Ledger ledger, LeasePolicy leases, ITask
 
     /// <summary>How much of a spec the heading check reads: a mistaken path to something enormous stays cheap.</summary>
     private const int Head = 8 * 1024;
+
+    /// <summary>
+    /// The largest spec that is read at all. A declared need can be anywhere in the document, so the read
+    /// cannot stop early — and a cap that truncates silently does not remove that problem, it only moves it
+    /// to a bigger number. Anything past this is **refused**, which keeps a mistaken path to something
+    /// enormous cheap to reject while leaving no size at which a declaration is quietly unseen.
+    /// </summary>
+    private const int MaxSpec = 1024 * 1024;
+
+    private static MuthurException TooLarge(string relative) =>
+        Fail.Rule("spec_too_large", $"'{relative}' is larger than 1 MB. A spec that size cannot be read in full, " +
+            "and a 'needs:' line past the cut would be silently missed. Shorten it, or split what belongs elsewhere out of it.");
 
     /// <summary>A separator at the boundary is what keeps '/repo-evil' from counting as inside '/repo'.</summary>
     private static bool IsInside(string root, string full)
@@ -303,6 +336,24 @@ public sealed partial class TaskService(Ledger ledger, LeasePolicy leases, ITask
     /// The task id in the spec's first non-blank line, or null if the heading names none. Takes the content
     /// rather than a path, because a spec read out of a branch must be checked exactly as one on disk is.
     /// </summary>
+    /// <summary>
+    /// What a spec says it needs that an unattended session does not have, or null when it declares nothing.
+    /// <para>
+    /// One line, anywhere in the document: <c>needs: browser</c>, with any leading list marker, quote marker
+    /// or emphasis. The value is not interpreted — nothing the conductor can staff has a browser, a GUI or
+    /// hands, so declaring any of them means the same thing today. Matching a capability against a harness is
+    /// the upgrade this deliberately does not build.
+    /// </para>
+    /// </summary>
+    private static string? SpecNeeds(string content)
+    {
+        foreach (var line in content.Split('\n'))
+            if (SpecNeedsPattern().Match(line) is { Success: true } match
+                && match.Groups[1].Value.Trim().TrimEnd('.', '*', '`') is { Length: > 0 } need)
+                return need;
+        return null;
+    }
+
     private static string? FirstHeadingTaskId(string content)
     {
         foreach (var line in content.Split('\n'))

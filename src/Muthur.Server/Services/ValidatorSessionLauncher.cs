@@ -15,6 +15,23 @@ public sealed class ValidatorLaunchException(string message) : Exception(message
 public sealed class ValidatorSessionException(string message) : Exception(message);
 
 /// <summary>
+/// What any session the conductor starts may and may not run.
+/// <para>
+/// One home for both launchers, because this is a boundary rather than a convenience: the deny list is the whole
+/// of what stops an unattended session pushing, merging, or checking out the default branch, and two copies of a
+/// boundary is how one of them quietly grows a hole. A validator and an orchestrator differ in what they are told
+/// to do, never in what they are allowed to do — an orchestrator does more, but nothing it does needs more reach
+/// than the hub's own CLI and the tools to build with.
+/// </para>
+/// </summary>
+internal static class SessionCommands
+{
+    internal static readonly string[] Allowed = ["muthur*", "git*", "dotnet*", "pwsh*", "powershell*"];
+
+    internal static readonly string[] Denied = ["git push*", "git merge*", "git rebase*", "git checkout main*", "git switch main*", "gh*"];
+}
+
+/// <summary>
 /// Starts a real validator session through <see cref="AgentLauncher"/>.
 /// <para>
 /// The session is an ordinary registered agent with an ordinary token: nothing the conductor starts has authority
@@ -54,9 +71,10 @@ public sealed class ValidatorSessionLauncher(
                 Prompt: Prompt(assignment, candidate),
                 Model: candidate.Model,
                 GitCommonDirectory: null,
-                AllowedCommands: Allowed,
-                DeniedCommands: Denied,
-                ScratchDirectory: scratch),
+                AllowedCommands: SessionCommands.Allowed,
+                DeniedCommands: SessionCommands.Denied,
+                ScratchDirectory: scratch,
+                ReasoningEffort: candidate.ReasoningEffort),
             candidate => IdentityFor(assignment, candidate, ct),
             TimeSpan.FromMinutes(options.ConductorSessionMinutes),
             candidate => MarkLimitedAsync(candidate.Account, ct),
@@ -135,11 +153,6 @@ public sealed class ValidatorSessionLauncher(
             ? ledger.MutateAsync(Caller.Founder, m => HarnessService.ApplyAsync(m, account, null, ct), ct)
             : Task.CompletedTask;
 
-    /// <summary>A validator drives the product and talks to the hub; it does not push, merge, or touch the default branch.</summary>
-    private static readonly string[] Allowed = ["muthur*", "git*", "dotnet*", "pwsh*", "powershell*"];
-
-    private static readonly string[] Denied = ["git push*", "git merge*", "git rebase*", "git checkout main*", "git switch main*", "gh*"];
-
     /// <summary>
     /// Candidates for the tier, with the harness that built the task moved to the back rather than removed:
     /// a different vendor checking the work is a preference, and validating beats not validating.
@@ -148,7 +161,7 @@ public sealed class ValidatorSessionLauncher(
     {
         var tiers = await harnesses.TiersAsync(Tier, ct);
         return Prefer(tiers.SelectMany(t => t.Candidates).Where(c => !c.Limited)
-            .Select(c => new HarnessCandidate(c.Harness, c.Model, c.Account)).ToList(), avoid);
+            .Select(c => new HarnessCandidate(c.Harness, c.Model, c.Account, c.ReasoningEffort)).ToList(), avoid);
     }
 
     /// <summary>

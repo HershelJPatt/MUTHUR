@@ -1,3 +1,4 @@
+using System.Globalization;
 using System.Text.Json;
 using Microsoft.EntityFrameworkCore;
 using Muthur.Contracts;
@@ -19,6 +20,28 @@ public interface IValidatorSessionLauncher
 }
 
 /// <summary>
+/// One orchestrator session the conductor intends to start: a task in the backlog, and nobody on it yet.
+/// <para>
+/// No role, because an orchestrator takes none. The session claims the task itself, which is also the only thing
+/// standing between two sessions and one task: the claim is the hub's, and the loser of that race exits.
+/// </para>
+/// </summary>
+/// <param name="Resuming">
+/// Whether this task has been worked on before. The backlog holds two kinds of task that look identical: work
+/// nobody has begun, and work whose session went quiet and was swept back here with its spec and its branch
+/// intact. A session told to start the second kind from nothing designs a task that is already designed.
+/// </param>
+/// <param name="PreviousOwner">Who last held it, out of the ledger, since the sweep cleared the column. Null if nothing says.</param>
+public sealed record OrchestratorAssignment(
+    int TaskId, string TaskKey, string TaskTitle, string Project, bool Resuming = false, string? PreviousOwner = null);
+
+/// <summary>Starts one orchestrator session. Faked in tests; the real one launches a harness through <c>AgentLauncher</c>.</summary>
+public interface IOrchestratorSessionLauncher
+{
+    Task StartAsync(OrchestratorAssignment assignment, CancellationToken ct = default);
+}
+
+/// <summary>
 /// Staffs validation so a task that passes needs nobody awake.
 /// <para>
 /// The conductor adds no state to the task machine it serves. It only notices a task sitting in
@@ -26,11 +49,61 @@ public interface IValidatorSessionLauncher
 /// task is already back with its owner; if that session has gone, the claim lapses and the task is staffable
 /// again on a later pass — the bounce-back loop closes on machinery that already existed.
 /// </para>
+/// <para>
+/// With the second switch on it also starts work: an orchestrator session for a task sitting in the backlog, which
+/// claims the task itself. That half adds no state to the machine either — the backlog is where unstarted work
+/// already lives, and a claim is how a task stops being unstarted — and validation is staffed first out of the one
+/// shared ceiling, because a task in validation is closer to done than a task nobody has begun.
+/// </para>
 /// </summary>
-public sealed class ConductorService(Ledger ledger, MuthurOptions options, TimeProvider clock, IValidatorSessionLauncher launcher)
+public sealed class ConductorService(
+    Ledger ledger,
+    MuthurOptions options,
+    TimeProvider clock,
+    IValidatorSessionLauncher launcher,
+    IOrchestratorSessionLauncher orchestrators)
 {
     private readonly SemaphoreSlim _pass = new(1, 1);
     private readonly HashSet<string> _running = [];
+
+    /// <summary>
+    /// The lifetime of every session this hub has started, cancelled as the host stops.
+    /// <para>
+    /// Sessions used to be launched with <c>CancellationToken.None</c>, which detached the child from the hub's
+    /// lifetime on purpose. <see cref="_running"/> is in memory, so the next hub began with an empty set and
+    /// staffed a task whose orchestrator was still alive: two sessions on one task, two specs, two branches — and
+    /// a survivor that nothing can account for, because it is in no ceiling, no status line and no stall counter.
+    /// <c>ProcessRunner</c> already kills the whole process tree when its token cancels; this is that token.
+    /// </para>
+    /// <para>
+    /// Killing loses less than adopting would. The dead session's claim lapses, <c>LeaseSweeper</c> returns the
+    /// task to the backlog with its branch and spec intact, and the next session continues from there. The work
+    /// survives in the branch; only the process does not. Which is also why <see cref="_running"/> is still not
+    /// persisted: with the children dead, an empty set after a restart is the truth.
+    /// </para>
+    /// </summary>
+    private readonly CancellationTokenSource _sessions = new();
+
+    /// <summary>
+    /// The detached session tasks, so a stop can wait for the kills rather than race the host's exit. Pruned as
+    /// sessions are started, so it stays the size of what is actually running.
+    /// </summary>
+    private readonly List<Task> _sessionTasks = [];
+
+    /// <summary>
+    /// How long a stop waits for the children to die. A hang detector, not a grace period — they are killed, not
+    /// asked — and a stop that never returns is worse than a child that lingers a moment.
+    /// </summary>
+    private static readonly TimeSpan StopBudget = TimeSpan.FromSeconds(10);
+
+    /// <summary>
+    /// The role part of an orchestrator's <see cref="_running"/> and <see cref="_stalls"/> key. Both maps are keyed
+    /// "T-n/role" and <see cref="PlanAsync"/> charges every running session to the role it names, so the two key
+    /// spaces must not be able to meet. <c>RoleKey</c>'s pattern is <c>^[a-z0-9][a-z0-9-]{0,37}$</c>: a key can
+    /// neither contain '#' nor begin with one, so nothing a founder can define reaches this name, and no
+    /// orchestrator can be miscounted into a validator's slot.
+    /// </summary>
+    internal const string OrchestratorRole = "#orchestrator";
 
     /// <summary>Task id → the <see cref="CapState.RoundSeq"/> already announced, so a later round can announce again.</summary>
     private readonly Dictionary<int, long> _escalated = [];
@@ -84,6 +157,29 @@ public sealed class ConductorService(Ledger ledger, MuthurOptions options, TimeP
             await db.Meta.Where(e => e.Key == MetaEntry.ConductorEnabled).Select(e => e.Value).SingleOrDefaultAsync(ct)
                 is { } stored ? stored == "true" : options.ConductorEnabled, ct);
 
+    /// <summary>
+    /// Whether the conductor may also start orchestrators. Absent means no — there is deliberately no
+    /// configuration default to fall back on, so a hub that upgrades into this build spends nothing new until the
+    /// founder says so, and says so in the database where a restart cannot quietly take it back.
+    /// </summary>
+    private Task<bool> OrchestratorsEnabledAsync(CancellationToken ct) =>
+        ledger.ReadAsync(async (db, _) =>
+            await db.Meta.Where(e => e.Key == MetaEntry.ConductorOrchestrators).Select(e => e.Value).SingleOrDefaultAsync(ct) == "true", ct);
+
+    /// <summary>The founder turns the orchestrator half on and off; the decision is in the ledger like any other.</summary>
+    public async Task<ConductorStatusDto> SetOrchestratorsAsync(Caller caller, bool enabled, CancellationToken ct = default)
+    {
+        var was = await OrchestratorsEnabledAsync(ct);
+        await ledger.MutateAsync(caller, async m =>
+        {
+            var row = await m.Db.Meta.SingleOrDefaultAsync(e => e.Key == MetaEntry.ConductorOrchestrators, ct);
+            if (row is null) m.Db.Meta.Add(new MetaEntry { Key = MetaEntry.ConductorOrchestrators, Value = enabled ? "true" : "false" });
+            else row.Value = enabled ? "true" : "false";
+            if (was != enabled) m.Record(enabled ? "conductor.orchestrators_on" : "conductor.orchestrators_off");
+        }, ct);
+        return await StatusAsync(ct);
+    }
+
     /// <summary>Sessions the conductor believes it has running, by "T-n/role".</summary>
     public int RunningCount { get { lock (_running) return _running.Count; } }
 
@@ -125,18 +221,74 @@ public sealed class ConductorService(Ledger ledger, MuthurOptions options, TimeP
         _ => "no verdict",
     };
 
-    public async Task<ConductorStatusDto> StatusAsync(CancellationToken ct = default) => new(
-        await EnabledAsync(ct),
-        RunningCount,
-        options.ConductorMaxSessions,
-        options.ConductorSessionMinutes,
-        options.ConductorMaxAttempts,
-        options.EffectiveConductorIntervalSeconds,   // what it runs at, not what was asked for
-        options.ConductorStallProbeMinutes,
-        _lastPass,
-        _lastAction,
-        Sessions(),
-        Stalls());
+    /// <summary>Remember a detached session so a stop can wait for it, dropping the ones that have already ended.</summary>
+    private void Track(Task session)
+    {
+        lock (_running)
+        {
+            _sessionTasks.RemoveAll(t => t.IsCompleted);
+            _sessionTasks.Add(session);
+        }
+    }
+
+    /// <summary>
+    /// End every session this hub started, and say so once. Called as the host stops and before it exits, because a
+    /// child that outlives the hub belongs to nobody: the next hub starts with an empty <see cref="_running"/> and
+    /// staffs its task all over again.
+    /// <para>
+    /// Idempotent, and silent when there was nothing to end — a founder should read
+    /// <c>conductor.sessions_terminated</c> as "work was cut off here", not as a line every shutdown prints.
+    /// </para>
+    /// </summary>
+    public async Task StopSessionsAsync(CancellationToken ct = default)
+    {
+        if (_sessions.IsCancellationRequested) return;
+
+        Task[] running;
+        int count;
+        lock (_running)
+        {
+            count = _running.Count;
+            running = [.. _sessionTasks.Where(t => !t.IsCompleted)];
+        }
+
+        await _sessions.CancelAsync();
+
+        // The sessions observe the cancellation on a pool thread and kill their process trees there, so wait for
+        // them instead of racing the host's exit — otherwise the event below records an intention, not an outcome.
+        if (running.Length > 0)
+        {
+            try { await Task.WhenAll(running).WaitAsync(StopBudget, CancellationToken.None); }
+            catch (TimeoutException) { }
+        }
+
+        if (count == 0) return;
+        await ledger.MutateAsync(Caller.Founder, m =>
+        {
+            m.Record("conductor.sessions_terminated", payload: new { count });
+            return Task.CompletedTask;
+        }, ct);
+    }
+
+    public async Task<ConductorStatusDto> StatusAsync(CancellationToken ct = default)
+    {
+        var ceiling = await CeilingAsync(ct);
+        return new(
+            await EnabledAsync(ct),
+            RunningCount,
+            options.ConductorMaxSessions,
+            options.ConductorSessionMinutes,
+            options.ConductorMaxAttempts,
+            options.EffectiveConductorIntervalSeconds,   // what it runs at, not what was asked for
+            options.ConductorStallProbeMinutes,
+            _lastPass,
+            _lastAction,
+            ceiling.Sessions,
+            ceiling.Reason,
+            await OrchestratorsEnabledAsync(ct),
+            Sessions(),
+            Stalls());
+    }
 
     /// <summary>The founder turns staffing on and off; the decision is in the ledger like any other.</summary>
     public async Task<ConductorStatusDto> SetEnabledAsync(Caller caller, bool enabled, CancellationToken ct = default)
@@ -152,6 +304,128 @@ public sealed class ConductorService(Ledger ledger, MuthurOptions options, TimeP
             // Turning it on is the founder saying "try again"; a stall from before that is not their answer.
             if (enabled) lock (_stalls) _stalls.Clear();
         }, ct);
+        return await StatusAsync(ct);
+    }
+
+    /// <summary>An unattended window in local time, and the ceiling it holds the conductor to while it is open.</summary>
+    private sealed record Window(TimeSpan From, TimeSpan To, int Sessions);
+
+    /// <summary>
+    /// How many sessions a pass may run, and the one sentence that says where the number came from.
+    /// <para>
+    /// The founder moves this while the hub runs, so it lives in the database beside the on/off switch and for the
+    /// same reason: a restart must not quietly hand the configuration file back its say. Configuration is the
+    /// default, not the authority.
+    /// </para>
+    /// </summary>
+    private Task<(int Sessions, string Reason)> CeilingAsync(CancellationToken ct) =>
+        ledger.ReadAsync(async (db, now) =>
+        {
+            var stored = await db.Meta
+                .Where(e => e.Key == MetaEntry.ConductorSessions || e.Key == MetaEntry.ConductorUnattended)
+                .ToDictionaryAsync(e => e.Key, e => e.Value, ct);
+            return Ceiling(
+                stored.GetValueOrDefault(MetaEntry.ConductorSessions),
+                stored.GetValueOrDefault(MetaEntry.ConductorUnattended),
+                // Local time, because "while I am asleep" is a fact about the founder's night and not about UTC.
+                TimeZoneInfo.ConvertTime(now, clock.LocalTimeZone).TimeOfDay);
+        }, ct);
+
+    private (int Sessions, string Reason) Ceiling(string? sessions, string? unattended, TimeSpan localNow)
+    {
+        var (configured, reason) = int.TryParse(sessions, CultureInfo.InvariantCulture, out var set) && set >= 1
+            ? (set, "Set by the founder.")
+            : (options.ConductorMaxSessions, "Muthur:ConductorMaxSessions.");
+
+        if (ParseWindow(unattended) is not { } window || !IsInside(window, localNow)) return (configured, reason);
+        var capped = Math.Min(configured, window.Sessions);
+        return (capped, $"Unattended {window.From:hh\\:mm}-{window.To:hh\\:mm} caps this at {capped}.");
+    }
+
+    /// <summary>"22:00-07:00@1". Written only by <see cref="SetCeilingAsync"/>, so anything else is read as no window.</summary>
+    private static Window? ParseWindow(string? stored)
+    {
+        if (stored is not { Length: > 0 }) return null;
+        var at = stored.LastIndexOf('@');
+        var dash = stored.IndexOf('-');
+        if (dash < 0 || at < dash) return null;
+        if (ParseTime(stored[..dash]) is not { } from || ParseTime(stored[(dash + 1)..at]) is not { } to) return null;
+        if (!int.TryParse(stored[(at + 1)..], CultureInfo.InvariantCulture, out var sessions) || sessions < 1) return null;
+        return from == to ? null : new Window(from, to, sessions);   // a window with no width is not a window
+    }
+
+    /// <summary>A window runs from its start to its end, and one that ends before it starts has crossed midnight.</summary>
+    private static bool IsInside(Window window, TimeSpan localNow) =>
+        window.From < window.To
+            ? localNow >= window.From && localNow < window.To
+            : localNow >= window.From || localNow < window.To;
+
+    /// <summary>"HH:mm", 24-hour, exactly as the founder is told. Null means that is not a time.</summary>
+    private static TimeSpan? ParseTime(string? text)
+    {
+        if (text is not { Length: 5 } || text[2] != ':') return null;
+        if (!char.IsAsciiDigit(text[0]) || !char.IsAsciiDigit(text[1]) ||
+            !char.IsAsciiDigit(text[3]) || !char.IsAsciiDigit(text[4])) return null;
+        var hours = ((text[0] - '0') * 10) + (text[1] - '0');
+        var minutes = ((text[3] - '0') * 10) + (text[4] - '0');
+        return hours <= 23 && minutes <= 59 ? new TimeSpan(hours, minutes, 0) : null;
+    }
+
+    private static MuthurException SessionsInvalid() =>
+        Fail.Rule("sessions_invalid", "The conductor needs at least one session to do anything.");
+
+    private static MuthurException TimeInvalid() => Fail.Rule("time_invalid", "Times are HH:mm, 24-hour.");
+
+    /// <summary>
+    /// The founder raises or lowers the ceiling, or caps the hours nobody is watching. Recorded in the ledger like
+    /// every other decision, and kept in the database so the next restart still knows about it.
+    /// </summary>
+    public async Task<ConductorStatusDto> SetCeilingAsync(Caller caller, ConductorSessionsRequest request, CancellationToken ct = default)
+    {
+        if (request.Sessions is < 1 || request.UnattendedSessions is < 1) throw SessionsInvalid();
+
+        var given = new[] { request.UnattendedFrom is { Length: > 0 }, request.UnattendedTo is { Length: > 0 }, request.UnattendedSessions is not null };
+        if (given.Any(g => g) && !given.All(g => g))
+            throw Fail.Rule("unattended_incomplete", "An unattended window needs --from, --to and --sessions.");
+
+        // Both times before anything is written: half a window is worse than none.
+        var window = given[0]
+            ? new Window(ParseTime(request.UnattendedFrom) ?? throw TimeInvalid(),
+                ParseTime(request.UnattendedTo) ?? throw TimeInvalid(), request.UnattendedSessions!.Value)
+            : null;
+
+        await ledger.MutateAsync(caller, async m =>
+        {
+            async Task StoreAsync(string key, string? value)
+            {
+                var row = await m.Db.Meta.SingleOrDefaultAsync(e => e.Key == key, ct);
+                if (value is null) { if (row is not null) m.Db.Meta.Remove(row); }
+                else if (row is null) m.Db.Meta.Add(new MetaEntry { Key = key, Value = value });
+                else row.Value = value;
+            }
+
+            if (request.Clear)
+            {
+                await StoreAsync(MetaEntry.ConductorSessions, null);
+                await StoreAsync(MetaEntry.ConductorUnattended, null);
+                m.Record("conductor.ceiling_cleared");
+                return;
+            }
+
+            if (request.Sessions is { } sessions)
+            {
+                await StoreAsync(MetaEntry.ConductorSessions, sessions.ToString(CultureInfo.InvariantCulture));
+                m.Record("conductor.sessions_set", payload: new { sessions });
+            }
+
+            if (window is not null)
+            {
+                var (from, to) = ($"{window.From:hh\\:mm}", $"{window.To:hh\\:mm}");
+                await StoreAsync(MetaEntry.ConductorUnattended, $"{from}-{to}@{window.Sessions}");
+                m.Record("conductor.unattended_set", payload: new { from, to, sessions = window.Sessions });
+            }
+        }, ct);
+
         return await StatusAsync(ct);
     }
 
@@ -194,12 +468,15 @@ public sealed class ConductorService(Ledger ledger, MuthurOptions options, TimeP
         return state;
     }
 
-    private static string? Head(string payloadJson)
+    private static string? Head(string payloadJson) => Text(payloadJson, "head");
+
+    /// <summary>One string out of an event payload. A payload that is not what was hoped for says nothing rather than throwing.</summary>
+    private static string? Text(string payloadJson, string property)
     {
         try
         {
             using var document = JsonDocument.Parse(payloadJson);
-            return document.RootElement.TryGetProperty("head", out var value) && value.ValueKind == JsonValueKind.String
+            return document.RootElement.TryGetProperty(property, out var value) && value.ValueKind == JsonValueKind.String
                 ? value.GetString()
                 : null;
         }
@@ -252,6 +529,11 @@ public sealed class ConductorService(Ledger ledger, MuthurOptions options, TimeP
                 {
                     var slash = session.IndexOf('/');                   // keys are "T-n/role"
                     var (task, role) = (session[..slash], session[(slash + 1)..]);
+                    // Not every running session is a validator. An orchestrator's key is "T-n/#orchestrator" and it
+                    // holds no role at all, so nothing here is its slot to take. Skipping it keeps that fact local
+                    // rather than resting on the reader knowing that no role key the hub accepts can begin with a
+                    // '#', which is what would otherwise have to hold for a validator never to be starved by one.
+                    if (role.StartsWith('#')) continue;
                     if (heldBy.Contains((role, ValidatorSessionLauncher.IdentityName(task, role)))) continue;
                     liveHolders[role] = liveHolders.GetValueOrDefault(role) + 1;
                 }
@@ -306,9 +588,108 @@ public sealed class ConductorService(Ledger ledger, MuthurOptions options, TimeP
         }, ct);
     }
 
+    /// <summary>The <see cref="_running"/> and <see cref="_stalls"/> key for one task's orchestrator.</summary>
+    private static string OrchestratorKey(string taskKey) => $"{taskKey}/{OrchestratorRole}";
+
+    /// <summary>
+    /// Whether this task has been worked on before. <c>task spec</c> requires an owner and a branch is recorded
+    /// only by <c>task implemented</c>, so either one means some session has already had this task — and the sweep
+    /// that returned it to the backlog kept both while clearing the owner.
+    /// </summary>
+    private static bool CarriesWork(WorkTask task) =>
+        task.SpecPath is { Length: > 0 } || task.Branch is { Length: > 0 };
+
+    /// <summary>
+    /// Who last held each of these tasks, read out of the ledger because the column is gone: the sweep that
+    /// returned the task to the backlog cleared its owner. <c>task.claimed</c> names the agent that took it and
+    /// <c>task.claim_expired</c> names the agent it lapsed from, so the newer of the two is whoever had it last.
+    /// <c>task.released</c> is deliberately not one of them: it names the caller, and the caller is usually the
+    /// founder releasing somebody else's task, which would put the wrong name in front of the next session.
+    /// </summary>
+    private static async Task<Dictionary<int, string>> PreviousOwnersAsync(MuthurDb db, IReadOnlyList<int> taskIds, CancellationToken ct)
+    {
+        if (taskIds.Count == 0) return [];
+
+        var held = await db.Events
+            .Where(e => (e.Type == "task.claimed" || e.Type == "task.claim_expired") &&
+                        e.TaskId != null && taskIds.Contains(e.TaskId!.Value))
+            .GroupBy(e => e.TaskId!.Value)
+            .Select(g => new { TaskId = g.Key, Payload = g.OrderByDescending(e => e.Seq).First().PayloadJson })
+            .ToDictionaryAsync(x => x.TaskId, x => x.Payload, ct);
+
+        var owners = new Dictionary<int, string>();
+        foreach (var (taskId, payload) in held)
+            if (Text(payload, "agent") is { Length: > 0 } agent) owners[taskId] = agent;
+        return owners;
+    }
+
+    /// <summary>
+    /// What the conductor would start work on right now, most urgent first. Separated from starting anything for
+    /// the same reason <see cref="PlanAsync"/> is: the decision has to be testable without spending a session.
+    /// <para>
+    /// Backlog only, and that one word carries most of the safety. A task somebody has claimed is
+    /// <see cref="TaskState.InProgress"/>, a task waiting on the founder is <see cref="TaskState.Blocked"/>, and a
+    /// task under validation is somebody else's pass — none of them is work nobody has started.
+    /// </para>
+    /// <para>
+    /// What the backlog is not is only work nobody has begun. A task whose owner goes quiet is returned here by
+    /// <c>TaskService.SweepExpiredClaimsAsync</c> within half a minute, keeping its spec, its branch and its
+    /// priority and losing only its owner — so "never started" and "half built and abandoned" arrive looking
+    /// exactly alike. What is already attached to the task is the difference, and a session that is not told
+    /// specs the work a second time and builds over a branch it never read.
+    /// </para>
+    /// </summary>
+    public async Task<IReadOnlyList<OrchestratorAssignment>> PlanOrchestratorsAsync(CancellationToken ct = default)
+    {
+        // Two switches, both of which must be on. The main one is the conductor as a whole; the second is the half
+        // that begins new work, and it is off until the founder has said otherwise on this hub.
+        if (!await EnabledAsync(ct) || !await OrchestratorsEnabledAsync(ct)) return [];
+
+        return await ledger.ReadAsync<IReadOnlyList<OrchestratorAssignment>>(async (db, now) =>
+        {
+            // A project with no repository on record has nowhere for a session to run, and starting one there
+            // spends a subscription to find that out.
+            var waiting = await db.Tasks.Include(t => t.Project)
+                .Where(t => t.State == TaskState.Backlog && t.Project != null && t.Project.RepoPath != "")
+                .ToListAsync(ct);
+            if (waiting.Count == 0) return [];
+
+            // The founder's priority first and above everything else: it is the only lever they have for saying
+            // "this one matters most", and a queue that answers an urgent task by starting an old one instead is
+            // not a queue they can steer. Only among tasks they ranked equally does half-built work go first —
+            // finishing what is begun beats starting something new, but it never overrules what was called urgent.
+            var tasks = waiting
+                .OrderByDescending(t => t.Priority)
+                .ThenByDescending(CarriesWork)
+                .ThenBy(t => t.Id)
+                .ToList();
+            var owners = await PreviousOwnersAsync(db, [.. tasks.Where(CarriesWork).Select(t => t.Id)], ct);
+
+            var plan = new List<OrchestratorAssignment>();
+            foreach (var task in tasks)
+            {
+                var key = OrchestratorKey(Wire.TaskId(task.Id));
+                lock (_running)
+                    if (_running.Contains(key)) continue;
+                lock (_stalls)
+                    if (_stalls.GetValueOrDefault(key) is { StalledAt: { } stalled } &&
+                        stalled + TimeSpan.FromMinutes(options.ConductorStallProbeMinutes) > now)
+                        continue;
+
+                var resuming = CarriesWork(task);
+                plan.Add(new OrchestratorAssignment(task.Id, Wire.TaskId(task.Id), task.Title, task.Project?.Key ?? "",
+                    resuming, resuming ? owners.GetValueOrDefault(task.Id) : null));
+            }
+            return plan;
+        }, ct);
+    }
+
     /// <summary>One pass: start what the plan asks for, up to the session budget. Returns how many it started.</summary>
     public async Task<int> RunPassAsync(CancellationToken ct = default)
     {
+        // A pass that races the stop would launch a child with nobody left to cancel it — the orphan this whole
+        // mechanism exists to prevent, created by the mechanism's own shutdown.
+        if (_sessions.IsCancellationRequested) return 0;
         if (!await EnabledAsync(ct)) return 0;
         if (!await _pass.WaitAsync(0, ct)) return 0;   // a slow pass must never overlap the next tick
         try
@@ -316,13 +697,17 @@ public sealed class ConductorService(Ledger ledger, MuthurOptions options, TimeP
             _lastPass = clock.GetUtcNow();
             await EscalateExhaustedAsync(ct);
 
+            // Read once per pass: the founder may move it mid-pass, and a ceiling that changes under the loop
+            // would let a pass start more sessions than either number allows.
+            var ceiling = (await CeilingAsync(ct)).Sessions;
+
             var started = 0;
             foreach (var assignment in await PlanAsync(ct))
             {
                 var key = $"{assignment.TaskKey}/{assignment.RoleKey}";
                 lock (_running)
                 {
-                    if (_running.Count >= options.ConductorMaxSessions) break;
+                    if (_running.Count >= ceiling) break;
                     if (!_running.Add(key)) continue;
                 }
 
@@ -334,7 +719,30 @@ public sealed class ConductorService(Ledger ledger, MuthurOptions options, TimeP
                 }, ct);
 
                 _lastAction = $"staffed {assignment.TaskKey} for {assignment.RoleKey}";
-                _ = RunSessionAsync(assignment, key);
+                Track(RunSessionAsync(assignment, key));
+                started++;
+            }
+
+            // Validation first, and only then new work, against the one ceiling both halves share. A task in
+            // validating is closer to done than a task in the backlog, so a full ceiling drains what is nearly
+            // finished rather than starting more of what will have to be validated later.
+            foreach (var assignment in await PlanOrchestratorsAsync(ct))
+            {
+                var key = OrchestratorKey(assignment.TaskKey);
+                lock (_running)
+                {
+                    if (_running.Count >= ceiling) break;
+                    if (!_running.Add(key)) continue;
+                }
+
+                await ledger.MutateAsync(Caller.Founder, m =>
+                {
+                    m.Record("conductor.staffing", assignment.TaskId, new { role = OrchestratorRole });
+                    return Task.CompletedTask;
+                }, ct);
+
+                _lastAction = $"staffed an orchestrator for {assignment.TaskKey}";
+                Track(RunOrchestratorSessionAsync(assignment, key));
                 started++;
             }
             return started;
@@ -347,8 +755,13 @@ public sealed class ConductorService(Ledger ledger, MuthurOptions options, TimeP
         try
         {
             Exception? failure = null;
-            try { await launcher.StartAsync(assignment, CancellationToken.None); }
+            try { await launcher.StartAsync(assignment, _sessions.Token); }
             catch (Exception thrown) { failure = thrown; }
+
+            // The hub is stopping and killed this session with its process tree. Nothing about that is the pair's
+            // doing, and charging it would leave every session in flight one strike worse off for a restart —
+            // three restarts would stall work that was never given the chance to fail.
+            if (_sessions.IsCancellationRequested) return;
 
             // A session that ran and hung is not a session that never started, and the founder must not be sent
             // looking for a missing CLI when the real fault is sessions outliving their timeout.
@@ -391,6 +804,61 @@ public sealed class ConductorService(Ledger ledger, MuthurOptions options, TimeP
     }
 
     /// <summary>
+    /// One orchestrator session, from start to whatever it left behind.
+    /// <para>
+    /// The same three endings a validator has, read off the one thing an orchestrator was started to do. It threw
+    /// before a process existed, or a process ran and died — those are the launch/session split validators already
+    /// make. Otherwise it exited cleanly, and the question is whether the task moved: a session that ran its whole
+    /// timeout and left the task sitting in the backlog claimed nothing, and restarting it every interval spends
+    /// three quarters of an hour a time to achieve exactly that again. So it is charged like a validator that
+    /// reached no verdict, on the same counter and the same half-open cooldown.
+    /// </para>
+    /// </summary>
+    private async Task RunOrchestratorSessionAsync(OrchestratorAssignment assignment, string key)
+    {
+        // The stall machinery speaks in (task, role) pairs. An orchestrator is one more pair, under the role name
+        // no role key can spell.
+        var pair = new ConductorAssignment(assignment.TaskId, assignment.TaskKey, assignment.TaskTitle,
+            assignment.Project, OrchestratorRole, AvoidHarness: null);
+        try
+        {
+            Exception? failure = null;
+            try { await orchestrators.StartAsync(assignment, _sessions.Token); }
+            catch (Exception thrown) { failure = thrown; }
+
+            // The hub stopped it; see RunSessionAsync. The claim lapses, the sweeper returns the task to the
+            // backlog with its branch, and the next hub staffs it once — which is the whole point of killing it.
+            if (_sessions.IsCancellationRequested) return;
+
+            if (failure is { } ex)
+            {
+                await UnproductiveAsync(pair, key,
+                    ex is ValidatorSessionException ? Unproductive.RanAndFailed : Unproductive.NeverStarted, ex.Message);
+            }
+            else if (await StillInBacklogAsync(assignment.TaskId))
+            {
+                await UnproductiveAsync(pair, key, Unproductive.NoVerdict, null);
+            }
+            else
+            {
+                lock (_stalls) _stalls.Remove(key);   // the task left the backlog: the session did what it was for
+            }
+        }
+        finally
+        {
+            lock (_running) _running.Remove(key);
+        }
+    }
+
+    /// <summary>
+    /// Whether the task is still where the plan found it. Anything else — claimed, blocked, cancelled, landed — is
+    /// a task that moved, and the session that was started for it is not charged for the move it did not make.
+    /// </summary>
+    private Task<bool> StillInBacklogAsync(int taskId) =>
+        ledger.ReadAsync((db, _) =>
+            db.Tasks.AnyAsync(t => t.Id == taskId && t.State == TaskState.Backlog, CancellationToken.None), CancellationToken.None);
+
+    /// <summary>
     /// What a session that exited cleanly actually left behind. A pair's own row is not enough to tell: sessions are
     /// started one per pending validation and run concurrently, so the first validator to fail a task takes it out of
     /// <see cref="TaskState.Validating"/> and leaves every sibling's row <see cref="Verdict.Pending"/> with nothing
@@ -416,6 +884,15 @@ public sealed class ConductorService(Ledger ledger, MuthurOptions options, TimeP
             if (round is not { Pending: true }) return RoundEnd.Verdict;
             return round.State == TaskState.Validating ? RoundEnd.Nothing : RoundEnd.Closed;
         }, CancellationToken.None);
+
+    /// <summary>
+    /// What a session of this pair's kind is called, singular and plural. The founder reads these at three in the
+    /// morning off a card, and the noun is what tells them which half of the conductor has stopped: being told a
+    /// validator could not start, for a task no validator has been asked to look at yet, sends them to the wrong
+    /// place entirely.
+    /// </summary>
+    private static (string One, string Many) Noun(string role) =>
+        role == OrchestratorRole ? ("an orchestrator", "orchestrators") : ("a validator", "validators");
 
     /// <summary>
     /// One session produced nothing: count it, and when the pair has run out of attempts stall it half-open and tell
@@ -449,19 +926,25 @@ public sealed class ConductorService(Ledger ledger, MuthurOptions options, TimeP
             // Stop rather than degrade, and say so once: the founder's only other signal is that nothing shipped.
             m.Record("conductor.stalled", assignment.TaskId,
                 new { role = assignment.RoleKey, error, ran = outcome != Unproductive.NeverStarted });
+            var (one, many) = Noun(assignment.RoleKey);
             MessageService.PostFromHub(m, Recipient.Founder, null,
                 (outcome switch
                 {
                     Unproductive.RanAndFailed =>
-                        $"The conductor started a validator for {assignment.TaskKey} ({assignment.RoleKey}) " +
+                        $"The conductor started {one} for {assignment.TaskKey} ({assignment.RoleKey}) " +
                         $"{stall.Failures} times and none of them finished: {error}",
+                    Unproductive.NoVerdict when assignment.RoleKey == OrchestratorRole =>
+                        $"The conductor started {stall.Failures} {many} for {assignment.TaskKey} ({assignment.RoleKey}) " +
+                        "and none of them claimed it. They ran and exited cleanly, so something is stopping them from " +
+                        "starting the task at all rather than failing at it. Look at the bus for what they said, then " +
+                        "re-spec the task, take it yourself, or raise Muthur:ConductorMaxAttempts.",
                     Unproductive.NoVerdict =>
-                        $"The conductor started {stall.Failures} validators for {assignment.TaskKey} ({assignment.RoleKey}) " +
+                        $"The conductor started {stall.Failures} {many} for {assignment.TaskKey} ({assignment.RoleKey}) " +
                         "and none of them reached a verdict. They ran and exited cleanly, so something is stopping them " +
                         "from validating at all rather than failing. Look at the bus for what they said, then re-spec " +
                         "the task, validate it yourself, or raise Muthur:ConductorMaxAttempts.",
                     _ =>
-                        $"The conductor could not start a validator for {assignment.TaskKey} ({assignment.RoleKey}) " +
+                        $"The conductor could not start {one} for {assignment.TaskKey} ({assignment.RoleKey}) " +
                         $"{stall.Failures} times and has stopped trying: {error}",
                 }) + Environment.NewLine +
                 $"Fix the cause and it retries by itself within {options.ConductorStallProbeMinutes} " +
@@ -525,18 +1008,29 @@ public sealed class ConductorWorker(IServiceProvider services, MuthurOptions opt
 {
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
     {
-        while (!stoppingToken.IsCancellationRequested)
+        try
         {
-            try
+            while (!stoppingToken.IsCancellationRequested)
             {
-                var started = await services.GetRequiredService<ConductorService>().RunPassAsync(stoppingToken);
-                if (started > 0) logger.LogInformation("Conductor started {Count} validator session(s).", started);
+                try
+                {
+                    var started = await services.GetRequiredService<ConductorService>().RunPassAsync(stoppingToken);
+                    if (started > 0) logger.LogInformation("Conductor started {Count} session(s).", started);
+                }
+                catch (Exception ex) when (ex is not OperationCanceledException)
+                {
+                    logger.LogError(ex, "Conductor pass failed.");
+                }
+                await Task.Delay(TimeSpan.FromSeconds(options.EffectiveConductorIntervalSeconds), clock, stoppingToken);
             }
-            catch (Exception ex) when (ex is not OperationCanceledException)
-            {
-                logger.LogError(ex, "Conductor pass failed.");
-            }
-            await Task.Delay(TimeSpan.FromSeconds(options.EffectiveConductorIntervalSeconds), clock, stoppingToken);
+        }
+        finally
+        {
+            // Here rather than anywhere later: the host waits on this method, so a session killed from inside it
+            // dies before the process exits. Left to run, it would be a child no hub can account for and a task the
+            // next hub staffs a second time.
+            try { await services.GetRequiredService<ConductorService>().StopSessionsAsync(); }
+            catch (Exception ex) { logger.LogError(ex, "Conductor sessions could not be stopped cleanly."); }
         }
     }
 }

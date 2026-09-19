@@ -27,5 +27,13 @@ public static class HarnessEndpoints
         // Turning staffing on is a founder decision and is recorded as one.
         app.MapPost(Routes.Conductor, async (HttpContext http, ConductorSwitch request, ConductorService conductor, CancellationToken ct) =>
             await conductor.SetEnabledAsync(http.GetCaller(), request.Enabled, ct)).RequireFounder();
+
+        // How many sessions it may run, and the lower number for the hours nobody is watching.
+        app.MapPost(Routes.ConductorSessions, async (HttpContext http, ConductorSessionsRequest request, ConductorService conductor, CancellationToken ct) =>
+            await conductor.SetCeilingAsync(http.GetCaller(), request, ct)).RequireFounder();
+
+        // Whether it also starts work from the backlog. Its own switch, off until the founder asks for it.
+        app.MapPost(Routes.ConductorOrchestrators, async (HttpContext http, ConductorOrchestratorSwitch request, ConductorService conductor, CancellationToken ct) =>
+            await conductor.SetOrchestratorsAsync(http.GetCaller(), request.Enabled, ct)).RequireFounder();
     }
 }

@@ -39,7 +39,7 @@ public sealed partial class ProjectService(Ledger ledger, IEnumerable<IInboundSo
                 CreatedAt = m.Now,
             };
             m.Db.Projects.Add(project);
-            m.Record("project.added", payload: new { project = key, project.RepoPath, landMode = project.LandMode.ToWire(), project.RequiredValidators, project.IngestSources });
+            m.Record("project.added", payload: new { project = key, project.RepoPath, landMode = project.LandMode.ToWire(), project.RequiredValidators, ungated = project.RequiredValidators.Count == 0, project.IngestSources });
             return project.ToDto();
         }, ct);
     }
@@ -56,7 +56,7 @@ public sealed partial class ProjectService(Ledger ledger, IEnumerable<IInboundSo
             if (request.LandMode is { } mode) project.LandMode = mode;
             if (request.RequiredValidators is not null) project.RequiredValidators = ValidValidators(request.RequiredValidators);
             if (request.IngestSources is not null) project.IngestSources = ValidSources(request.IngestSources);
-            m.Record("project.updated", payload: new { project = project.Key, project.RepoPath, landMode = project.LandMode.ToWire(), project.RequiredValidators, project.IngestSources });
+            m.Record("project.updated", payload: new { project = project.Key, project.RepoPath, landMode = project.LandMode.ToWire(), project.RequiredValidators, ungated = project.RequiredValidators.Count == 0, project.IngestSources });
             return project.ToDto();
         }, ct);
     }

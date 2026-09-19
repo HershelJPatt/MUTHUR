@@ -239,6 +239,8 @@ public sealed class DiscordChannelSource(IHttpClientFactory http, MuthurOptions 
                 continue;
 
             var content = (message.TryGetProperty("content", out var c) ? c.GetString() : null)?.Trim();
+            // Before the emptiness check: a message that is nothing but a mention reads "@MUTHUR", not nothing.
+            content = content is null ? null : Mentions(content, message);
             if (string.IsNullOrEmpty(content)) continue;   // an attachment or a sticker alone: nothing to act on
 
             items.Add((snowflake, new IncomingItem(
@@ -251,6 +253,31 @@ public sealed class DiscordChannelSource(IHttpClientFactory http, MuthurOptions 
 
         // Discord answers newest first; the organization reads them in the order they were written.
         return new SourceFetch(items.OrderBy(i => i.Id).Select(i => i.Item).ToList(), newest);
+    }
+
+    /// <summary>
+    /// Discord sends a mention as "&lt;@id&gt;" and the user it means in the message's own "mentions" array, so the
+    /// wire form is unreadable and the fix needs no extra call. Ids the message does not name are left as they
+    /// are: a token we cannot resolve is less misleading than a name we invented.
+    /// </summary>
+    private static string Mentions(string content, JsonElement message)
+    {
+        if (!message.TryGetProperty("mentions", out var mentions) || mentions.ValueKind != JsonValueKind.Array)
+            return content;
+
+        foreach (var user in mentions.EnumerateArray())
+        {
+            if (!user.TryGetProperty("id", out var id) || id.ValueKind != JsonValueKind.String ||
+                !user.TryGetProperty("username", out var name) || name.ValueKind != JsonValueKind.String)
+                continue;
+
+            // "<@!id>" is the legacy spelling Discord still emits for a mention that displayed a nickname.
+            var handle = "@" + name.GetString();
+            content = content
+                .Replace($"<@{id.GetString()}>", handle, StringComparison.Ordinal)
+                .Replace($"<@!{id.GetString()}>", handle, StringComparison.Ordinal);
+        }
+        return content;
     }
 
     private static string Title(string content)

@@ -34,12 +34,14 @@ public static class WorkerCommands
         var baseRef = new Option<string?>("--base") { Description = "Branch the worker starts from (default: the current branch)." };
         var branch = new Option<string?>("--branch") { Description = "Branch to create for the worker (default: worker/<task>-<unit>-<id>)." };
         var note = new Option<string?>("--note") { Description = "One extra instruction for the worker." };
+        var parent = new Option<string?>("--parent")
+            { Description = "The worker run whose plan this unit came from. Recorded so a two-level fan-out is readable in the ledger." };
         var timeout = new Option<int>("--timeout-minutes") { DefaultValueFactory = _ => 60 };
         var run = new Command("run", "Run one worker in its own worktree and print its report. The worker gets no hub identity.")
-            { tier, spec, unit, task, harness, baseRef, branch, note, timeout };
+            { tier, spec, unit, task, harness, baseRef, branch, note, parent, timeout };
         run.SetAction((parse, ct) => RunAsync(parse, new RunOptions(
             parse.GetValue(tier)!, parse.GetValue(spec)!, parse.GetValue(unit), parse.GetValue(task), parse.GetValue(harness),
-            parse.GetValue(baseRef), parse.GetValue(branch), parse.GetValue(note), parse.GetValue(timeout)), ct));
+            parse.GetValue(baseRef), parse.GetValue(branch), parse.GetValue(note), parse.GetValue(timeout), parse.GetValue(parent)), ct));
         worker.Subcommands.Add(run);
     }
 
@@ -90,9 +92,67 @@ public static class WorkerCommands
                 Routes.Conductor, new ConductorSwitch(enabled), MuthurJsonContext.Default.ConductorSwitch, ct)));
             conductor.Subcommands.Add(command);
         }
+
+        // The half that begins new work rather than finishing it, and its own switch because turning it on starts spending.
+        var orchestrators = new Command("orchestrators", "Whether the conductor also starts orchestrator sessions for backlog tasks. Off until the founder turns it on.");
+        conductor.Subcommands.Add(orchestrators);
+        foreach (var (name, enabled, description) in new[]
+                 {
+                     ("on", true, "Let the conductor start an orchestrator for a task nobody has claimed. Needs --founder; recorded in the ledger."),
+                     ("off", false, "Stop starting orchestrators. Sessions already running are left to finish. Needs --founder."),
+                 })
+        {
+            var command = new Command(name, description);
+            command.SetAction(async (parse, ct) => Output.Emit(parse, await HubClient.For(parse).PostAsync(
+                Routes.ConductorOrchestrators, new ConductorOrchestratorSwitch(enabled), MuthurJsonContext.Default.ConductorOrchestratorSwitch, ct)));
+            orchestrators.Subcommands.Add(command);
+        }
+
+        var count = new Argument<int>("count") { Description = "Sessions the conductor may run at once." };
+        var sessions = new Command("sessions", "Raise or lower how many sessions the conductor may run at once. Needs --founder.") { count };
+        sessions.SetAction(async (parse, ct) => Output.Emit(parse, await HubClient.For(parse).PostAsync(
+            Routes.ConductorSessions, SessionsRequest(parse.GetValue(count)), MuthurJsonContext.Default.ConductorSessionsRequest, ct)));
+        conductor.Subcommands.Add(sessions);
+
+        var from = new Option<string?>("--from") { Description = "When the window opens, HH:mm in local time." };
+        var to = new Option<string?>("--to") { Description = "When it closes, HH:mm in local time. Earlier than --from means it crosses midnight." };
+        var inWindow = new Option<int?>("--sessions") { Description = "Sessions allowed while the window is open." };
+        var clear = new Option<bool>("--clear") { Description = "Drop the window and the standing ceiling with it." };
+        var unattended = new Command("unattended", "Cap sessions during the hours nobody is watching. Needs --founder.")
+            { from, to, inWindow, clear };
+        unattended.SetAction(async (parse, ct) => Output.Emit(parse, await HubClient.For(parse).PostAsync(
+            Routes.ConductorSessions,
+            UnattendedRequest(parse.GetValue(from), parse.GetValue(to), parse.GetValue(inWindow), parse.GetValue(clear)),
+            MuthurJsonContext.Default.ConductorSessionsRequest, ct)));
+        conductor.Subcommands.Add(unattended);
     }
 
-    private sealed record RunOptions(string Tier, string Spec, string? Unit, string? Task, string? Harness, string? Base, string? Branch, string? Note, int TimeoutMinutes);
+    /// <summary>
+    /// What the two ceiling commands put on the wire. Pulled out of the actions because the mistake worth catching
+    /// is a value reaching the wrong field: the window's <c>--sessions</c> is not the standing ceiling, and the hub
+    /// would happily obey either. The hub decides what is legal; neither of these judges anything.
+    /// </summary>
+    public static ConductorSessionsRequest SessionsRequest(int sessions) => new(sessions, null, null, null, Clear: false);
+
+    /// <inheritdoc cref="SessionsRequest"/>
+    public static ConductorSessionsRequest UnattendedRequest(string? from, string? to, int? sessions, bool clear) =>
+        new(null, from, to, sessions, clear);
+
+    private sealed record RunOptions(string Tier, string Spec, string? Unit, string? Task, string? Harness, string? Base, string? Branch, string? Note, int TimeoutMinutes, string? Parent = null);
+
+    /// <summary>
+    /// The contract this tier is handed. A mastermind is given a problem area, not a frozen unit, so handing it
+    /// the implementer's "do not redesign" contract alone is the opposite of why it was staffed: it gets the
+    /// specialist procedure on top. Kit includes are expanded at install time and not on this read, so
+    /// specialist.md carries no {{core:...}} token and the two procedures are composed here instead.
+    /// </summary>
+    internal static async Task<string> ReadContractAsync(string kit, string tier, CancellationToken ct)
+    {
+        var implementer = await File.ReadAllTextAsync(Path.Combine(kit, "core", "implementer.md"), ct);
+        return tier.Equals("mastermind", StringComparison.OrdinalIgnoreCase)
+            ? await File.ReadAllTextAsync(Path.Combine(kit, "core", "specialist.md"), ct) + "\n\n" + implementer
+            : implementer;
+    }
 
     private static async Task<int> RunAsync(ParseResult parse, RunOptions o, CancellationToken ct)
     {
@@ -114,17 +174,14 @@ public static class WorkerCommands
         var tiers = await hub.GetAsync($"{Routes.Tiers}?tier={Uri.EscapeDataString(o.Tier)}", ct);
         if (!tiers.IsSuccess) return Output.Emit(parse, tiers);
         var catalog = JsonSerializer.Deserialize(tiers.Body, MuthurJsonContext.Default.IReadOnlyListTierDto) ?? [];
-        var candidates = catalog.SelectMany(t => t.Candidates)
-            .Where(c => !c.Limited && (o.Harness is null || string.Equals(c.Harness, o.Harness, StringComparison.OrdinalIgnoreCase)))
-            .Select(c => new HarnessCandidate(c.Harness, c.Model, c.Account))
-            .ToList();
+        var candidates = Candidates(catalog, o.Harness);
         if (candidates.Count == 0)
             return Output.Error("no_candidates", $"No available candidate for tier '{o.Tier}'" + (o.Harness is null ? "" : $" on harness '{o.Harness}'") +
                 ". Every account may be limited: muthur harness tiers", ExitCodes.RuleViolation);
 
         // 2. The contract and the project's verification commands.
         if (KitCommands.LocateKit() is not { } kit) return KitCommands.KitMissing();
-        var contract = await File.ReadAllTextAsync(Path.Combine(kit, "core", "implementer.md"), ct);
+        var contract = await ReadContractAsync(kit, o.Tier, ct);
         var (verify, extraAllowed) = ReadProject(repo);
 
         // 3. A worktree and branch of the worker's own.
@@ -150,7 +207,7 @@ public static class WorkerCommands
         // 4. Run, falling through candidates whose account turns out to be exhausted.
         var attempts = await new WorkerLauncher(processes).RunAsync(
             candidates,
-            c => new WorkerRequest(worktree, PromptFor(c), c.Model, gitCommon, [.. DefaultAllowed, .. extraAllowed], Denied, scratch),
+            c => RequestFor(c, worktree, PromptFor(c), gitCommon, [.. DefaultAllowed, .. extraAllowed], scratch),
             TimeSpan.FromMinutes(o.TimeoutMinutes),
             async c =>
             {
@@ -177,7 +234,7 @@ public static class WorkerCommands
         var commits = (await Git(worktree, "log", "--oneline", $"{baseRef}..HEAD") ?? "").Split('\n', StringSplitOptions.RemoveEmptyEntries);
 
         await hub.PostAsync(Routes.WorkerRuns, new WorkerRunReport(o.Task, o.Tier, final.Candidate.Harness, final.Candidate.Model, final.Candidate.Account,
-            branchName, o.Unit, success, (int)final.Duration.TotalSeconds, final.Outcome.CostUsd), MuthurJsonContext.Default.WorkerRunReport, ct);
+            branchName, o.Unit, success, (int)final.Duration.TotalSeconds, final.Outcome.CostUsd, o.Parent), MuthurJsonContext.Default.WorkerRunReport, ct);
 
         using var stream = new MemoryStream();
         using (var json = new Utf8JsonWriter(stream, new JsonWriterOptions { Encoder = System.Text.Encodings.Web.JavaScriptEncoder.UnsafeRelaxedJsonEscaping }))
@@ -205,6 +262,21 @@ public static class WorkerCommands
         var body = Encoding.UTF8.GetString(stream.ToArray());
         return Output.Emit(parse, new ApiResult(success ? 200 : 500, body));
     }
+
+    /// <summary>
+    /// Who could staff this run, in catalog order, skipping accounts out of quota and anything --harness rules out.
+    /// Everything the founder's catalog says about a candidate travels with it, reasoning effort included: a tier
+    /// entry that is honoured for validator sessions and quietly dropped for workers is a knob that lies.
+    /// </summary>
+    internal static IReadOnlyList<HarnessCandidate> Candidates(IReadOnlyList<TierDto> catalog, string? harness) =>
+        [.. catalog.SelectMany(t => t.Candidates)
+            .Where(c => !c.Limited && (harness is null || string.Equals(c.Harness, harness, StringComparison.OrdinalIgnoreCase)))
+            .Select(c => new HarnessCandidate(c.Harness, c.Model, c.Account, c.ReasoningEffort))];
+
+    /// <summary>What one candidate is asked to do. The deny list is this command's own policy, never the project's.</summary>
+    internal static WorkerRequest RequestFor(HarnessCandidate candidate, string worktree, string prompt,
+        string? gitCommon, IReadOnlyList<string> allowed, string scratch) =>
+        new(worktree, prompt, candidate.Model, gitCommon, allowed, Denied, scratch, candidate.ReasoningEffort);
 
     /// <summary>Build/test commands and extra allowed shell commands from muthur.project.json.</summary>
     private static (List<string> Verify, List<string> Allowed) ReadProject(string repo)
