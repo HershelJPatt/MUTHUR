@@ -506,3 +506,22 @@ Build and the complete test suite must pass, with every old CLI test retained. A
 that names `--repo` through a link with a file blocking a destination's parent; assert the existing F1 message
 and unchanged blocker bytes. Then run the installed CLI acceptance table and all shipped kits. A faithful
 implementation of superseded instructions that fails these checks is evidence for this amendment, not a pass.
+
+### Reproducible installed-binary check
+
+The Windows reproduction is checked in as `specs/T-57-verify.ps1`. After publishing the task branch with
+`scripts/install.ps1 -Destination ./artifacts/t57`, run:
+
+```powershell
+pwsh ./specs/T-57-verify.ps1 -Cli ./artifacts/t57/muthur.exe
+```
+
+It checks the outward, deeper and chained junctions; inward and ordinary destinations; traversal; an escaping
+source; a linked repository root; collisions and aliases through links; a dangling outward junction; and all
+three shipped kits. Each attack reports its exit code and newly created outside-file count. The script
+asserts messages, verifies installed bytes, removes its links before recursive cleanup, and restores its
+environment variables. The unit tests additionally cover the linked-root F1 blocker from Amendment 2.
+
+The acceptance evidence is Windows evidence. Linux and macOS execution must not be claimed without a run.
+The goal's containment claim is bounded by the explicit non-goals: hard links remain T-83, and concurrent
+filesystem changes between checking and writing remain outside this task. Spec-path containment is T-84.
