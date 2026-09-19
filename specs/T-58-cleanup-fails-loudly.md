@@ -273,3 +273,75 @@ classes are doing in parallel.
   can, so a marker file's disappearance is an observable "one attempt was made and lost" — the handle is
   released on that condition rather than on a clock, which is what the house rule requires. The watcher gets
   a dedicated `Thread` because the pool is saturated by the rest of the suite.
+
+## Amendment 2 — the mechanism works; where I put it is wrong (2026-09-19)
+
+Unit B reported `spec-problem` and is right. **Do not land its branch as it stands.**
+
+### What is now proven
+
+Amendment 1's runner claim **holds**, measured rather than assumed. A `[Fact]` whose body is
+`Assert.True(true)` but whose class leaks on `Dispose` is reported by xUnit 2.9.3 through
+`ReflectionAbstractionExtensions.DisposeTestClass`, and **plain `dotnet test` exits 1**. So a thrown
+exception does reach the shell where `Environment.ExitCode` does not.
+
+### What is wrong, and it is mine
+
+Amendment 1 said throw *"from the `Failed` path and nowhere else"*. The spec's own **Context**, two sections
+earlier, says:
+
+> the outcome recorded for a path is the latest one: a first attempt that fails and a second that succeeds is
+> one directory, removed.
+
+**`Failed` is provisional, not a verdict.** Throwing at the first failure destroys the later attempt that was
+going to succeed. Amendment 1 changed the mechanism and never re-read the invariant the old one relied on.
+
+Two manifestations, both measured:
+
+**(a) Within one disposal.** The stack shows the *inner* arrival throwing, so the outer arrival — the one
+Context says succeeds, after the host releases `muthur.log` while unwinding `DisposeAsync` — never runs.
+
+**(b) A restart test no retry budget can ever win.**
+`ConductorTests.The_founders_decision_outlives_the_process_that_heard_it` does
+`using var restarted = new HubFactory { DataDir = _hub.DataDir }`, and `_hub` is a class field that stays
+alive holding `muthur.log` for the rest of the class. `restarted` disposes first, cannot win, and now throws.
+**Deterministic, 3/3**, and green 3/3 with Unit A's files restored at the same commit.
+
+That test is not doing anything wrong. `HubFactory.DataDir` is documented as *"settable so a test can bring a
+second hub up over the same database, as a restart does"*. The pattern is intended; the mechanism is what
+does not fit it.
+
+### Why this is now a founder question and not a spec edit
+
+The founder chose option A on a stated cost: *"It is a handful of lines in `TestHubDirectories`."* Two rounds
+of measurement have falsified that. A throw that is correct has to know the directory is genuinely orphaned,
+which means knowing **both**:
+
+- that no other live `HubFactory` shares this `DataDir` — knowable only if `HubFactory` says which are live;
+- that this is the final arrival of the double disposal — knowable only from `HubFactory`'s own disposal
+  depth.
+
+Both live in `HubFactory`, which this spec lists as a Non-goal, and together they are perhaps twenty lines of
+test infrastructure carrying real state, for a signal that fires approximately never. That is a different
+trade from the one the founder agreed to, so it is asked rather than assumed: **`muthur ask` #19**.
+
+The retry from Unit A is unaffected by any of this — it is built, green, and independently valuable.
+
+### The lesson worth more than the rule
+
+Unit B's own words, and they generalise past this task:
+
+> This spec has now been wrong twice about the same class of claim, in opposite directions. T-58 named
+> `Environment.ExitCode` as "the risk this spec is most likely to be wrong about" and was right; Amendment 1
+> told me to doubt the xUnit claim, and that one held. The defect was in the part nobody flagged — an
+> interaction with the spec's own Context two sections earlier. **The lesson is less "measure runner claims"
+> than "when an amendment changes a mechanism, re-read the invariants the old mechanism relied on."**
+
+Naming a risk is cheap and I did it twice, correctly once. Neither guess was where the defect was.
+
+### Ratified from Unit B
+
+- `HubDirectoryLeakException : IOException` rather than a bare `IOException`, so an asserting test cannot
+  pass on an unrelated IO failure and the type name leads the xUnit report.
+- The outcome is recorded before the throw, so the summary still names the directory and the count is right.
+- The two test renames matching the new mechanism.
