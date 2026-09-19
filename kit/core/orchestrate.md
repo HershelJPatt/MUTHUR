@@ -50,6 +50,16 @@ Every `muthur` call renews your leases. When idle for long stretches, run
      filtered out before any attempt, so the report names the harness that ran and gives no sign that your
      first choice was skipped. If which vendor built a unit matters, record it yourself.
 
+   A **mastermind-tier** worker may come back with a `PLAN:` block instead of a finished subtree, when the
+   area turned out to be more than one agent should carry. That is the shape working, not a refusal: read the
+   plan as you would read your own units, correct it if it is wrong, and staff each line with an ordinary
+   `worker run` — passing `--parent <the specialist's branch>` so the ledger keeps the tree and receipts can
+   attribute what the fan-out cost. You stay accountable for the result; the specialist supplied the
+   expertise, not the authority.
+
+   Two levels is the reference shape. A third would mean a specialist's plan containing another problem area
+   rather than units — if you find yourself wanting that, the spec is not frozen enough yet.
+
    A worker that cannot do what it was asked returns `success: false`, `status: spec-problem`, no commits
    and a clean tree, and says what was missing — enough to choose between re-spec and retry without opening
    the worktree. Its *inputs*, though, degrade silently: a `muthur.project.json` that does not parse leaves
