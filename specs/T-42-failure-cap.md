@@ -92,7 +92,11 @@ Constraints that are not obvious:
 ## Non-goals
 
 - Changing `ConductorMaxAttempts`, or making it per-project.
-- Any change to the launch-failure or no-verdict caps, which are correct and have the right shape.
+- Any change to the launch-failure or no-verdict caps. The launch-failure cap is correct. The no-verdict cap
+  is **not** correct on a multi-validator project — when one validator fails a task, its siblings' rounds end
+  with their rows still `Pending`, so they are charged for a round that ended correctly and the founder is
+  told the wrong cause. That is a separate, pre-existing defect with its own task; it is out of scope here,
+  and the earlier claim in this spec that both caps "have the right shape" was wrong.
 - Any change to what a failed verdict does to a task.
 - A ceiling on total sessions across rounds. Named in the cost paragraph above as a possible later task.
 - Purging or rewriting `validation.failed` events. The ledger is append-only and stays that way; this task
