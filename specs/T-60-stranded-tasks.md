@@ -248,3 +248,50 @@ until someone takes them over — keeping the owner visible and giving `LeasePol
 path something to do. That is arguably the better world and it is a founder-level change: the board, `muthur
 task list --state backlog`, and `Sweep_returns_lapsed_tasks_to_the_backlog` in `TaskLeaseTests.cs:95` all
 rest on today's behaviour. Its own task if it is ever wanted; T-60 does not need it.
+
+## Amendment 2 — priority is the founder's lever, and prior work is only the tiebreaker
+
+The implementer built the ordering Amendment 1 specified and then flagged the line it did not like, which
+is the correct order of operations. The line was wrong and it was mine.
+
+"Tasks carrying prior work before untouched ones, each group ordered by priority" means an abandoned
+priority-1 task is staffed ahead of an untouched priority-9 one. Priority is the only lever a founder has to
+say *this one matters most*, and a rule that silently outranks it takes that lever away. The founder raised
+`validator` capacity today precisely to stop urgent work waiting; a queue that answers by starting an old
+priority-0 task first is not one they can steer.
+
+The intent — "resuming beats starting" — is real, but it is a tiebreaker, not a trump. Order becomes:
+
+```csharp
+.OrderByDescending(t => t.Priority)
+.ThenByDescending(CarriesWork)     // among equals, finish what is begun
+.ThenBy(t => t.Id)
+```
+
+So prior work still wins wherever it is genuinely a choice, and never inverts an explicit priority. The test
+pinning the old behaviour changes with it: three tasks `begun(p1)`, `urgent(p9)`, `ordinary(p5)` must plan
+as `[urgent, ordinary, begun]`, and a fourth case — two tasks at equal priority, one carrying a branch —
+pins that the begun one still goes first.
+
+### Also, the prompt should not claim a branch it may not have
+
+The takeover opening says "the task already has a branch and may already have a frozen spec", while the
+trigger is spec **or** branch. A spec-only resumption is therefore told about a branch that does not exist.
+It becomes "the task already has work on it: a frozen spec, a branch, or both."
+
+### Accepted as built
+
+- **`PreviousOwner` reads `task.claimed` as well as `task.claim_expired`**, newest by `Seq`. Amendment 1
+  named only `claim_expired`, which exists only when the sweeper lapsed the claim — so a task released by
+  hand, which is the 04:39 case the original Context was written about, would have had no name at all. The
+  deliberate exclusion of `task.released` is the sharper half: it records the *caller*, so a founder release
+  would have put "founder" in front of the next session as the previous owner.
+- **"from an earlier session that stopped"** when the ledger names nobody. Falling back to the fresh-start
+  prompt would hand a resumption the exact wording this task exists to remove.
+- **The kit sentence's last clause** now describes the sweeper returning the task to the backlog rather than
+  the conductor handing it on. The original described the mechanism Amendment 1 deleted.
+
+### Still a follow-up, deliberately
+
+A resumption is invisible to the founder: `conductor.staffing` records only `{ role }` and `_lastAction`
+says "staffed an orchestrator for T-1" either way. Its own task rather than a wider diff here.
