@@ -31,8 +31,12 @@ function Invoke-Git([string[]]$Arguments) {
 
 # The ref, short commit and linked-worktree path of a checkout, or $null when it is not a repository.
 function Get-Provenance([string]$Path) {
+    $gitDir = Invoke-Git @('-C', $Path, 'rev-parse', '--git-dir')
+    if (-not $gitDir.Ok) { return $null }
     $head = Invoke-Git @('-C', $Path, 'rev-parse', '--abbrev-ref', 'HEAD')
-    if (-not $head.Ok) { return $null }
+    # A repository whose HEAD is unborn is still a repository. Calling it a non-git directory would be
+    # wrong in exactly the direction this line exists to correct.
+    if (-not $head.Ok) { return [pscustomobject]@{ Unborn = $true } }
     $name = $head.Text
     if ($name -eq 'HEAD') {
         # Detached, so name it with something a reader can look up rather than the word HEAD.
@@ -40,13 +44,13 @@ function Get-Provenance([string]$Path) {
         if ($described.Ok -and $described.Text) { $name = $described.Text }
     }
     $commit = Invoke-Git @('-C', $Path, 'rev-parse', '--short', 'HEAD')
-    $gitDir = Invoke-Git @('-C', $Path, 'rev-parse', '--git-dir')
     $common = Invoke-Git @('-C', $Path, 'rev-parse', '--git-common-dir')
     [pscustomobject]@{
+        Unborn = $false
         Ref = $name
         Commit = $commit.Text
         # A linked worktree keeps its own git dir under the common one; in the main worktree the two are equal.
-        Linked = ($gitDir.Ok -and $common.Ok -and $gitDir.Text -ne $common.Text)
+        Linked = ($common.Ok -and $gitDir.Text -ne $common.Text)
     }
 }
 
@@ -65,15 +69,25 @@ if ($Ref) {
     $source = $worktree
 }
 else {
-    # Untracked files must not count: bin/, obj/ and artifacts/ are untracked by design, so counting
-    # them would fail every run. A tracked edit is the real hazard -- it builds a binary that
-    # corresponds to no commit, which neither the ledger nor a validator's evidence can name.
+    # A blanket untracked check would fail every run, because bin/, obj/ and artifacts/ are untracked by
+    # design -- hence --untracked-files=no for tracked modifications anywhere.
     $dirty = Invoke-Git @('-C', $source, 'status', '--porcelain', '--untracked-files=no')
-    if ($dirty.Ok -and $dirty.Text) {
+    # But an untracked .cs under src/ is compiled into the published binary and an untracked file under
+    # kit/ is copied into the install, while the line below would name a commit containing neither.
+    # Uncommitted work is uncommitted whether or not git has been told about it yet. Scoping this to what
+    # actually gets published keeps it quiet: bin/, obj/ and artifacts/ are gitignored, and an ignored
+    # file never appears under --untracked-files=normal either.
+    $new = Invoke-Git @('-C', $source, 'status', '--porcelain', '--untracked-files=normal', '--', 'src', 'kit')
+    $changed = @()
+    if ($dirty.Ok) { $changed += $dirty.Lines }
+    if ($new.Ok) { $changed += $new.Lines }
+    # A tracked modification under src/ is reported by both commands; it is one problem, so it is named once.
+    $changed = @($changed | Select-Object -Unique)
+    if ($changed.Count) {
         $refusal = @(
             "The working tree at $source has uncommitted changes, so the build would correspond to no commit.",
             'Commit them, or pass -Ref <ref> to publish a named commit instead.'
-        ) + (@($dirty.Lines) | Select-Object -First 10)
+        ) + ($changed | Select-Object -First 10)
         throw ($refusal -join [Environment]::NewLine)
     }
 }
@@ -82,6 +96,7 @@ $provenance = Get-Provenance $source
 $published =
     if ($Ref) { "Published from $Ref ($($provenance.Commit))." }
     elseif (-not $provenance) { "Published from a non-git directory $source." }
+    elseif ($provenance.Unborn) { "Published from $source, a repository with no commits." }
     elseif ($provenance.Linked) { "Published from $($provenance.Ref) ($($provenance.Commit)) in worktree $source." }
     else { "Published from $($provenance.Ref) ($($provenance.Commit))." }
 
