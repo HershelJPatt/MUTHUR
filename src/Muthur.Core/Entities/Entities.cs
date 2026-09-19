@@ -14,6 +14,14 @@ public sealed class Project
     public List<string> RequiredValidators { get; set; } = [];
     /// <summary>External sources polled for inbound items, e.g. "github:owner/repo".</summary>
     public List<string> IngestSources { get; set; } = [];
+    /// <summary>The default-branch commit last confirmed on the remote, or null when none ever has been.</summary>
+    public string? LastPushedCommit { get; set; }
+    /// <summary>When <see cref="LastPushedCommit"/> reached the remote.</summary>
+    public DateTimeOffset? LastPushAt { get; set; }
+    /// <summary>When a push was last attempted, successfully or not. Paces the retry after a failure.</summary>
+    public DateTimeOffset? LastPushAttemptAt { get; set; }
+    /// <summary>Why the last attempt failed, or null when the last one worked. Non-null is a failing doctor check.</summary>
+    public string? LastPushError { get; set; }
     public DateTimeOffset CreatedAt { get; set; }
 }
 
