@@ -342,3 +342,30 @@ whether it touched any file in your unit.** If it did, stop and report `blocked`
 - **The local base ref can be behind its remote.** Airtight while one `.git` is shared — commits from any
   worktree are visible instantly — and an exact reproduction of the stale-spec failure the day orchestration
   crosses clones or machines. Worth knowing as the next one, not worth text today.
+
+## Amendment 4 — the resumed clause fires on the common case (2026-09-18)
+
+Amendment 3's moved-files clause blocked on a benign base move the **very next time it ran**, and it was
+found by obeying the step rather than probing it.
+
+The base had moved because I had **integrated the implementer's own three commits**. `git diff --stat
+<start>..<base>` therefore named `kit/core/implementer.md` — squarely in its unit — and the clause says
+flatly: *if it touched any file in your unit, stop and report `blocked` rather than guessing.* Taken
+literally it should have stopped, on a routine integration, with nothing stale and nothing to lose: the
+base's copy of the file was byte-identical to its own, and `merge-base --is-ancestor HEAD <base>` was true.
+
+**Integration is the common case for a resumed implementer**, so a reader who reaches that clause first would
+block spuriously and often — and a check that cries wolf on the normal case is one people learn to skip,
+which is the habit this whole family of contracts exists to prevent.
+
+The step as a whole already lands correctly: the earlier bullet's test, `git log --oneline <base>..HEAD`,
+came back empty, so by the contract's own definition it had no commits of its own, and the prescribed move
+was a fast-forward reset — which is what happened. Only the resumed clause, read in isolation, misfires.
+
+**The fix is ordering, not new logic** (the implementer's own proposal): test `<base>..HEAD` for commits of
+your own **first**, and consult the moved-files diff only if you actually have some. A resumed implementer
+whose work has been integrated has no commits of its own any more, so it never reaches the clause; one that
+genuinely does have unintegrated commits still gets the check that clause was written for.
+
+Reword the resumed bullet so the moved-files check sits inside the "you do have commits of your own" branch
+rather than reading as an independent test.
