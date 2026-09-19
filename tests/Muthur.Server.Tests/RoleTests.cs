@@ -60,9 +60,9 @@ public sealed class RoleTests : IDisposable
         (await second.PostAsync(Routes.RoleAction("comms-oncall", "take"), null)).EnsureSuccessStatusCode();
         Assert.Equal(["second"], Names(await RoleAsync("comms-oncall")));
 
-        var agents = await _hub.CreateClient().GetFromJsonAsync(Routes.Agents, MuthurJsonContext.Default.IReadOnlyListAgentDto);
-        Assert.Equal(["comms-oncall"], agents!.Single(a => a.Name == "second").Roles);
-        Assert.Empty(agents!.Single(a => a.Name == "first").Roles);
+        var agents = (await _hub.CreateClient().GetFromJsonAsync(Routes.Agents, MuthurJsonContext.Default.AgentRosterDto))!.Agents;
+        Assert.Equal(["comms-oncall"], agents.Single(a => a.Name == "second").Roles);
+        Assert.Empty(agents.Single(a => a.Name == "first").Roles);
     }
 
     [Fact]

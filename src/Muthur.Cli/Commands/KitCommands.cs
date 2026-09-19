@@ -266,11 +266,6 @@ public static partial class KitCommands
     private static readonly string[] InstallerFiles = [IgnoreFile, ProjectContext.FileName];
 
     /// <summary>
-    /// Rule 20, and the first rule here that reads the manifest as a whole: each entry below is valid on its
-    /// own, and it is the pair that cannot be honoured. Two entries naming the same path are not a collision —
-    /// that is last-one-wins, which the format has always allowed — so only file-versus-directory counts.
-    /// </summary>
-    /// <summary>
     /// Why the repository cannot take these writes, or null when it can. Three questions the manifest cannot
     /// answer, in the order a founder would meet them: something in the way of a path, then a path that is a
     /// directory, then one that will not be overwritten.
@@ -350,6 +345,11 @@ public static partial class KitCommands
         return null;
     }
 
+    /// <summary>
+    /// Rule 20, and the first rule here that reads the manifest as a whole: each entry below is valid on its
+    /// own, and it is the pair that cannot be honoured. Two entries naming the same path are not a collision —
+    /// that is last-one-wins, which the format has always allowed — so only file-versus-directory counts.
+    /// </summary>
     private static (Destination A, Destination B)? Collision(List<Destination> destinations)
     {
         for (var a = 0; a < destinations.Count; a++)

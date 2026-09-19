@@ -6,10 +6,25 @@
 <section class="panel">
     <div class="panel-head">
         <span class="panel-title">Agents</span>
-        <span class="panel-sub">@_live live of @_agents.Count</span>
+        @if (_hidden > 0)
+        {
+            <span class="panel-sub">@_live live of @_agents.Count · @_hidden conductor hidden</span>
+        }
+        else
+        {
+            <span class="panel-sub">@_live live of @_agents.Count</span>
+        }
+        <div class="filters">
+            <button class="filter @Active(false)" @onclick="() => Select(false)">Standing</button>
+            <button class="filter @Active(true)" @onclick="() => Select(true)">All</button>
+        </div>
     </div>
     <div class="panel-body">
-        @if (_agents.Count == 0)
+        @if (_agents.Count == 0 && _hidden > 0)
+        {
+            <div class="empty">@_hidden conductor sessions hidden · All shows them</div>
+        }
+        else if (_agents.Count == 0)
         {
             <div class="empty">no agents registered · muthur agent register --name …</div>
         }
@@ -62,6 +77,10 @@
     // The one task each agent is actually working on. OpenTasks counts everything they hold, validation included.
     private Dictionary<string, TaskDto> _working = new(StringComparer.Ordinal);
     private int _live;
+    // Conductor-staffed sessions the roster left out. Shown as a number rather than implied by a shorter list:
+    // a rail that quietly drops rows reads exactly like a quiet organization.
+    private int _hidden;
+    private bool _all;
     private DateTimeOffset _now;
 
     // An agent goes stale without anything being written, so refresh on the clock too.
@@ -75,7 +94,9 @@
     protected override async Task LoadAsync()
     {
         _now = Clock.GetUtcNow();
-        var agents = await Agents.ListAsync();
+        var roster = await Agents.RosterAsync(_all);
+        var agents = roster.Agents;
+        _hidden = roster.ConductorHidden;
         _agents = agents.OrderBy(a => Rank(a.Status)).ThenBy(a => a.Name, StringComparer.Ordinal).ToList();
         _live = agents.Count(a => a.Status == AgentStatus.Live);
 
@@ -89,6 +110,15 @@
                 g => g.OrderByDescending(t => t.Priority).ThenBy(t => t.Id, StringComparer.Ordinal).First(),
                 StringComparer.Ordinal);
     }
+
+    // The filter is a different read, not a different slice of one already in hand, so it re-runs the load.
+    private Task Select(bool all)
+    {
+        _all = all;
+        return ReloadNowAsync();
+    }
+
+    private string Active(bool all) => _all == all ? "active" : "";
 
     private static int Rank(AgentStatus status) => status switch
     {
