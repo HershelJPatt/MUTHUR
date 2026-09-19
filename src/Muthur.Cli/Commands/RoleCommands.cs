@@ -26,7 +26,7 @@ public static class RoleCommands
             {
                 if (FileProvenance.IsDirty(file))
                     return Output.Error("brief_file_dirty",
-                        $"{file} has uncommitted changes, so the brief you install will match no commit. Commit it, or pass the text you mean.",
+                        $"{file} has no committed version, so the brief you install will match no commit. Commit it, or pass the text you mean.",
                         ExitCodes.RuleViolation);
                 brief = await File.ReadAllTextAsync(file, ct);
                 // stderr, never stdout: stdout is the JSON an agent parses.

@@ -110,6 +110,33 @@ public sealed class FileProvenanceTests : IDisposable
     }
 
     [Fact]
+    public void A_file_the_repository_has_never_heard_of_is_dirty()
+    {
+        // The gap `status --untracked-files=no` leaves: no commit contains this, so a provenance line naming
+        // one would name the wrong one, which is worse than naming none.
+        Write("never-added.md", "a brief in the tree that no commit contains");
+
+        Assert.True(FileProvenance.IsDirty(Path("never-added.md")));
+    }
+
+    [Fact]
+    public void A_name_with_a_bracket_is_a_name_and_not_a_pattern()
+    {
+        // As a glob, `brief[1].md` matches `brief1.md` — so without --literal-pathspecs the edit below would
+        // be reported against a file the founder never touched.
+        Write("brief[1].md", "the brief actually named that");
+        Write("brief1.md", "what the glob would match instead");
+        Git("add", "-A");
+        Git("commit", "-q", "-m", "a bracketed name");
+        Write("brief1.md", "edited — a different file entirely");
+
+        Assert.False(FileProvenance.IsDirty(Path("brief[1].md")));
+
+        Write("brief[1].md", "edited");
+        Assert.True(FileProvenance.IsDirty(Path("brief[1].md")));
+    }
+
+    [Fact]
     public void A_file_staged_but_never_committed_is_dirty()
     {
         // It matches no commit, which is exactly what the refusal is for.

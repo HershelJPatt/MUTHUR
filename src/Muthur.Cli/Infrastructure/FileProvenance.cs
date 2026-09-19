@@ -18,14 +18,23 @@ public static class FileProvenance
                 : null;
     }
 
-    /// <summary>True when that one file has uncommitted changes.</summary>
-    public static bool IsDirty(string path) =>
-        Full(path) is { } file
-        && Git(file, "status", "--porcelain", "--untracked-files=no", "--", Path.GetFileName(file)) is { Length: > 0 };
+    /// <summary>True when git cannot name a commit containing this file: modified, staged, or never added.</summary>
+    public static bool IsDirty(string path)
+    {
+        if (Full(path) is not { } file) return false;
+        // Outside a repository there is no commit to disagree with, and provenance never gates a role. Inside
+        // one, both probes are needed: status misses a file that was never added, and --untracked-files=no is
+        // what stops bin/ and obj/ failing every run. --literal-pathspecs so a name containing * [ ? is a name.
+        if (Git(file, "rev-parse", "--is-inside-work-tree") is not "true") return false;
+        var name = Path.GetFileName(file);
+        return Git(file, "--literal-pathspecs", "status", "--porcelain", "--untracked-files=no", "--", name) is { Length: > 0 }
+            || Git(file, "--literal-pathspecs", "ls-files", "--error-unmatch", "--", name) is null;
+    }
 
     /// <summary>
-    /// git, run in the file's own directory. Any failure — no git, no repository, an unreadable path — reads
-    /// as "not in a repository": provenance is evidence, and evidence that cannot be gathered stops nothing.
+    /// git, run in the file's own directory; null on any failure — no git, no repository, an unreadable path.
+    /// For <see cref="Describe"/> that reads as "not in a repository", because provenance is evidence and
+    /// evidence that cannot be gathered stops nothing.
     /// </summary>
     private static string? Git(string file, params string[] arguments)
     {
