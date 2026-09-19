@@ -496,3 +496,42 @@ anything on this branch exists only here, which git answers exactly:
 No question about who wrote anything, no "round", and the conservative direction is the safe one: anything
 not already contained somewhere is preserved. The default branch is named in the prompt alongside the base,
 or is `main` where a project has not said otherwise.
+
+## Amendment 7 — the new input nobody is told to supply (2026-09-18)
+
+Amendment 6 introduced `<default branch>` into the decision and said it "is named in the prompt alongside
+the base". Nothing tells an orchestrator to name it. The two places that enumerate what an implementer is
+handed — `orchestrate.md` step 4 and the agent card's frontmatter `description` — still list the spec path,
+the unit, the verification commands and the base branch, and not this.
+
+**That is round 2's defect exactly**: the fix landed in the file that *uses* the input and the files that
+*provide* it were left alone. Twice now, which makes it a shape rather than a slip — when a step gains an
+input, the two enumerations are part of the change, not a follow-up.
+
+Less severe than round 2, because the step carries its own fallback (`main` unless the project says
+otherwise) so it degrades to a sane default rather than a hole, and because the failure direction is safe: on
+a project whose default branch is not `main`, an inherited-lineage case falls through to bullet 3 and is
+preserved and reported `blocked`, rather than reset away.
+
+- Add the default branch to `kit/core/orchestrate.md` step 4's list and to the agent card's frontmatter
+  `description`, beside the base branch.
+- In `kit/core/implementer.md`, keep the `main` fallback wording as it stands.
+
+### Also: a dirty tree at the reset bullets
+
+Bullets 1 and 2 say to reset with `git status --porcelain` empty; neither says what to do when it is not.
+The reader is not stranded — the clean-tree precondition and the closing "never begin work against a tree
+whose spec you could not verify" forbid proceeding — but it is literally undefined, and this step's entire
+history is undefined-but-obvious readings turning out to differ between readers. Say it: **a dirty tree at
+either reset bullet is `blocked`**; an implementer does not decide what uncommitted changes in a worktree it
+did not dirty are worth.
+
+### One correction to Amendment 6's own rationale
+
+Amendment 6 claims "no question about who wrote anything". Bullet 3 does ask one — *if you did not write
+those commits yourself, stop and report `blocked`* — and that clause is Amendment 6's own text. The
+implementer flagged the overstatement rather than letting it stand.
+
+It is safe where it sits, and the distinction is worth keeping: **both answers preserve the commits.**
+Authorship decides only whether to proceed or escalate, never whether to destroy. In Amendment 5 the same
+question decided a `git reset --hard`. The axis was removed from the destructive decision, not from the step.
