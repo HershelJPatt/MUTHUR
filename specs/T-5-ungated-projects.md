@@ -168,9 +168,14 @@ HTML carries everything:
 
 ```powershell
 $html = (Invoke-WebRequest "$env:MUTHUR_URL/projects" -UseBasicParsing).Content
-[regex]::Matches($html, 'pill-ungated').Count          # 1 - the ungated project, and only it
-$html -match 'none required &#8212; implemented goes straight to validated'
+[regex]::Matches($html, 'pill-ungated').Count   # 1 - the ungated project, and only it
+$html -match 'goes straight to validated'       # True - the consequence sentence
 ```
+
+Match the sentence **without its dash**. `Projects.razor` is written with a literal `—` (U+2014) and Blazor
+emits it as that character, not as `&#8212;` or `&mdash;`, so a pattern carrying an entity returns `False`
+against a correct build. `DashboardProjectsTests` asserts the same dash-free substring for the same reason.
+See **Amendment 2**.
 
 `solo` carries `<span class="pill pill-ungated">ungated</span>` and the sentence about `implemented` going
 straight to `validated`; `gated` carries neither and lists its validator instead. `DashboardProjectsTests`
@@ -367,3 +372,37 @@ hub's `processId` 63224 and `instanceId` 25c38c19… are unchanged.
 
 The negative the founder asked for is unchanged and untested by this round: `land` stays permissive
 everywhere, per request #2.
+
+## Amendment 2 — the check I wrote had never been run (2026-09-19)
+
+`conductor-validator` failed T-5 again, and again correctly. The product is right — they exercised every
+behaviour the task adds, on a real hub, under attack, and could not break it. The defect was in the
+Verification section **Amendment 1 had just rewritten**, one line below the paragraph congratulating itself
+for fixing the previous wrong instruction:
+
+```powershell
+$html -match 'none required &#8212; implemented goes straight to validated'   # False
+```
+
+Measured against a correct build:
+
+```
+as published  (&#8212;) : False
+literal U+2014          : True
+dash-free substring     : True
+pill-ungated count      : 1
+```
+
+`Projects.razor:36` is written with a literal `—`, and Blazor emits that character. `&#8212;` appears nowhere
+on the page and nowhere in the source. **The check as published has never matched and never could** — it was
+written down without being run.
+
+That is the same failure as the `?hours=1` comparison in T-17 and the "open `/projects`" wording this spec
+shipped before it: an instruction composed by reasoning about what the output should look like instead of
+looking at it. Writing a verification is not finished when it reads correctly; it is finished when it has been
+executed against the build and seen to pass. The pattern now matches `goes straight to validated`, which is
+what `DashboardProjectsTests` has always asserted and which no encoding question can reach, and it was run
+before being written here.
+
+Three wrong instructions in one Verification section, across three owners, is worth noticing on its own. Each
+was correct-sounding prose about a check nobody had performed.
