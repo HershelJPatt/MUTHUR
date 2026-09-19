@@ -140,7 +140,7 @@ public sealed class CollisionService(ITaskLander lander, IProcessRunner processe
     {
         var key = (candidate.Project.Id, candidate.Branch);
         if (exists.TryGetValue(key, out var known)) return known;
-        return exists[key] = await lander.BranchExistsAsync(candidate.Project, candidate.Branch, ct);
+        return exists[key] = await lander.BranchHeadAsync(candidate.Project, candidate.Branch, ct) is not null;
     }
 
     /// <summary>The conflicting paths when the two branches do not merge; null when they do, or when git could not say.</summary>

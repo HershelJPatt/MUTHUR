@@ -14,6 +14,9 @@ public sealed record SetPriorityRequest(int Priority);
 
 public sealed record CancelTaskRequest(string? Reason = null);
 
+/// <param name="Reason">Why a human is needed. Null clears the flag.</param>
+public sealed record AttendedRequest(string? Reason);
+
 public sealed record TaskDto(
     string Id,
     string Project,
@@ -30,7 +33,8 @@ public sealed record TaskDto(
     DateTimeOffset CreatedAt,
     DateTimeOffset UpdatedAt,
     DateTimeOffset? DoneAt,
-    IReadOnlyList<ValidationDto> Validations);
+    IReadOnlyList<ValidationDto> Validations,
+    string? AttendedReason);
 
 public sealed record ValidationDto(string Validator, string Verdict, string? Agent, string? Evidence, DateTimeOffset? At);
 

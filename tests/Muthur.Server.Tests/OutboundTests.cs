@@ -80,6 +80,20 @@ public sealed class OutboundTests : IDisposable
     }
 
     [Fact]
+    public async Task A_file_target_pointed_at_a_directory_is_refused_before_it_is_allowed()
+    {
+        var directory = Path.Combine(_hub.DataDir, "a-directory");
+        Directory.CreateDirectory(directory);
+
+        var response = await _hub.Founder().PutAsJsonAsync(Routes.OutboundTargets, new DefineTargetRequest("broken", "file", directory));
+
+        Assert.Equal(HttpStatusCode.UnprocessableEntity, response.StatusCode);
+        var error = await response.ReadErrorAsync();
+        Assert.Equal("invalid_address", error.Code);
+        Assert.Equal("A file target needs a path to a file, not a directory.", error.Message);
+    }
+
+    [Fact]
     public async Task A_credential_is_refused_before_it_is_even_stored()
     {
         await DefineTargetAsync();
@@ -114,14 +128,15 @@ public sealed class OutboundTests : IDisposable
     [Fact]
     public async Task A_delivery_that_blows_up_is_failed_retryable_and_never_reveals_the_address()
     {
-        // A file target whose path is a directory: the write throws UnauthorizedAccessException, not IOException.
+        // A file target whose path became a directory after it was allowed: the write throws
+        // UnauthorizedAccessException, not IOException. (A directory is refused outright at define and draft.)
         var directory = Path.Combine(_hub.DataDir, "secret-location-7f3a");
-        Directory.CreateDirectory(directory);
         (await _hub.Founder().PutAsJsonAsync(Routes.OutboundTargets, new DefineTargetRequest("broken", "file", directory))).EnsureSuccessStatusCode();
         var author = await _hub.RegisterAgentAsync("author");
         var peer = await _hub.RegisterAgentAsync("peer");
         var draft = await ReadAsync(await DraftAsync(author, "Hello out there.", target: "broken"));
         await ReadAsync(await ReviewAsync(peer, draft));
+        Directory.CreateDirectory(directory);
 
         var send = await author.PostAsync(Routes.OutboundAction(draft.Id, "send"), null);
 

@@ -1,7 +1,9 @@
+using System.Text.Json;
 using Microsoft.EntityFrameworkCore;
 using Muthur.Contracts;
 using Muthur.Core;
 using Muthur.Core.Entities;
+using Muthur.Data;
 using Muthur.Server.Auth;
 
 namespace Muthur.Server.Services;
@@ -29,7 +31,9 @@ public sealed class ConductorService(Ledger ledger, MuthurOptions options, TimeP
 {
     private readonly SemaphoreSlim _pass = new(1, 1);
     private readonly HashSet<string> _running = [];
-    private readonly HashSet<int> _escalated = [];
+
+    /// <summary>Task id → the <see cref="CapState.RoundSeq"/> already announced, so a later round can announce again.</summary>
+    private readonly Dictionary<int, long> _escalated = [];
 
     // F3: "what it last did" - a founder who turned this on overnight needs to know it ran at all.
     private DateTimeOffset? _lastPass;
@@ -53,7 +57,23 @@ public sealed class ConductorService(Ledger ledger, MuthurOptions options, TimeP
     /// <summary>Why a session produced nothing. The founder is sent to a different place for each.</summary>
     private enum Unproductive { NeverStarted, RanAndFailed, NoVerdict }
 
+    /// <summary>What a session that exited cleanly actually left behind.</summary>
+    private enum RoundEnd
+    {
+        /// <summary>This pair recorded a verdict. The pair is working.</summary>
+        Verdict,
+        /// <summary>Another validator decided the task first, so there was nothing left for this pair to record.</summary>
+        Closed,
+        /// <summary>The round is still open and this pair recorded nothing. That is the defect the cap catches.</summary>
+        Nothing,
+    }
+
     private sealed record Stall(int Failures, DateTimeOffset? StalledAt, bool Announced, Unproductive Last);
+
+    /// <param name="Failures">Times this task has ever been failed — the ledger is append-only, so this only rises.</param>
+    /// <param name="RoundSeq">Seq of the most recent <c>task.implemented</c>: the round this task is in now.</param>
+    /// <param name="HeadMoved">Whether that round's branch head differs from the round before it.</param>
+    private sealed record CapState(int Failures, long RoundSeq, bool HeadMoved);
 
     /// <summary>
     /// Whether staffing is on. The hub is a local process that is off for hours, so this lives in the database:
@@ -96,6 +116,57 @@ public sealed class ConductorService(Ledger ledger, MuthurOptions options, TimeP
     }
 
     /// <summary>
+    /// What both cap sites ask of a task, in one query so they cannot drift: how often it has been failed, and
+    /// whether the round it is in now is standing on the same commit as the round before it.
+    /// <para>
+    /// A round can hold at most one failure — a failed verdict returns the task to its owner, and only a fresh
+    /// <c>task.implemented</c> brings it back — so "failed three times" has always meant three resubmissions.
+    /// The cap is therefore not "has it failed a lot" but "has it failed a lot and come back unchanged".
+    /// </para>
+    /// </summary>
+    private static async Task<Dictionary<int, CapState>> CapStateAsync(MuthurDb db, IReadOnlyList<int> taskIds, CancellationToken ct)
+    {
+        var failures = await db.Events
+            .Where(e => e.Type == "validation.failed" && e.TaskId != null && taskIds.Contains(e.TaskId!.Value))
+            .GroupBy(e => e.TaskId!.Value)
+            .Select(g => new { TaskId = g.Key, Count = g.Count() })
+            .ToDictionaryAsync(x => x.TaskId, x => x.Count, ct);
+
+        // The heads live in the payload, and the validating set is small: read them in memory rather than
+        // teaching the query about JSON.
+        var rounds = await db.Events
+            .Where(e => e.Type == "task.implemented" && e.TaskId != null && taskIds.Contains(e.TaskId!.Value))
+            .Select(e => new { TaskId = e.TaskId!.Value, e.Seq, e.PayloadJson })
+            .ToListAsync(ct);
+
+        var state = new Dictionary<int, CapState>();
+        foreach (var perTask in rounds.GroupBy(e => e.TaskId))
+        {
+            var newest = perTask.OrderByDescending(e => e.Seq).Take(2).ToList();
+            var current = Head(newest[0].PayloadJson);
+            var previous = newest.Count > 1 ? Head(newest[1].PayloadJson) : null;
+            // Absence of evidence is not evidence of standing still: rounds recorded before heads were kept
+            // carry none, and a task must never be stalled for something nobody wrote down.
+            state[perTask.Key] = new CapState(
+                failures.GetValueOrDefault(perTask.Key), newest[0].Seq,
+                current is null || previous is null || current != previous);
+        }
+        return state;
+    }
+
+    private static string? Head(string payloadJson)
+    {
+        try
+        {
+            using var document = JsonDocument.Parse(payloadJson);
+            return document.RootElement.TryGetProperty("head", out var value) && value.ValueKind == JsonValueKind.String
+                ? value.GetString()
+                : null;
+        }
+        catch (JsonException) { return null; }
+    }
+
+    /// <summary>
     /// What the conductor would staff right now, most urgent first. Separated from starting anything so the
     /// decision can be tested without launching a process.
     /// </summary>
@@ -124,12 +195,9 @@ public sealed class ConductorService(Ledger ledger, MuthurOptions options, TimeP
             var held = await db.RoleHolds.Where(h => h.LeaseExpires > now).Select(h => h.RoleKey).ToListAsync(ct);
             var validatorRoles = await db.Roles.Where(r => r.IsValidator).Select(r => r.Key).ToListAsync(ct);
 
-            // A task that has failed too many times is a judgment call, and judgment calls go to the founder.
-            var failures = await db.Events
-                .Where(e => e.Type == "validation.failed" && e.TaskId != null && ids.Contains(e.TaskId!.Value))
-                .GroupBy(e => e.TaskId!.Value)
-                .Select(g => new { TaskId = g.Key, Count = g.Count() })
-                .ToDictionaryAsync(x => x.TaskId, x => x.Count, ct);
+            // A task that has failed too many times and come back unchanged is a judgment call, and judgment
+            // calls go to the founder.
+            var cap = await CapStateAsync(db, ids, ct);
 
             // "harness/model" of whoever declared the task implemented.
             var built = await db.Events
@@ -141,7 +209,10 @@ public sealed class ConductorService(Ledger ledger, MuthurOptions options, TimeP
             var plan = new List<ConductorAssignment>();
             foreach (var task in tasks)
             {
-                if (failures.GetValueOrDefault(task.Id) >= options.ConductorMaxAttempts) continue;
+                if (cap.GetValueOrDefault(task.Id) is { HeadMoved: false } state &&
+                    state.Failures >= options.ConductorMaxAttempts) continue;
+                // A human has said this one needs them. Staffing it spends a session to be told what the task already says.
+                if (task.AttendedReason is not null) continue;
                 foreach (var validation in pending.Where(v => v.TaskId == task.Id))
                 {
                     if (held.Contains(validation.ValidatorKey)) continue;
@@ -219,15 +290,27 @@ public sealed class ConductorService(Ledger ledger, MuthurOptions options, TimeP
                 await UnproductiveAsync(assignment, key,
                     ex is ValidatorSessionException ? Unproductive.RanAndFailed : Unproductive.NeverStarted, ex.Message);
             }
-            else if (await ReachedAVerdictAsync(assignment))
+            else switch (await RoundEndAsync(assignment))
             {
-                lock (_stalls) _stalls.Remove(key);   // including a probe: the pair is working again
-            }
-            else
-            {
-                // It started, it exited cleanly, and it recorded nothing. That is not progress: it is the loop that
-                // spent five harness sessions in twenty-eight minutes on a task no unattended validator could do.
-                await UnproductiveAsync(assignment, key, Unproductive.NoVerdict, null);
+                case RoundEnd.Verdict:
+                    lock (_stalls) _stalls.Remove(key);   // including a probe: the pair is working again
+                    break;
+                case RoundEnd.Closed:
+                    // Another validator decided the task while this session was running, so there was nothing left
+                    // to record. Not charged, because the session did nothing wrong. Not cleared either: a pair that
+                    // only ever runs in rounds closed by others must not be laundered clean without ever reaching a
+                    // verdict. The event is recorded rather than swallowed because the session still spent a slot.
+                    await ledger.MutateAsync(Caller.Founder, m =>
+                    {
+                        m.Record("conductor.round_closed", assignment.TaskId, new { role = assignment.RoleKey });
+                        return Task.CompletedTask;
+                    }, CancellationToken.None);
+                    break;
+                default:
+                    // It started, it exited cleanly, and it recorded nothing. That is not progress: it is the loop that
+                    // spent five harness sessions in twenty-eight minutes on a task no unattended validator could do.
+                    await UnproductiveAsync(assignment, key, Unproductive.NoVerdict, null);
+                    break;
             }
         }
         finally
@@ -236,13 +319,32 @@ public sealed class ConductorService(Ledger ledger, MuthurOptions options, TimeP
         }
     }
 
-    /// <summary>Whether the session left a verdict behind for its pair — the only evidence that it did its job.</summary>
-    private Task<bool> ReachedAVerdictAsync(ConductorAssignment assignment) =>
+    /// <summary>
+    /// What a session that exited cleanly actually left behind. A pair's own row is not enough to tell: sessions are
+    /// started one per pending validation and run concurrently, so the first validator to fail a task takes it out of
+    /// <see cref="TaskState.Validating"/> and leaves every sibling's row <see cref="Verdict.Pending"/> with nothing
+    /// left for it to record.
+    /// </summary>
+    private Task<RoundEnd> RoundEndAsync(ConductorAssignment assignment) =>
         ledger.ReadAsync(async (db, _) =>
-            !await db.TaskValidations.AnyAsync(v =>
-                v.TaskId == assignment.TaskId && v.ValidatorKey == assignment.RoleKey && v.Verdict == Verdict.Pending,
-                CancellationToken.None),
-            CancellationToken.None);
+        {
+            var round = await db.Tasks
+                .Where(t => t.Id == assignment.TaskId)
+                .Select(t => new
+                {
+                    t.State,
+                    Pending = db.TaskValidations.Any(v =>
+                        v.TaskId == t.Id && v.ValidatorKey == assignment.RoleKey && v.Verdict == Verdict.Pending),
+                })
+                .SingleOrDefaultAsync(CancellationToken.None);
+
+            // The verdict first, and only then the task's state. A task that reached Validated because every
+            // validator passed is not Validating either, and reading those pairs as closed rounds would credit
+            // each of them with having done nothing. A row that is gone — the next round wiped it, because
+            // ImplementedAsync removes the previous round's rows — is not pending, so it is not the cap's business.
+            if (round is not { Pending: true }) return RoundEnd.Verdict;
+            return round.State == TaskState.Validating ? RoundEnd.Nothing : RoundEnd.Closed;
+        }, CancellationToken.None);
 
     /// <summary>
     /// One session produced nothing: count it, and when the pair has run out of attempts stall it half-open and tell
@@ -305,25 +407,29 @@ public sealed class ConductorService(Ledger ledger, MuthurOptions options, TimeP
         }, CancellationToken.None);
     }
 
-    /// <summary>A task that keeps failing stops being restaffed and becomes a question for the founder, once.</summary>
+    /// <summary>
+    /// A task that keeps failing and keeps coming back on the same commit stops being restaffed and becomes a
+    /// question for the founder, once per round — a later unmoved resubmission is new information and says so again.
+    /// </summary>
     private Task EscalateExhaustedAsync(CancellationToken ct) =>
         ledger.MutateAsync(Caller.Founder, async m =>
         {
             var validating = await m.Db.Tasks.Where(t => t.State == TaskState.Validating).Select(t => t.Id).ToListAsync(ct);
             if (validating.Count == 0) return;
 
-            var failures = await m.Db.Events
-                .Where(e => e.Type == "validation.failed" && e.TaskId != null && validating.Contains(e.TaskId!.Value))
-                .GroupBy(e => e.TaskId!.Value)
-                .Select(g => new { TaskId = g.Key, Count = g.Count() })
-                .ToListAsync(ct);
+            var exhausted = (await CapStateAsync(m.Db, validating, ct))
+                .Where(e => e.Value.Failures >= options.ConductorMaxAttempts && !e.Value.HeadMoved)
+                .OrderBy(e => e.Key);
 
-            foreach (var row in failures.Where(f => f.Count >= options.ConductorMaxAttempts))
+            foreach (var (taskId, state) in exhausted)
             {
                 lock (_escalated)
-                    if (!_escalated.Add(row.TaskId)) continue;
+                {
+                    if (_escalated.TryGetValue(taskId, out var announced) && announced == state.RoundSeq) continue;
+                    _escalated[taskId] = state.RoundSeq;
+                }
 
-                var task = await m.Db.Tasks.FirstAsync(t => t.Id == row.TaskId, ct);
+                var task = await m.Db.Tasks.FirstAsync(t => t.Id == taskId, ct);
                 var events = await m.Db.Events
                     .Where(e => e.Type == "validation.failed" && e.TaskId == task.Id)
                     .OrderBy(e => e.Seq).Select(e => new { e.At, e.Actor, e.PayloadJson }).ToListAsync(ct);
@@ -332,12 +438,13 @@ public sealed class ConductorService(Ledger ledger, MuthurOptions options, TimeP
                 // One line per verdict. The founder reads this on a card; the evidence itself is whole in
                 // `muthur task show`, and pasting it here turns a notification into kilobytes of escaped JSON.
                 MessageService.PostFromHub(m, Recipient.Founder, null,
-                    $"{Wire.TaskId(task.Id)} \"{task.Title}\" has failed validation {row.Count} times and the conductor " +
-                    $"has stopped restaffing it. Re-spec it, cancel it, or raise Muthur:ConductorMaxAttempts."
+                    $"{Wire.TaskId(task.Id)} \"{task.Title}\" has failed validation {state.Failures} times and came back " +
+                    "on the same commit, so the conductor has stopped restaffing it. Change the branch and mark it " +
+                    "implemented again, re-spec it, cancel it, or raise Muthur:ConductorMaxAttempts."
                     + Environment.NewLine + string.Join(Environment.NewLine, verdicts)
                     + Environment.NewLine + $"Full evidence: muthur task show {Wire.TaskId(task.Id)}", task.Id);
-                m.Record("conductor.exhausted", task.Id, new { failures = row.Count });
-                _lastAction = $"stopped restaffing {Wire.TaskId(task.Id)} after {row.Count} failures";
+                m.Record("conductor.exhausted", task.Id, new { failures = state.Failures, round = state.RoundSeq });
+                _lastAction = $"stopped restaffing {Wire.TaskId(task.Id)} after {state.Failures} failures on one commit";
             }
         }, ct);
 }

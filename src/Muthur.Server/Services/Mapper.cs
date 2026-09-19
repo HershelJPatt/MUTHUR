@@ -30,7 +30,8 @@ public static class Mapper
             t.CreatedAt,
             t.UpdatedAt,
             t.DoneAt,
-            validations ?? []);
+            validations ?? [],
+            t.AttendedReason);
 
     public static EventDto ToDto(this LedgerEvent e)
     {

@@ -20,6 +20,12 @@ public static class Startup
         Directory.CreateDirectory(options.DataDir);
 
         builder.WebHost.UseUrls(options.Url);
+        // CreateBuilder registers Console, Debug, EventSource and — on Windows — EventLog. The Event Log is the
+        // problem: the hub never reads it, nothing in this repository does, and a session with ordinary user rights
+        // or a sandbox that denies it fails at a layer that has nothing to do with what MUTHUR does. Start from
+        // nothing and add back the two that have a reader.
+        builder.Logging.ClearProviders();
+        builder.Logging.AddConsole();
         builder.Logging.AddProvider(new FileLoggerProvider(Path.Combine(options.DataDir, MuthurEnvironment.LogFile)));
 
         builder.Services.AddSingleton(TimeProvider.System);
@@ -51,6 +57,7 @@ public static class Startup
         builder.Services.AddSingleton<LifecycleService>();
         builder.Services.AddSingleton<MessageService>();
         builder.Services.AddSingleton<RequestService>();
+        builder.Services.AddSingleton<FounderAttention>();
         builder.Services.AddSingleton<HarnessService>();
         builder.Services.AddSingleton<InboundService>();
         builder.Services.AddSingleton<OutboundService>();
@@ -67,6 +74,14 @@ public static class Startup
         builder.Services.AddSingleton<CollisionService>();
         builder.Services.AddSingleton<IPullRequestOpener, GhPullRequestOpener>();
         builder.Services.AddSingleton<ITaskLander, GitLander>();
+        builder.Services.AddSingleton<DoctorService>();
+        // Registered in the order DoctorService reports them, so the list reads like the report.
+        builder.Services.AddSingleton<IDoctorCheck, DoctorIngestCheck>();
+        builder.Services.AddSingleton<IDoctorCheck, DoctorLoggingCheck>();
+        builder.Services.AddSingleton<IDoctorCheck, DoctorOutboundCheck>();
+        builder.Services.AddSingleton<IDoctorCheck, DoctorProjectCheck>();
+        builder.Services.AddSingleton<IDoctorCheck, DoctorRepoCheck>();
+        builder.Services.AddSingleton<IDoctorCheck, DoctorRoleCheck>();
         if (options.BackgroundServices)
         {
             builder.Services.AddHostedService<LeaseSweeper>();
@@ -87,15 +102,18 @@ public static class Startup
         return options;
     }
 
-    /// <summary>Migrates the database and establishes instance identity. Runs before the server accepts requests.</summary>
+    /// <summary>Copies the database aside, migrates it, and establishes instance identity. Runs before the server accepts requests.</summary>
     public static async Task InitializeMuthurAsync(this WebApplication app)
     {
         var options = app.Services.GetRequiredService<MuthurOptions>();
         var clock = app.Services.GetRequiredService<TimeProvider>();
         var instance = app.Services.GetRequiredService<InstanceInfo>();
+        var backupLogger = app.Services.GetRequiredService<ILoggerFactory>().CreateLogger(typeof(DatabaseBackup));
+        var stopping = app.Lifetime.ApplicationStopping;
 
         await using (var db = await app.Services.GetRequiredService<IDbContextFactory<MuthurDb>>().CreateDbContextAsync())
         {
+            await DatabaseBackup.BeforeMigratingAsync(db, options, clock, backupLogger, stopping);
             await db.Database.MigrateAsync();
             if (db.Database.IsSqlite())
                 await db.Database.ExecuteSqlRawAsync("PRAGMA journal_mode=WAL;");

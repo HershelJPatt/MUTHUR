@@ -1,3 +1,4 @@
+using System.Text.RegularExpressions;
 using Microsoft.EntityFrameworkCore;
 using Muthur.Contracts;
 using Muthur.Core;
@@ -9,8 +10,11 @@ namespace Muthur.Server.Services;
 
 public sealed record TaskQuery(IReadOnlyList<TaskState>? States = null, string? Project = null, string? Owner = null, bool OpenOnly = false, int Limit = 500);
 
-public sealed class TaskService(Ledger ledger, LeasePolicy leases)
+public sealed partial class TaskService(Ledger ledger, LeasePolicy leases)
 {
+    [GeneratedRegex(@"^#\s*(T-\d+)\b")]
+    private static partial Regex SpecHeadingPattern();
+
     public Task<TaskDto> AddAsync(Caller caller, AddTaskRequest request, CancellationToken ct = default)
     {
         caller.RequireIdentified();
@@ -124,9 +128,11 @@ public sealed class TaskService(Ledger ledger, LeasePolicy leases)
             RequireOwnerOrFounder(task, caller);
             if (string.IsNullOrWhiteSpace(request.Path) || Path.IsPathRooted(request.Path))
                 throw Fail.Rule("relative_path_required", "The spec path must be relative to the project repository.");
+            var relative = request.Path.Replace('\\', '/');
+            RequireSpecBelongsToTask(task, relative);
             if (task.State is not (TaskState.InProgress or TaskState.Blocked))
                 throw Fail.Rule("not_in_progress", $"A spec can only be attached while the task is in progress; {Wire.TaskId(task.Id)} is '{task.State.ToWire()}'.");
-            task.SpecPath = request.Path.Replace('\\', '/');
+            task.SpecPath = relative;
             task.UpdatedAt = m.Now;
             m.Record("task.spec_set", task.Id, new { path = task.SpecPath });
             return task.ToDto();
@@ -145,6 +151,28 @@ public sealed class TaskService(Ledger ledger, LeasePolicy leases)
             return task.ToDto();
         }, ct);
     }
+
+    /// <summary>
+    /// Says that a human validator is needed, and why, or lifts that when the reason stops being true. Nothing sets
+    /// this automatically: a person reads the evidence and decides. Repeating an assertion is not an error.
+    /// </summary>
+    public Task<TaskDto> SetAttendedAsync(Caller caller, string id, AttendedRequest request, CancellationToken ct = default) =>
+        ledger.MutateAsync(caller, async m =>
+        {
+            var task = await LoadAsync(m.Db, id, ct);
+            // An owned task is its owner's to flag; an unowned one is anyone's, because the case worth recording
+            // early - a backlog task whose author already knows it needs a browser - has no owner to be.
+            if (task.OwnerAgentId is not null) RequireOwnerOrFounder(task, caller);
+            else caller.RequireIdentified();
+            var was = task.AttendedReason;
+            var reason = string.IsNullOrWhiteSpace(request.Reason) ? null : request.Reason.Trim();
+            if (reason == was) return task.ToDto();
+            task.AttendedReason = reason;
+            task.UpdatedAt = m.Now;
+            if (reason is null) m.Record("task.attended_cleared", task.Id, new { was });
+            else m.Record("task.attended", task.Id, new { reason });
+            return task.ToDto();
+        }, ct);
 
     public Task<TaskDto> CancelAsync(Caller caller, string id, CancelTaskRequest request, CancellationToken ct = default) =>
         ledger.MutateAsync(caller, async m =>
@@ -203,6 +231,54 @@ public sealed class TaskService(Ledger ledger, LeasePolicy leases)
         if (caller.IsFounder) return;
         if (caller.AgentId is null || task.OwnerAgentId != caller.AgentId)
             throw Fail.Rule("not_owner", $"{Wire.TaskId(task.Id)} is owned by '{task.Owner?.Name ?? "nobody"}'; only its owner or the founder may do this.");
+    }
+
+    /// <summary>
+    /// A spec must be a file inside the project's checkout, and if its first heading names a task it must name
+    /// this one: ledger ids get reused, so attaching another task's spec is how implementers build the wrong thing.
+    /// </summary>
+    private static void RequireSpecBelongsToTask(WorkTask task, string relative)
+    {
+        var root = Path.GetFullPath(task.Project!.RepoPath);
+        var full = Path.GetFullPath(Path.Combine(root, relative));
+        if (!IsInside(root, full))
+            throw Fail.Rule("spec_outside_repository", "The spec path must stay inside the project repository.");
+        if (!File.Exists(full))
+            throw Fail.Rule("spec_missing", $"No file at '{relative}' in {task.Project.RepoPath}. Commit the spec on the task branch first.");
+        if (FirstHeadingTaskId(full, relative) is { } found && found != Wire.TaskId(task.Id))
+            throw Fail.Rule("spec_id_mismatch", $"'{relative}' is the spec for {found}, not {Wire.TaskId(task.Id)}. Attaching it here would point implementers at the wrong work — and writing over it would destroy that record.");
+    }
+
+    /// <summary>A separator at the boundary is what keeps '/repo-evil' from counting as inside '/repo'.</summary>
+    private static bool IsInside(string root, string full)
+    {
+        var trimmed = root.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
+        var comparison = OperatingSystem.IsWindows() ? StringComparison.OrdinalIgnoreCase : StringComparison.Ordinal;
+        return full.Length > trimmed.Length
+            && full.StartsWith(trimmed, comparison)
+            && (full[trimmed.Length] == Path.DirectorySeparatorChar || full[trimmed.Length] == Path.AltDirectorySeparatorChar);
+    }
+
+    /// <summary>The task id in the file's first non-blank line, or null if the heading names none.</summary>
+    private static string? FirstHeadingTaskId(string full, string relative)
+    {
+        try
+        {
+            using var reader = new StreamReader(full);
+            var head = new char[8 * 1024]; // a mistaken path to something enormous stays cheap to reject
+            var read = reader.ReadBlock(head, 0, head.Length);
+            foreach (var line in new string(head, 0, read).Split('\n'))
+            {
+                if (string.IsNullOrWhiteSpace(line)) continue;
+                var match = SpecHeadingPattern().Match(line.Trim());
+                return match.Success ? match.Groups[1].Value : null;
+            }
+            return null;
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            throw Fail.Rule("spec_unreadable", $"'{relative}' could not be read: {ex.Message}");
+        }
     }
 
     private static void ReturnToBacklog(WorkTask task, DateTimeOffset now)

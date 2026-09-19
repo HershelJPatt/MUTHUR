@@ -17,6 +17,10 @@
         {
             <span class="pill pill-blocked">waiting on founder</span>
         }
+        @if (Task.AttendedReason is not null)
+        {
+            <span class="pill pill-blocked">needs a human</span>
+        }
         @foreach (var v in Task.Validations)
         {
             <span class="pill pill-verdict-@v.Verdict">@v.Validator @(v.Verdict == "pending" ? "···" : v.Verdict)</span>
