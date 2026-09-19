@@ -2478,4 +2478,312 @@ public sealed class ConductorTests : IDisposable
         Assert.Contains(forbidden, SessionCommands.Denied);
         Assert.Contains("muthur*", SessionCommands.Allowed);   // and it can still talk to the hub
     }
+
+    // ---- and it lands the work nobody is left to land -------------------------------------------------------------
+
+    private static string Branch(string taskId) => $"task/{taskId}-work";
+
+    /// <summary>
+    /// A task its owner took all the way to validated. The project requires no validators, so <c>implemented</c>
+    /// is the whole round and the state it ends in is the state a passed validation leaves a task in.
+    /// </summary>
+    private async Task<string> ValidatedTaskAsync(HttpClient owner, string title = "Ship the export", int priority = 0)
+    {
+        var task = await owner.AddTaskAsync(title, priority: priority);
+        (await owner.ClaimAsync(task.Id)).EnsureSuccessStatusCode();
+        (await owner.PostActionAsync(task.Id, "spec", new SetSpecRequest(_repo.WriteSpec(task.Id)))).EnsureSuccessStatusCode();
+        _repo.BranchWithFile(Branch(task.Id), $"{task.Id}.txt", $"{task.Id}\n");
+        (await owner.PostActionAsync(task.Id, "implemented", new ImplementedRequest(Branch(task.Id)))).EnsureSuccessStatusCode();
+        Assert.Equal(TaskState.Validated, (await _hub.Founder().GetTaskAsync(task.Id)).Task.State);
+        return task.Id;
+    }
+
+    /// <summary>
+    /// Longer than Muthur:AgentStaleSeconds (180) with nobody speaking, on the fake clock. Every call after this
+    /// one is the founder's on purpose: any authenticated request an agent makes is a sign of life and would undo it.
+    /// </summary>
+    private void OwnerGoesQuiet() => _hub.Clock.Advance(TimeSpan.FromMinutes(4));
+
+    [Fact]
+    public async Task A_validated_task_whose_owner_has_gone_is_landed_by_the_hub()
+    {
+        // T-34's own ending, and the ordinary one: claimed, specced, built, validated - and then the session that
+        // would have landed it reached its forty-five minutes and exited. Nothing sweeps `validated` and nothing
+        // plans it, so before this it sat there for ever.
+        await SetUpAsync();
+        var owner = await _hub.RegisterAgentAsync("owner");
+        var id = await ValidatedTaskAsync(owner);
+        OwnerGoesQuiet();
+
+        Assert.Equal(0, await Conductor.RunPassAsync());   // a land is not a session, so the pass started none
+
+        Assert.Equal(TaskState.Done, (await _hub.Founder().GetTaskAsync(id)).Task.State);
+        var events = await EventsAsync();
+        Assert.Single(events, e => e.Type == "task.landed" && e.TaskId == id);
+        var landed = Assert.Single(events, e => e.Type == "conductor.landed");
+        Assert.Equal(id, landed.TaskId);
+        Assert.Equal(id, landed.Payload.GetProperty("task").GetString());
+        Assert.Equal("owner", landed.Payload.GetProperty("owner").GetString());
+        Assert.Equal($"landed {id}, which owner did not survive to land", (await Conductor.StatusAsync()).LastAction);
+
+        // And the merge is really in the repository, not only in the ledger.
+        Assert.Contains($"Land {id}", _repo.Git("log", "--oneline", "main"), StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task A_validated_task_whose_owner_is_still_alive_is_left_for_its_owner_to_land()
+    {
+        // Auto-landing is not the policy. A live orchestrator lands its own work exactly as the procedure says,
+        // and the hub must never take it out from under one that is about to.
+        await SetUpAsync();
+        var owner = await _hub.RegisterAgentAsync("owner");
+        var id = await ValidatedTaskAsync(owner);
+
+        OwnerGoesQuiet();
+        (await owner.PostAsJsonAsync(Routes.AgentHeartbeat, new HeartbeatRequest())).EnsureSuccessStatusCode();
+
+        Assert.Equal(0, await Conductor.RunPassAsync());
+
+        Assert.Equal(TaskState.Validated, (await _hub.Founder().GetTaskAsync(id)).Task.State);
+        Assert.DoesNotContain(await EventsAsync(), e => e.Type is "conductor.landed" or "task.landed");
+        Assert.Empty(await FounderMessagesAsync());
+    }
+
+    [Fact]
+    public async Task A_task_the_conductor_has_a_session_on_is_not_landed_under_it_however_quiet_its_owner()
+    {
+        // The one that stops the hub racing a session about to land its own work. An orchestrator mid-build is
+        // quiet for minutes at a time, and the heartbeat cannot tell that apart from a session that has exited -
+        // so what the conductor is running is asked as well, and it is the stronger answer.
+        await SetUpAsync();
+        (await OrchestratorsAsync(true)).EnsureSuccessStatusCode();
+        var session = await _hub.RegisterAgentAsync("orchestrator-t-1");
+        var author = await _hub.RegisterAgentAsync("author");
+        var id = (await author.AddTaskAsync("Only its own session lands this")).Id;
+
+        // What a real session does: claim, spec, build, mark implemented - and still be running afterwards.
+        _hub.Orchestrators.Block = true;
+        _hub.Orchestrators.Claim = async assignment =>
+        {
+            var key = assignment.TaskKey;
+            (await session.ClaimAsync(key)).EnsureSuccessStatusCode();
+            (await session.PostActionAsync(key, "spec", new SetSpecRequest(_repo.WriteSpec(key)))).EnsureSuccessStatusCode();
+            _repo.BranchWithFile(Branch(key), $"{key}.txt", $"{key}\n");
+            (await session.PostActionAsync(key, "implemented", new ImplementedRequest(Branch(key)))).EnsureSuccessStatusCode();
+        };
+
+        Assert.Equal(1, await Conductor.RunPassAsync());
+        await Eventually.TrueAsync(
+            async () => (await _hub.Founder().GetTaskAsync(id)).Task.State == TaskState.Validated ? "validated" : null,
+            $"{id} never reached validated, so no pass ever saw the state this test is about");
+
+        // Its owner has now been silent for longer than a stale agent may be, and it is still not the hub's to land.
+        OwnerGoesQuiet();
+        Assert.Equal(0, await Conductor.RunPassAsync());
+        Assert.Equal(TaskState.Validated, (await _hub.Founder().GetTaskAsync(id)).Task.State);
+        Assert.DoesNotContain(await EventsAsync(), e => e.Type == "conductor.landed");
+
+        // The session ending is the only thing that changes, and the very next pass lands it.
+        _hub.Orchestrators.Finish();
+        await SettledAsync();
+        Assert.Equal(0, await Conductor.RunPassAsync());
+
+        Assert.Equal(TaskState.Done, (await _hub.Founder().GetTaskAsync(id)).Task.State);
+        Assert.Single(await EventsAsync(), e => e.Type == "conductor.landed");
+    }
+
+    [Fact]
+    public async Task A_validated_task_whose_project_has_no_repository_is_not_landed()
+    {
+        // There is nothing to merge into, and asking git about it would only produce a refusal to tell the
+        // founder about. The API refuses an empty path, so a hand-edited database is the only way in.
+        await SetUpAsync();
+        var owner = await _hub.RegisterAgentAsync("owner");
+        var id = await ValidatedTaskAsync(owner);
+        await using (var db = await _hub.Services.GetRequiredService<IDbContextFactory<MuthurDb>>().CreateDbContextAsync())
+        {
+            (await db.Projects.SingleAsync()).RepoPath = "";
+            await db.SaveChangesAsync();
+        }
+        OwnerGoesQuiet();
+
+        Assert.Equal(0, await Conductor.RunPassAsync());
+
+        Assert.Equal(TaskState.Validated, (await _hub.Founder().GetTaskAsync(id)).Task.State);
+        Assert.DoesNotContain(await EventsAsync(), e => e.Type is "conductor.landed" or "conductor.land_refused");
+        Assert.Empty(await FounderMessagesAsync());
+    }
+
+    [Fact]
+    public async Task A_branch_that_no_longer_merges_goes_back_to_its_owner_and_the_founder_hears_once()
+    {
+        await SetUpAsync();
+        var owner = await _hub.RegisterAgentAsync("owner");
+        var id = await ValidatedTaskAsync(owner);
+        // main grew a different version of the same file while the branch waited for its verdict.
+        _repo.Write($"{id}.txt", "main wrote this instead\n");
+        _repo.Commit("main moves on");
+        OwnerGoesQuiet();
+
+        Assert.Equal(0, await Conductor.RunPassAsync());
+
+        var founder = _hub.Founder();
+        Assert.Equal(TaskState.InProgress, (await founder.GetTaskAsync(id)).Task.State);   // where today's land path leaves it
+        var conflict = Assert.Single(await EventsAsync(), e => e.Type == "conductor.land_conflict");
+        Assert.Equal(id, conflict.TaskId);
+        Assert.Equal(Branch(id), conflict.Payload.GetProperty("branch").GetString());
+        Assert.Contains($"conflicts: {id}.txt", conflict.Payload.GetProperty("message").GetString(), StringComparison.Ordinal);
+        var told = Assert.Single(await FounderMessagesAsync());
+        Assert.Contains(Branch(id), told.Body, StringComparison.Ordinal);
+        Assert.Contains($"conflicts: {id}.txt", told.Body, StringComparison.Ordinal);
+
+        // Resubmitted on the same commit - its owner is gone, so the founder does it - and the conflict is the
+        // same conflict. The event records every attempt; the message is not an attempt, and is not sent twice.
+        (await founder.PostActionAsync(id, "implemented", new ImplementedRequest(Branch(id)))).EnsureSuccessStatusCode();
+        Assert.Equal(0, await Conductor.RunPassAsync());
+
+        Assert.Equal(2, (await EventsAsync()).Count(e => e.Type == "conductor.land_conflict"));
+        Assert.Single(await FounderMessagesAsync());
+    }
+
+    [Fact]
+    public async Task A_land_the_environment_refuses_leaves_the_task_validated_and_tells_the_founder_once()
+    {
+        // A validated task whose branch is gone. Nothing the hub can do about that, and a human has to look -
+        // so it stays validated and it is said once, however many passes go by.
+        await SetUpAsync();
+        var owner = await _hub.RegisterAgentAsync("owner");
+        var id = await ValidatedTaskAsync(owner);
+        _repo.Git("branch", "-D", Branch(id));
+        OwnerGoesQuiet();
+
+        Assert.Equal(0, await Conductor.RunPassAsync());
+
+        Assert.Equal(TaskState.Validated, (await _hub.Founder().GetTaskAsync(id)).Task.State);
+        var refused = Assert.Single(await EventsAsync(), e => e.Type == "conductor.land_refused");
+        Assert.Equal(id, refused.TaskId);
+        Assert.Equal("branch_missing", refused.Payload.GetProperty("code").GetString());
+        Assert.Equal(Branch(id), refused.Payload.GetProperty("branch").GetString());
+        var told = Assert.Single(await FounderMessagesAsync());
+        Assert.Contains("retries at once", told.Body, StringComparison.Ordinal);   // the incantation, as the stalls say it
+        Assert.Equal($"could not land {id}: branch_missing", (await Conductor.StatusAsync()).LastAction);
+    }
+
+    [Fact]
+    public async Task A_refusal_is_probed_on_a_cooldown_rather_than_retried_every_pass()
+    {
+        // A refusal leaves the task validated, so an unbounded retry is a pass a minute for ever: task.land_refused
+        // and conductor.land_refused some fourteen hundred times a day for a fault only a human can clear. That is
+        // the noise this mechanism exists to prevent, moved from the inbox into the ledger - and it is reachable
+        // rather than exotic, because a dirty main checkout refuses every land there is.
+        _hub.Settings["Muthur:ConductorStallProbeMinutes"] = "30";
+        await SetUpAsync();
+        var owner = await _hub.RegisterAgentAsync("owner");
+        var id = await ValidatedTaskAsync(owner);
+        var head = _repo.Git("rev-parse", Branch(id));
+        _repo.Git("branch", "-D", Branch(id));
+        OwnerGoesQuiet();
+
+        // Five passes, a minute apart: one attempt, and then silence in the ledger as well as the inbox.
+        for (var pass = 0; pass < 5; pass++)
+        {
+            Assert.Equal(0, await Conductor.RunPassAsync());
+            _hub.Clock.Advance(TimeSpan.FromMinutes(1));
+        }
+
+        var events = await EventsAsync();
+        Assert.Equal(1, events.Count(e => e.Type == "conductor.land_refused"));
+        Assert.Equal(1, events.Count(e => e.Type == "task.land_refused"));   // the land path was not asked again either
+        Assert.Single(await FounderMessagesAsync());
+
+        // Half-open: the cooldown passes, exactly one probe goes through, and failing again re-arms it without
+        // shouting a second time.
+        _hub.Clock.Advance(TimeSpan.FromMinutes(30));
+        Assert.Equal(0, await Conductor.RunPassAsync());
+        Assert.Equal(0, await Conductor.RunPassAsync());
+        Assert.Equal(2, (await EventsAsync()).Count(e => e.Type == "conductor.land_refused"));
+        Assert.Single(await FounderMessagesAsync());
+
+        // Whatever was wrong is put right outside the hub, and the next probe finds out by itself: nobody has to
+        // know an incantation to resume.
+        _repo.Git("branch", Branch(id), head);
+        _hub.Clock.Advance(TimeSpan.FromMinutes(31));
+        Assert.Equal(0, await Conductor.RunPassAsync());
+
+        Assert.Equal(TaskState.Done, (await _hub.Founder().GetTaskAsync(id)).Task.State);
+        Assert.Single(await EventsAsync(), e => e.Type == "conductor.landed");
+    }
+
+    [Fact]
+    public async Task Turning_the_conductor_on_again_retries_a_land_the_environment_refused()
+    {
+        // What the message arming the cooldown tells the founder to do, so it had better be true.
+        _hub.Settings["Muthur:ConductorStallProbeMinutes"] = "30";
+        await SetUpAsync();
+        var owner = await _hub.RegisterAgentAsync("owner");
+        var id = await ValidatedTaskAsync(owner);
+        var head = _repo.Git("rev-parse", Branch(id));
+        _repo.Git("branch", "-D", Branch(id));
+        OwnerGoesQuiet();
+
+        Assert.Equal(0, await Conductor.RunPassAsync());
+        Assert.Equal(0, await Conductor.RunPassAsync());   // inside the cooldown: nothing tried
+        Assert.Equal(1, (await EventsAsync()).Count(e => e.Type == "conductor.land_refused"));
+
+        _repo.Git("branch", Branch(id), head);
+        var founder = _hub.Founder();
+        (await founder.PostAsJsonAsync(Routes.Conductor, new ConductorSwitch(false))).EnsureSuccessStatusCode();
+        (await founder.PostAsJsonAsync(Routes.Conductor, new ConductorSwitch(true))).EnsureSuccessStatusCode();
+
+        Assert.Equal(0, await Conductor.RunPassAsync());
+
+        Assert.Equal(TaskState.Done, (await founder.GetTaskAsync(id)).Task.State);
+        Assert.Single(await EventsAsync(), e => e.Type == "conductor.landed");
+    }
+
+    [Fact]
+    public async Task Every_orphaned_task_lands_in_one_pass_because_landing_takes_no_session()
+    {
+        _hub.Settings["Muthur:ConductorMaxSessions"] = "1";
+        await SetUpAsync();
+        (await OrchestratorsAsync(true)).EnsureSuccessStatusCode();
+        var owner = await _hub.RegisterAgentAsync("owner");
+        var first = await ValidatedTaskAsync(owner, "First", priority: 2);
+        var second = await ValidatedTaskAsync(owner, "Second", priority: 1);
+        var author = await _hub.RegisterAgentAsync("author");
+        await author.AddTaskAsync("Something to start");
+
+        // Fill the one slot there is - and while the owner is still alive, nothing lands.
+        _hub.Orchestrators.Block = true;
+        Assert.Equal(1, await Conductor.RunPassAsync());
+        Assert.Equal(1, Conductor.RunningCount);
+        Assert.DoesNotContain(await EventsAsync(), e => e.Type == "conductor.landed");
+
+        OwnerGoesQuiet();
+        Assert.Equal(0, await Conductor.RunPassAsync());   // no slot left for a session, and a land needs none
+
+        var founder = _hub.Founder();
+        Assert.Equal(TaskState.Done, (await founder.GetTaskAsync(first)).Task.State);
+        Assert.Equal(TaskState.Done, (await founder.GetTaskAsync(second)).Task.State);
+        Assert.Equal([first, second],
+            (await EventsAsync()).Where(e => e.Type == "conductor.landed").Select(e => e.TaskId));
+
+        _hub.Orchestrators.Finish();
+        await SettledAsync();
+    }
+
+    [Fact]
+    public async Task With_the_conductor_off_nothing_is_landed()
+    {
+        _hub.Settings["Muthur:ConductorEnabled"] = "false";
+        await SetUpAsync();
+        var owner = await _hub.RegisterAgentAsync("owner");
+        var id = await ValidatedTaskAsync(owner);
+        OwnerGoesQuiet();
+
+        Assert.Equal(0, await Conductor.RunPassAsync());
+
+        Assert.Equal(TaskState.Validated, (await _hub.Founder().GetTaskAsync(id)).Task.State);
+        Assert.DoesNotContain(await EventsAsync(), e => e.Type == "conductor.landed");
+    }
 }
