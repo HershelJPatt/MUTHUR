@@ -680,3 +680,58 @@ role define win-validator --holders 1 --founder                      -> exit 0, 
 
 The last line is the rule the new check must not have swallowed, and it is also the first round's response
 fix showing on a real hub: the define answers with both live holders where it used to answer `holders: []`.
+
+## Amendment after the third validation round (2026-09-19, top-right)
+
+`conductor-validator` failed `382896b` with the best finding yet, reproduced on an installed build with a
+harness stand-in and a 15-second conductor interval:
+
+> conductor counts the same session twice once it takes its role. Capacity 2 cannot staff a second task
+> arriving while the first validator is working.
+
+The observation that proves it: at capacity 2, one running validator, one waiting task, `running=1`,
+`holders=1`, `waiting=2`, and the pass staffs nothing — then changing *only* the capacity to 3 staffs it
+immediately.
+
+### Why it happened
+
+`PlanAsync` counts a role's occupied slots from two sources: the live `RoleHolds`, and the conductor's own
+`_running` set. The second is deliberate and stays — a session that has started but has not yet taken the
+role holds nothing the database can see, and without it the next pass plans straight over it and the extra
+session starts, fails to take the role, and produces nothing (the test
+`Sessions_on_their_way_to_a_role_occupy_its_slots_on_the_following_pass` is exactly that).
+
+What was missing is that the two sources overlap. The moment a running session takes its role it is a hold
+*and* a running session, and it was counted in both. So a capacity of two behaved like a capacity of two
+only during the seconds before the first session took its role, and like a capacity of one for the rest of
+that session's life — which is precisely the serialization this whole task exists to remove. Staggered
+arrivals are the normal case; simultaneous ones are the lucky case, and simultaneous ones are what the
+earlier tests happened to cover.
+
+### The fix
+
+The session's agent name is not incidental — `ValidatorSessionLauncher.IdentityName(task, role)` is the
+(task, role) pair's own name, stable across retries and distinct between pairs, and that property was
+established by this branch. So a hold under that name *is* that session. `PlanAsync` now loads the live
+holds with their agents and skips a running session that is already represented by one:
+
+```csharp
+var heldBy = holds.Select(h => (h.RoleKey, Name: h.Agent?.Name ?? "")).ToHashSet();
+…
+if (heldBy.Contains((role, ValidatorSessionLauncher.IdentityName(task, role)))) continue;
+liveHolders[role] = liveHolders.GetValueOrDefault(role) + 1;
+```
+
+One query more (the holds were already being read; they are now read as rows rather than as a grouped
+count) and no new state. A hold taken by anyone else — a human validator, an agent that took the role by
+hand — is still counted, because it is not that pair's name.
+
+### Test
+
+`A_running_session_that_has_taken_its_role_occupies_one_slot_not_two` walks the validator's sequence: one
+task staffed and its session still alive, that session takes the role under the launcher's own name, a
+second task arrives, and the plan picks it up. Then the second session takes the role too and a third task
+waits — so the fix frees the slot that was double-charged without turning the capacity into no ceiling at
+all. It fails on the previous commit with the second task unplanned.
+
+`dotnet build`: clean, 0 warnings. `dotnet test`: 3708 Core, 23 Launch, 60 Cli, 269 Server — all green.

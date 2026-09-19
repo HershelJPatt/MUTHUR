@@ -292,6 +292,43 @@ public sealed class ConductorTests : IDisposable
         _hub.Validators.Finish(2);
     }
 
+    /// <summary>
+    /// The other half of the rule above, and the one a validator failed this task on: a running session that
+    /// has taken the role is a hold and a session at once, and counting it in both places charges one validator
+    /// two slots. A capacity of two would then staff a second task only while the first session was still
+    /// starting up, and serialize for the rest of its life — which is the very serialization this task exists
+    /// to remove.
+    /// </summary>
+    [Fact]
+    public async Task A_running_session_that_has_taken_its_role_occupies_one_slot_not_two()
+    {
+        _hub.Settings["Muthur:ConductorMaxSessions"] = "5";   // so what decides is the capacity, not the budget
+        await SetUpAsync("win-validator");
+        await DefineAsync(2, "win-validator");
+        _hub.Validators.Block = true;   // the first session is still alive when the second task arrives
+        var owner = await _hub.RegisterAgentAsync("owner");
+        var first = await ValidatingTaskAsync(owner, "First in", priority: 3);
+
+        Assert.Equal(1, await Conductor.RunPassAsync());
+        Assert.Equal(1, Conductor.RunningCount);
+
+        // What the real session does next, under the name the launcher gives the (task, role) pair.
+        await ValidatorAsync(ValidatorSessionLauncher.IdentityName(first, "win-validator"), "win-validator");
+
+        // One holder, one running session, one validator: the second slot is free and the next task takes it.
+        var second = await ValidatingTaskAsync(owner, "Arrived later", priority: 2);
+        var planned = Assert.Single(await Conductor.PlanAsync());
+        Assert.Equal(second, planned.TaskKey);
+        Assert.Equal(1, await Conductor.RunPassAsync());
+
+        // And the capacity is still a ceiling: with both slots occupied, a third task waits.
+        await ValidatorAsync(ValidatorSessionLauncher.IdentityName(second, "win-validator"), "win-validator");
+        await ValidatingTaskAsync(owner, "Waits its turn", priority: 1);
+        Assert.Empty(await Conductor.PlanAsync());
+
+        _hub.Validators.Finish(2);
+    }
+
     [Fact]
     public async Task The_session_budget_still_caps_a_role_with_slots_to_spare()
     {

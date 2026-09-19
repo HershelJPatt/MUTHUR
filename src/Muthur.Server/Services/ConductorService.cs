@@ -193,19 +193,26 @@ public sealed class ConductorService(Ledger ledger, MuthurOptions options, TimeP
             if (pending.Count == 0) return [];
 
             // Free slots, not "is it held at all": a validator role is a skill several agents may hold at once.
-            var liveHolders = await db.RoleHolds.Where(h => h.LeaseExpires > now)
-                .GroupBy(h => h.RoleKey)
-                .Select(g => new { Role = g.Key, Count = g.Count() })
-                .ToDictionaryAsync(x => x.Role, x => x.Count, ct);
+            var holds = await db.RoleHolds.Include(h => h.Agent).Where(h => h.LeaseExpires > now).ToListAsync(ct);
+            var liveHolders = holds.GroupBy(h => h.RoleKey).ToDictionary(g => g.Key, g => g.Count());
             var capacities = await db.Roles.Where(r => r.IsValidator).ToDictionaryAsync(r => r.Key, r => r.Holders, ct);
 
             // A slot is taken by a hold or by a session already on its way to one. A session that has started but
             // has not yet taken the role holds nothing yet, and without this the next pass plans straight over it:
             // the extras start, fail to take the role, and produce nothing. Read once, never per candidate.
+            //
+            // Once that session does take the role it is both a hold and a running session, and counting it in
+            // both places charges one validator two slots — a capacity of two would then staff a second task
+            // only while the first session was still starting up, and serialize for the rest of its life. The
+            // session's agent name is the (task, role) pair's own, so a hold by that name is that session: it is
+            // already counted, and the running set must not count it again.
+            var heldBy = holds.Select(h => (h.RoleKey, Name: h.Agent?.Name ?? "")).ToHashSet();
             lock (_running)
                 foreach (var session in _running)
                 {
-                    var role = session[(session.IndexOf('/') + 1)..];   // keys are "T-n/role"
+                    var slash = session.IndexOf('/');                   // keys are "T-n/role"
+                    var (task, role) = (session[..slash], session[(slash + 1)..]);
+                    if (heldBy.Contains((role, ValidatorSessionLauncher.IdentityName(task, role)))) continue;
                     liveHolders[role] = liveHolders.GetValueOrDefault(role) + 1;
                 }
 
