@@ -1,3 +1,5 @@
+using Muthur.Contracts;
+
 namespace Muthur.Server.Tests;
 
 /// <summary>
@@ -48,6 +50,62 @@ public sealed class TestHubDirectoriesTests
     }
 
     [Fact]
+    public void A_directory_whose_log_recorded_an_error_is_kept_and_named()
+    {
+        var dir = NewDataDir(Information, Error);
+
+        TestHubDirectories.Release(dir);
+
+        Assert.True(Directory.Exists(dir), "a log that recorded an error is the only copy of that evidence");
+        var reported = Assert.Single(TestHubDirectories.Summary(), line => line.Contains(dir, StringComparison.Ordinal));
+        Assert.StartsWith("  kept    ", reported, StringComparison.Ordinal);
+        Assert.EndsWith($"(1 error line in {MuthurEnvironment.LogFile})", reported, StringComparison.Ordinal);
+
+        // Leave nothing behind: the removal itself is asserted by the test below.
+        TestHubDirectories.Release(dir, expectsLoggedErrors: true);
+    }
+
+    [Fact]
+    public void A_hub_that_expects_its_errors_has_its_directory_removed_anyway()
+    {
+        // Retention means unexpected. A test that logs an error on purpose has asserted on it already, so its
+        // log is evidence of nothing and keeping it rebuilds the leak at a slower rate.
+        var dir = NewDataDir(Information, Error);
+
+        TestHubDirectories.Release(dir, expectsLoggedErrors: true);
+
+        Assert.False(Directory.Exists(dir));
+        Assert.DoesNotContain(TestHubDirectories.Summary(), line => line.Contains(dir, StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public void A_log_that_cannot_be_read_keeps_the_directory()
+    {
+        // Evidence is cheaper than a lost test run: whatever stopped the read, the answer is to keep the
+        // directory and name it, never to delete on the strength of a log nobody managed to look at.
+        var dir = NewDataDir(Information);
+        var log = new FileStream(Path.Combine(dir, MuthurEnvironment.LogFile), FileMode.Open, FileAccess.Read, FileShare.None);
+        try
+        {
+            TestHubDirectories.Release(dir);
+
+            Assert.True(Directory.Exists(dir));
+            var reported = Assert.Single(TestHubDirectories.Summary(), line => line.Contains(dir, StringComparison.Ordinal));
+            Assert.StartsWith("  kept    ", reported, StringComparison.Ordinal);
+            Assert.Contains($"({MuthurEnvironment.LogFile} could not be read:", reported, StringComparison.Ordinal);
+        }
+        finally
+        {
+            log.Dispose();
+        }
+
+        // Once the handle is gone the log reads as the ordinary log it always was, and the directory goes.
+        TestHubDirectories.Release(dir);
+
+        Assert.False(Directory.Exists(dir));
+    }
+
+    [Fact]
     public void Releasing_a_directory_that_is_already_gone_is_not_a_failure()
     {
         // A restart test brings a second hub up over the same DataDir, so the second disposal finds nothing.
@@ -79,5 +137,14 @@ public sealed class TestHubDirectoriesTests
         Assert.False(Directory.Exists(dir));
         // Removed directories are counted, not listed, so the earlier failure must no longer be named.
         Assert.DoesNotContain(TestHubDirectories.Summary(), line => line.Contains(dir, StringComparison.Ordinal));
+    }
+
+    /// <summary>A data directory holding the log lines given, as a disposed hub would have left it.</summary>
+    private static string NewDataDir(params string[] logLines)
+    {
+        var dir = Path.Combine(Path.GetTempPath(), "muthur-tests", Guid.NewGuid().ToString("n"));
+        Directory.CreateDirectory(dir);
+        File.WriteAllLines(Path.Combine(dir, MuthurEnvironment.LogFile), logLines);
+        return dir;
     }
 }
