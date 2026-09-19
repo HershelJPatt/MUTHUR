@@ -13,7 +13,7 @@ public static class SystemCommands
         root.Subcommands.Add(status);
 
         var offline = new Option<bool>("--offline") { Description = "Skip the checks that touch the network; report only what the hub already knows." };
-        var doctor = new Command("doctor", "Check whether this hub can do its job: ingest, outbound, projects, repositories, roles. Exit 1 if anything failed.") { offline };
+        var doctor = new Command("doctor", "Check whether this hub can do its job: ingest, outbound, projects, repositories, roles, agents. Exit 1 if anything failed.") { offline };
         doctor.SetAction(async (parse, ct) =>
         {
             var skipProbes = parse.GetValue(offline);
