@@ -247,6 +247,36 @@ public sealed class SystemTests : IDisposable
     }
 
     /// <summary>
+    /// What `muthur receipts` sends on a hub that has done nothing yet. It carries no token and asks for no
+    /// window, and the answer has to be a 200 with zeros — the command exits on the status, so an empty hub
+    /// answering anything but 200 would make a founder's first receipts run look like a broken hub.
+    /// </summary>
+    [Fact]
+    public async Task Receipts_answers_an_empty_hub_without_a_token()
+    {
+        var response = await _hub.CreateClient().GetAsync(Routes.Receipts);
+
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        var receipts = await response.Content.ReadFromJsonAsync(MuthurJsonContext.Default.ReceiptsDto);
+        Assert.NotNull(receipts);
+        Assert.Equal(0, receipts.Sessions);
+        Assert.Empty(receipts.Tasks);
+        Assert.Equal(_hub.Clock.GetUtcNow(), receipts.At);
+        Assert.Equal(receipts.At.AddHours(-24), receipts.Since);
+    }
+
+    /// <summary>`muthur receipts --hours 6`, spelled the way the CLI spells it, moves the hub's window.</summary>
+    [Fact]
+    public async Task Receipts_takes_the_window_from_the_query_string()
+    {
+        var response = await _hub.CreateClient().GetAsync(Routes.Receipts + "?hours=6");
+
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        var receipts = await response.Content.ReadFromJsonAsync(MuthurJsonContext.Default.ReceiptsDto);
+        Assert.Equal(_hub.Clock.GetUtcNow().AddHours(-6), receipts!.Since);
+    }
+
+    /// <summary>
     /// A dependency that fails the way a disposed one does, on an endpoint that does not catch it. Given a
     /// lifetime it raises the stopping signal before failing, which is the shutdown race; without one it is
     /// an ordinary defect on a hub nobody has asked to stop.

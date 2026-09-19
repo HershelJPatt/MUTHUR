@@ -77,6 +77,7 @@ public static class Startup
         builder.Services.AddSingleton<IPullRequestOpener, GhPullRequestOpener>();
         builder.Services.AddSingleton<ITaskLander, GitLander>();
         builder.Services.AddSingleton<DoctorService>();
+        builder.Services.AddSingleton<ReceiptsService>();
         // Registered in the order DoctorService reports them, so the list reads like the report.
         builder.Services.AddSingleton<IDoctorCheck, DoctorIngestCheck>();
         builder.Services.AddSingleton<IDoctorCheck, DoctorLoggingCheck>();

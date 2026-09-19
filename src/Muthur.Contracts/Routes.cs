@@ -6,6 +6,7 @@ public static class Routes
 
     public const string Status = Api + "/status";
     public const string Doctor = Api + "/doctor";
+    public const string Receipts = Api + "/receipts";
     public const string Shutdown = Api + "/admin/shutdown";
 
     public const string Agents = Api + "/agents";

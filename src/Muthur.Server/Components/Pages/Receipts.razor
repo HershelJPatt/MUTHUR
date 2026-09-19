@@ -1,0 +1,24 @@
+@page "/receipts"
+@using System.Globalization
+
+<PageTitle>MUTHUR · Receipts</PageTitle>
+
+<div class="page">
+    <ReceiptsPanel Hours="Window" />
+</div>
+
+@code {
+    /// <summary>
+    /// The window the panel's links navigate to, so it can be linked to and read back on a fresh load. A string
+    /// and not an <c>int?</c>: the framework throws before any code of ours runs on a query value it cannot parse,
+    /// and this is a URL the page invites a hand to edit — the controls it prints are labelled "24h" and "7d".
+    /// </summary>
+    [SupplyParameterFromQuery(Name = "hours")] public string? Hours { get; set; }
+
+    // Saturated to int rather than clamped to a window: the bounds are ReceiptsService's, where they are already
+    // tested, so 9999999999999 arrives there as int.MaxValue and is clamped to 720 like any other number too big.
+    // A value that is not a number at all is the same class of mistake, and becomes the absent window: 24 hours.
+    private int? Window => long.TryParse(Hours, NumberStyles.Integer, CultureInfo.InvariantCulture, out var hours)
+        ? (int)Math.Clamp(hours, int.MinValue, int.MaxValue)
+        : null;
+}
