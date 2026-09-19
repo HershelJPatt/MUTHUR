@@ -351,8 +351,8 @@ agent stale; `MuthurOptions.AgentStaleSeconds` is 180 by default.
 9. **Conductor-staffed sessions are not reported.** Get a staffed session into the ledger through whichever
    path the server tests already use for T-34's `ConductorStaffed` marker — find it, do not invent one.
    Assert it produces no `agent` check while a standing agent on the same harness does.
-10. **Case matters.** An agent registered as `Claude` where the kit and catalog both say `claude` is reported,
-    not silently accepted.
+10. **Case matters.** An agent whose stored harness differs from both sources only in case is reported, not
+    silently accepted. **See Amendment 1** — the arrangement this test needs is the inverse of the obvious one.
 
 #### `tests/Muthur.Cli.Tests/KitInstallTests.cs`
 
@@ -405,3 +405,35 @@ which is the half of this task that could not be proved before it existed; and `
   reports, at the point where a founder edits the catalog.
 - **`kit install` is still the only consumer of a kit's contents.** Nothing yet validates that a kit named in
   the catalog installs cleanly; `doctor` only asks whether the directory is there.
+
+## Amendment 1 — registration already lower-cases the harness, so test 10 was unbuildable (2026-09-19)
+
+The implementer stopped on server test 10 rather than guessing, and was right to. `AgentService.RegisterCoreAsync`
+does this on the way in (`src/Muthur.Server/Services/AgentService.cs:47`):
+
+```csharp
+agent.Harness = request.Harness.Trim().ToLowerInvariant();
+```
+
+So the test as written — *"an agent registered as `Claude` where the kit and catalog both say `claude`"* — is
+stored as `claude`, matches both sources ordinally, and is reported `Ok`: the exact opposite of what it
+asserts. There is no arrangement of that sentence that passes.
+
+**The cell is still worth a test, with the spellings on the other sides.** The check compares ordinally, and
+the case it has to get right is a founder who writes `Claude` in `harnesses.json` or names a kit directory
+`Claude/` — at which point a perfectly ordinary `claude` agent is on a harness neither source vouches for.
+That is a real misconfiguration and the check should say so. Ratified as built:
+
+> `A_harness_that_differs_from_the_sources_only_in_case_is_reported` — kit directory `Claude/`, catalog entry
+> `Claude`, agent registered `Claude` and therefore stored `claude`; neither source matches ordinally, the
+> agent is live, so `Fail`, and the detail reads `This organization has: Claude.`
+
+with a comment saying why the arrangement is inverted.
+
+**One sentence in the Design is narrowed.** *"`{H}` is `a.Harness` exactly as registered"* is not true of
+registration, which trimmed and lower-cased it before the check ever saw it. It remains true of the check,
+which is all it was ever asserting: `DoctorAgentCheck` renders and compares the stored string untouched.
+Read that sentence as *"exactly as stored"*.
+
+**Not fixed here:** whether registration should lower-case the harness at all is a separate question, and
+changing it would alter what every existing agent row means. Left alone deliberately — a follow-up below.
