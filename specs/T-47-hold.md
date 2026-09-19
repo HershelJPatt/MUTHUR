@@ -151,12 +151,20 @@ dotnet build
 dotnet test
 ```
 
-And on an installed build against a scratch hub — never the live one:
+**Do not attempt a `land` on an installed build to check this.** A land merges into a project's default
+branch, and a validation session that forbids merges and default-branch checkouts — which is the standing
+rule — cannot do it. It does not need to: `TaskHoldTests` runs the whole path against a **real temporary git
+repository** built by `TestRepo`, and `A_hold_does_not_stop_a_land_it_only_makes_the_override_countable`
+performs an actual `GitLander` merge into that throwaway repo's `main`. The merge is exercised; it is
+exercised where a disposable repository already exists and nothing anybody owns is touched.
+
+What an installed build is worth checking, and all of which avoids a merge:
 
 ```
 muthur task hold T-1 --reason "collides with T-2's migration" --as-agent other
-muthur task land T-1 --as-agent owner      # exit 0
-muthur log --since 0 | Select-String 'hold_overridden'
+muthur task show T-1                      # holdBy, holdReason, holdExpires
+muthur task hold T-1 --clear              # and it is gone
+muthur task hold T-1                      # exit 2: neither --reason nor --clear
 ```
 
 ## Proof
@@ -234,3 +242,28 @@ the boundary is covered by `An_expired_hold_is_not_a_hold` at the service and by
 belongs.
 
 `dotnet build`: clean, 0 warnings. `dotnet test`: 3736 Core, 23 Launch, 180 Cli, 389 Server — all green.
+
+## Amendment after the second validation round (2026-09-19, top-right)
+
+`conductor-validator-t-47` blocked rather than failed, and was right to:
+
+> this session forbids any merge or default-branch checkout, while the required successful scratch task land
+> does both. Build and all 4328 tests passed; installed scratch CLI hold/display/clear/persistence/race/error
+> checks passed.
+
+Everything except the land itself was exercised and passed. The land was unreachable because my own
+Verification section told them to run one, and a validation session may not merge — a standing rule that
+exists for good reasons and that I wrote a step straight through.
+
+**The fix is in the spec, not the code.** The merge is already covered where it belongs:
+`A_hold_does_not_stop_a_land_it_only_makes_the_override_countable` performs a real `GitLander` merge into the
+`main` of a throwaway repository `TestRepo` builds and deletes. That is a genuine land — not a stub, not a
+fake — in the one place where merging costs nobody anything. Verification now says so, and gives the
+installed-build steps that are worth running, none of which merge.
+
+This is the same shape as T-18's and T-23's blocks: a validator stopped because the spec asked for something
+its session could not do, and in all three the honest fix was to say precisely what establishes the behaviour
+rather than to weaken the check. A session refusing to merge is the rule working. Writing a step that
+requires one is the defect.
+
+No source change. `dotnet build`: clean. `dotnet test`: 3736 Core, 23 Launch, 180 Cli, 389 Server — green.
