@@ -23,6 +23,13 @@ public sealed class DiscordChannelSourceTests
     private static string FromWebhook(string id, string content) =>
         $$$"""{"id":"{{{id}}}","content":"{{{content}}}","webhook_id":"555","author":{"username":"MUTHUR"}}""";
 
+    /// <summary>A message and the "mentions" array Discord sends beside it, naming the ids in the content.</summary>
+    private static string Mentioning(string id, string content, params (string Id, string Username)[] mentions)
+    {
+        var users = string.Join(",", mentions.Select(m => $$"""{"id":"{{m.Id}}","username":"{{m.Username}}"}"""));
+        return $$$"""{"id":"{{{id}}}","content":"{{{content}}}","author":{"username":"hersh","bot":false},"mentions":[{{{users}}}]}""";
+    }
+
     [Fact]
     public void A_message_someone_typed_becomes_an_inbound_item()
     {
@@ -117,6 +124,84 @@ public sealed class DiscordChannelSourceTests
         Assert.Equal(120, item.Title.Length);
         Assert.EndsWith("…", item.Title);
         Assert.Equal(200, item.Body.Length);
+    }
+
+    [Theory]
+    [InlineData("<@1550341615472746526> Hi there!")]
+    [InlineData("<@!1550341615472746526> Hi there!")]   // the legacy spelling, for a mention that showed a nickname
+    public void A_mention_reads_as_the_name_the_message_carries(string content)
+    {
+        // Discord puts the id on the wire and the user it means in the same payload, so the title and the
+        // body can both read the way the message looked to the person who typed it.
+        var fetch = DiscordChannelSource.Parse(
+            Payload(Mentioning("100", content, ("1550341615472746526", "MUTHUR"))), null, Guilded);
+
+        var item = Assert.Single(fetch.Items);
+        Assert.Equal("@MUTHUR Hi there!", item.Title);
+        Assert.Equal("@MUTHUR Hi there!", item.Body);
+    }
+
+    [Fact]
+    public void Every_person_the_message_names_is_resolved()
+    {
+        var fetch = DiscordChannelSource.Parse(
+            Payload(Mentioning("100", "<@11> and <@22> should both see this", ("11", "MUTHUR"), ("22", "hersh"))),
+            null, Guilded);
+
+        Assert.Equal("@MUTHUR and @hersh should both see this", Assert.Single(fetch.Items).Body);
+    }
+
+    [Fact]
+    public void A_mention_part_way_through_a_sentence_is_resolved_too()
+    {
+        var fetch = DiscordChannelSource.Parse(
+            Payload(Mentioning("100", "the export is broken, <@11> - it 500s", ("11", "MUTHUR"))), null, Guilded);
+
+        var item = Assert.Single(fetch.Items);
+        Assert.Equal("the export is broken, @MUTHUR - it 500s", item.Title);
+        Assert.Equal("the export is broken, @MUTHUR - it 500s", item.Body);
+    }
+
+    [Fact]
+    public void An_id_the_message_does_not_name_is_left_exactly_as_it_was()
+    {
+        // A token we cannot resolve is less misleading than a name we invented.
+        var fetch = DiscordChannelSource.Parse(
+            Payload(Mentioning("100", "<@11> knows, <@99> does not", ("11", "MUTHUR"))), null, Guilded);
+
+        Assert.Equal("@MUTHUR knows, <@99> does not", Assert.Single(fetch.Items).Body);
+    }
+
+    [Fact]
+    public void An_empty_mentions_array_leaves_the_content_alone()
+    {
+        var fetch = DiscordChannelSource.Parse(Payload(Mentioning("100", "the export is broken")), null, Guilded);
+
+        var item = Assert.Single(fetch.Items);
+        Assert.Equal("the export is broken", item.Title);
+        Assert.Equal("the export is broken", item.Body);
+    }
+
+    [Fact]
+    public void A_role_or_a_channel_token_stays_as_it_is()
+    {
+        // The payload carries no name for either: mention_roles is ids only, and a channel is never named.
+        var fetch = DiscordChannelSource.Parse(
+            Payload(Mentioning("100", "<@&456> see <#789>, <@11>", ("11", "MUTHUR"))), null, Guilded);
+
+        Assert.Equal("<@&456> see <#789>, @MUTHUR", Assert.Single(fetch.Items).Body);
+    }
+
+    [Fact]
+    public void A_message_that_is_nothing_but_a_mention_still_ingests()
+    {
+        // Substitution runs before the emptiness check. Dropping this would be filtering, which is not this task.
+        var fetch = DiscordChannelSource.Parse(
+            Payload(Mentioning("100", "<@1550341615472746526>", ("1550341615472746526", "MUTHUR"))), null, Guilded);
+
+        var item = Assert.Single(fetch.Items);
+        Assert.Equal("@MUTHUR", item.Title);
+        Assert.Equal("@MUTHUR", item.Body);
     }
 
     [Fact]
