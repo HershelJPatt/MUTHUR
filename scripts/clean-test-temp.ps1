@@ -4,7 +4,8 @@
   an error -- T-41's root cause was read off exactly such a log, and nothing else records an unhandled
   server error. Directories written to within -OlderThanMinutes are left alone, because a dozen agents share
   this root and a half-deleted hub is worse than a leaked one. -All overrides the retention rule, not the
-  age guard: someone reaching for it wants the logs gone, not to race a live test run.
+  age guard and not the ownership check: someone reaching for it wants the logs gone, not to race a live
+  test run. A hub whose log another process still holds open is never deleted, whatever the flags say.
 
   Every run ends with its counts, whatever happened to any one directory, and names every directory it held
   back or failed on. Losing the count is the defect this script exists to fix; it does not get to repeat it.
@@ -44,8 +45,15 @@ if (-not (Test-Path $Root)) {
 # on purpose: it reads its own hub's log after disposal, where a refusal would lose the evidence worth
 # keeping.)
 function Get-LogVerdict([string]$LogPath) {
+    # An explicit reader, disposed in a finally, rather than foreach over [IO.File]::ReadLines: that
+    # enumerator is lazy, and returning out of the loop on the first Error line leaves its handle open until
+    # a collection. Measured: the directory then reads as held on the next pass in the same process -- the
+    # script accusing another process of owning a log it is holding itself, and under -All that is a partial
+    # delete with nobody else involved. Stopping at the first match is still the point; letting go is too.
+    $reader = $null
     try {
-        foreach ($line in [IO.File]::ReadLines($LogPath)) {
+        $reader = [IO.File]::OpenText($LogPath)
+        while ($null -ne ($line = $reader.ReadLine())) {
             $tokens = $line.Split([char[]]@(), 3, [StringSplitOptions]::RemoveEmptyEntries)
             if ($tokens.Length -ge 2 -and ($tokens[1] -ceq 'Error' -or $tokens[1] -ceq 'Critical')) {
                 return [pscustomobject]@{ Verdict = 'error'; Note = '' }
@@ -55,6 +63,25 @@ function Get-LogVerdict([string]$LogPath) {
     }
     catch {
         return [pscustomobject]@{ Verdict = 'held'; Note = $_.Exception.GetBaseException().Message }
+    }
+    finally {
+        if ($null -ne $reader) { $reader.Dispose() }
+    }
+}
+
+# Whether another process still holds this hub's log open, which is ownership and not retention. The same
+# refusal Get-LogVerdict turns into a 'held' verdict, asked on its own so it can still be asked when -All has
+# skipped the read: FileLoggerProvider keeps muthur.log open with FileShare.ReadWrite, which refuses our
+# FileShare.Read. The answer is the open itself, so nothing is read -- one handle per directory even on a
+# root with fifty thousand of them.
+function Get-LogHolder([string]$LogPath) {
+    try {
+        $handle = [IO.File]::Open($LogPath, [IO.FileMode]::Open, [IO.FileAccess]::Read, [IO.FileShare]::Read)
+        $handle.Dispose()
+        return $null
+    }
+    catch {
+        return $_.Exception.GetBaseException().Message
     }
 }
 
@@ -111,16 +138,29 @@ try {
 
         $log = Join-Path $dir 'muthur.log'
         # A directory with no log has nothing to preserve, which is also why muthur-cli-tests empties completely.
-        if (-not $All -and [IO.File]::Exists($log)) {
-            $answer = Get-LogVerdict $log
-            if ($answer.Verdict -ceq 'error') {
-                $kept++
+        if ([IO.File]::Exists($log)) {
+            # Ownership before retention, and whatever -All says. -All means "ignore what the log recorded",
+            # never "ignore that another process is still writing it". Skipping this is how a run with both
+            # guards off took muthur.db and its -wal and only then met the locked log: half a delete, reported
+            # as one failed line, and somebody else's database left corrupt.
+            $holder = Get-LogHolder $log
+            if ($null -ne $holder) {
+                $heldCount++
+                $heldLines.Add("  held    $dir  ($holder)")
                 continue
             }
-            if ($answer.Verdict -ceq 'held') {
-                $heldCount++
-                $heldLines.Add("  held    $dir  ($($answer.Note))")
-                continue
+            if (-not $All) {
+                $answer = Get-LogVerdict $log
+                if ($answer.Verdict -ceq 'error') {
+                    $kept++
+                    continue
+                }
+                # The probe said the log was free a moment ago; the owner can have opened it since.
+                if ($answer.Verdict -ceq 'held') {
+                    $heldCount++
+                    $heldLines.Add("  held    $dir  ($($answer.Note))")
+                    continue
+                }
             }
         }
         if ($DryRun) {
