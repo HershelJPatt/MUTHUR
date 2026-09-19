@@ -15,6 +15,10 @@
       "to": ".muthur/procedures/implementer.md"
     },
     {
+      "from": "../core/specialist.md",
+      "to": ".muthur/procedures/specialist.md"
+    },
+    {
       "from": "../core/validate.md",
       "to": ".muthur/procedures/validate.md"
     },

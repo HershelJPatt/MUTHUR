@@ -94,6 +94,20 @@ public static class WorkerCommands
 
     private sealed record RunOptions(string Tier, string Spec, string? Unit, string? Task, string? Harness, string? Base, string? Branch, string? Note, int TimeoutMinutes);
 
+    /// <summary>
+    /// The contract this tier is handed. A mastermind is given a problem area, not a frozen unit, so handing it
+    /// the implementer's "do not redesign" contract alone is the opposite of why it was staffed: it gets the
+    /// specialist procedure on top. Kit includes are expanded at install time and not on this read, so
+    /// specialist.md carries no {{core:...}} token and the two procedures are composed here instead.
+    /// </summary>
+    internal static async Task<string> ReadContractAsync(string kit, string tier, CancellationToken ct)
+    {
+        var implementer = await File.ReadAllTextAsync(Path.Combine(kit, "core", "implementer.md"), ct);
+        return tier.Equals("mastermind", StringComparison.OrdinalIgnoreCase)
+            ? await File.ReadAllTextAsync(Path.Combine(kit, "core", "specialist.md"), ct) + "\n\n" + implementer
+            : implementer;
+    }
+
     private static async Task<int> RunAsync(ParseResult parse, RunOptions o, CancellationToken ct)
     {
         var processes = new ProcessRunner();
@@ -124,7 +138,7 @@ public static class WorkerCommands
 
         // 2. The contract and the project's verification commands.
         if (KitCommands.LocateKit() is not { } kit) return KitCommands.KitMissing();
-        var contract = await File.ReadAllTextAsync(Path.Combine(kit, "core", "implementer.md"), ct);
+        var contract = await ReadContractAsync(kit, o.Tier, ct);
         var (verify, extraAllowed) = ReadProject(repo);
 
         // 3. A worktree and branch of the worker's own.
