@@ -44,10 +44,31 @@ public sealed class ConductorTests : IDisposable
 
     private Task SetUpAsync(params string[] validators) => _hub.AddProjectAsync(repoPath: _repo.Path, validators: validators);
 
-    private async Task DefineAsync(params string[] roles)
+    private Task DefineAsync(params string[] roles) => DefineAsync(1, roles);
+
+    private async Task DefineAsync(int holders, params string[] roles)
     {
         foreach (var role in roles)
-            (await _hub.Founder().PutAsJsonAsync(Routes.Roles, new DefineRoleRequest(role, $"# {role}\nDrive it."))).EnsureSuccessStatusCode();
+            (await _hub.Founder().PutAsJsonAsync(Routes.Roles, new DefineRoleRequest(role, $"# {role}\nDrive it.", Holders: holders))).EnsureSuccessStatusCode();
+    }
+
+    /// <summary>A task of this owner's, on a branch of its own, waiting in 'validating' at the given priority.</summary>
+    private async Task<string> ValidatingTaskAsync(HttpClient owner, string title, int priority)
+    {
+        var task = await owner.AddTaskAsync(title, priority: priority);
+        (await owner.ClaimAsync(task.Id)).EnsureSuccessStatusCode();
+        (await owner.PostActionAsync(task.Id, "spec", new SetSpecRequest(_repo.WriteSpec(task.Id)))).EnsureSuccessStatusCode();
+        var branch = $"task/{task.Id}-work";
+        _repo.BranchWithFile(branch, $"{task.Id}.txt", $"{task.Id}\n");
+        (await owner.PostActionAsync(task.Id, "implemented", new ImplementedRequest(branch))).EnsureSuccessStatusCode();
+        return task.Id;
+    }
+
+    private async Task<HttpClient> ValidatorAsync(string name, string role)
+    {
+        var client = await _hub.RegisterAgentAsync(name);
+        (await client.PostAsync(Routes.RoleAction(role, "take"), null)).EnsureSuccessStatusCode();
+        return client;
     }
 
     /// <summary>
@@ -185,6 +206,145 @@ public sealed class ConductorTests : IDisposable
 
         Assert.Equal(1, await Conductor.RunPassAsync());
         await SettledAsync();
+    }
+
+    [Fact]
+    public async Task A_role_with_room_for_two_plans_two_of_three_waiting_tasks_in_one_pass()
+    {
+        // The whole point of the capacity: N tasks no longer wait on one another. The counter has to come down as
+        // the plan is built, or three waiting tasks become three sessions for a role with two slots.
+        _hub.Settings["Muthur:ConductorMaxSessions"] = "5";   // so what limits the pass is the capacity, not the budget
+        await SetUpAsync("win-validator");
+        await DefineAsync(2, "win-validator");
+        var owner = await _hub.RegisterAgentAsync("owner");
+        var urgent = await ValidatingTaskAsync(owner, "Urgent", priority: 3);
+        var next = await ValidatingTaskAsync(owner, "Next", priority: 2);
+        await ValidatingTaskAsync(owner, "Can wait", priority: 1);
+
+        Assert.Equal([urgent, next], (await Conductor.PlanAsync()).Select(a => a.TaskKey));
+        Assert.Equal(2, await Conductor.RunPassAsync());
+    }
+
+    [Fact]
+    public async Task A_role_with_room_for_one_plans_exactly_one_as_it_always_did()
+    {
+        await SetUpAsync("win-validator");
+        await DefineAsync("win-validator");
+        var owner = await _hub.RegisterAgentAsync("owner");
+        var urgent = await ValidatingTaskAsync(owner, "Urgent", priority: 3);
+        await ValidatingTaskAsync(owner, "Next", priority: 2);
+        await ValidatingTaskAsync(owner, "Can wait", priority: 1);
+
+        var assignment = Assert.Single(await Conductor.PlanAsync());
+        Assert.Equal(urgent, assignment.TaskKey);
+    }
+
+    [Fact]
+    public async Task A_pair_a_validator_has_already_claimed_is_not_staffed_again()
+    {
+        // A free slot is not permission to start a second session on work somebody is already doing.
+        await SetUpAsync("win-validator");
+        await DefineAsync(2, "win-validator");
+        var owner = await _hub.RegisterAgentAsync("owner");
+        var checker = await ValidatorAsync("checker", "win-validator");
+        var taken = await ValidatingTaskAsync(owner, "Being checked", priority: 3);
+        var open = await ValidatingTaskAsync(owner, "Nobody on it", priority: 2);
+        (await checker.PostActionAsync(taken, "validate-claim", new ClaimValidationRequest("win-validator"))).EnsureSuccessStatusCode();
+
+        var assignment = Assert.Single(await Conductor.PlanAsync());
+        Assert.Equal(open, assignment.TaskKey);
+    }
+
+    [Fact]
+    public async Task A_role_whose_slots_are_all_held_is_left_alone()
+    {
+        await SetUpAsync("win-validator");
+        await DefineAsync(2, "win-validator");
+        var owner = await _hub.RegisterAgentAsync("owner");
+        await ValidatorAsync("one", "win-validator");
+        await ValidatorAsync("two", "win-validator");
+        await ValidatingTaskAsync(owner, "Waiting", priority: 1);
+
+        Assert.Equal(0, await Conductor.RunPassAsync());
+        Assert.Empty(_hub.Validators.Started);
+    }
+
+    [Fact]
+    public async Task Sessions_on_their_way_to_a_role_occupy_its_slots_on_the_following_pass()
+    {
+        // A session that has started but has not yet taken the role holds nothing the database can see. Counting
+        // only the holds would plan straight over it on the next tick, and the extra session would start, fail to
+        // take the role, and produce nothing.
+        _hub.Settings["Muthur:ConductorMaxSessions"] = "5";   // so what says no on the second pass is the capacity
+        await SetUpAsync("win-validator");
+        await DefineAsync(2, "win-validator");
+        _hub.Validators.Block = true;   // the two sessions are still on their way when the next pass runs
+        var owner = await _hub.RegisterAgentAsync("owner");
+        await ValidatingTaskAsync(owner, "Urgent", priority: 3);
+        await ValidatingTaskAsync(owner, "Next", priority: 2);
+        await ValidatingTaskAsync(owner, "Can wait", priority: 1);
+
+        Assert.Equal(2, await Conductor.RunPassAsync());
+
+        Assert.Empty(await Conductor.PlanAsync());
+        Assert.Equal(0, await Conductor.RunPassAsync());
+
+        _hub.Validators.Finish(2);
+    }
+
+    /// <summary>
+    /// The other half of the rule above, and the one a validator failed this task on: a running session that
+    /// has taken the role is a hold and a session at once, and counting it in both places charges one validator
+    /// two slots. A capacity of two would then staff a second task only while the first session was still
+    /// starting up, and serialize for the rest of its life — which is the very serialization this task exists
+    /// to remove.
+    /// </summary>
+    [Fact]
+    public async Task A_running_session_that_has_taken_its_role_occupies_one_slot_not_two()
+    {
+        _hub.Settings["Muthur:ConductorMaxSessions"] = "5";   // so what decides is the capacity, not the budget
+        await SetUpAsync("win-validator");
+        await DefineAsync(2, "win-validator");
+        _hub.Validators.Block = true;   // the first session is still alive when the second task arrives
+        var owner = await _hub.RegisterAgentAsync("owner");
+        var first = await ValidatingTaskAsync(owner, "First in", priority: 3);
+
+        Assert.Equal(1, await Conductor.RunPassAsync());
+        Assert.Equal(1, Conductor.RunningCount);
+
+        // What the real session does next, under the name the launcher gives the (task, role) pair.
+        await ValidatorAsync(ValidatorSessionLauncher.IdentityName(first, "win-validator"), "win-validator");
+
+        // One holder, one running session, one validator: the second slot is free and the next task takes it.
+        var second = await ValidatingTaskAsync(owner, "Arrived later", priority: 2);
+        var planned = Assert.Single(await Conductor.PlanAsync());
+        Assert.Equal(second, planned.TaskKey);
+        Assert.Equal(1, await Conductor.RunPassAsync());
+
+        // And the capacity is still a ceiling: with both slots occupied, a third task waits.
+        await ValidatorAsync(ValidatorSessionLauncher.IdentityName(second, "win-validator"), "win-validator");
+        await ValidatingTaskAsync(owner, "Waits its turn", priority: 1);
+        Assert.Empty(await Conductor.PlanAsync());
+
+        _hub.Validators.Finish(2);
+    }
+
+    [Fact]
+    public async Task The_session_budget_still_caps_a_role_with_slots_to_spare()
+    {
+        _hub.Settings["Muthur:ConductorMaxSessions"] = "1";
+        await SetUpAsync("win-validator");
+        await DefineAsync(3, "win-validator");
+        _hub.Validators.Block = true;   // hold the one session open across the pass
+        var owner = await _hub.RegisterAgentAsync("owner");
+        await ValidatingTaskAsync(owner, "First", priority: 3);
+        await ValidatingTaskAsync(owner, "Second", priority: 2);
+
+        Assert.Equal(2, (await Conductor.PlanAsync()).Count);   // the role has room for both
+        Assert.Equal(1, await Conductor.RunPassAsync());        // the budget is what says no, and it still does
+        Assert.Single(_hub.Validators.Started);
+
+        _hub.Validators.Finish();
     }
 
     [Fact]
@@ -885,17 +1045,183 @@ public sealed class ConductorTests : IDisposable
     public async Task A_conductor_agent_registers_for_the_candidate_that_is_about_to_run(string model, string recorded)
     {
         // The factory swaps the real launcher for a fake, so build the real one over the hub's own services.
-        var launcher = ActivatorUtilities.CreateInstance<ValidatorSessionLauncher>(_hub.Services);
+        var launcher = RealLauncher();
 
-        var identity = await launcher.IdentityFor("win-validator", new Muthur.Launch.HarnessCandidate("codex", model, "chatgpt-subscription"), default);
+        var identity = await launcher.IdentityFor(Assignment("T-1", "win-validator"),
+            new Muthur.Launch.HarnessCandidate("codex", model, "chatgpt-subscription"), default);
 
-        Assert.Equal("conductor-win-validator", identity.Name);
+        Assert.Equal("conductor-win-validator-t-1", identity.Name);
         Assert.NotEmpty(identity.Token);
 
         var agents = await _hub.CreateClient().GetFromJsonAsync(Routes.Agents, MuthurJsonContext.Default.IReadOnlyListAgentDto);
-        var registered = Assert.Single(agents!, a => a.Name == "conductor-win-validator");
+        var registered = Assert.Single(agents!, a => a.Name == "conductor-win-validator-t-1");
         Assert.Equal("codex", registered.Harness);
         Assert.Equal(recorded, registered.Model);
+    }
+
+    private static ConductorAssignment Assignment(string task, string role) =>
+        new(1, task, $"Build {task}", "muthur", role, AvoidHarness: null);
+
+    [Fact]
+    public void Two_sessions_for_one_role_are_two_agents_because_the_pair_is_the_identity()
+    {
+        // Named per role, both sessions register as one agent: the second registration re-issues the token and the
+        // first session runs on a revoked one - unauthorized on every call, while the conductor still counts it.
+        Assert.Equal("conductor-win-validator-t-1", ValidatorSessionLauncher.IdentityName("T-1", "win-validator"));
+        Assert.NotEqual(ValidatorSessionLauncher.IdentityName("T-1", "win-validator"),
+            ValidatorSessionLauncher.IdentityName("T-2", "win-validator"));
+
+        // The same pair keeps its name, so a retry reads as the same actor in the ledger.
+        Assert.Equal(ValidatorSessionLauncher.IdentityName("T-1", "win-validator"),
+            ValidatorSessionLauncher.IdentityName("T-1", "win-validator"));
+    }
+
+    [Fact]
+    public void No_identity_is_ever_truncated_so_the_whole_role_key_reaches_the_name()
+    {
+        // The worst case the hub can produce: the widest role key RoleService accepts, and the widest task id an
+        // int can hold. Two earlier rounds squeezed this into 48 characters and both failed validation - the head
+        // was cut, and two role keys differing only past the cut became one name, one token, one working session
+        // out of two. Nothing is cut now, and the whole of both parts is readable in the result.
+        var role = new string('v', 48);
+        var name = ValidatorSessionLauncher.IdentityName("T-2147483647", role);
+
+        Assert.Equal($"conductor-{role}-t-2147483647", name);
+        Assert.Equal(71, name.Length);
+        Assert.True(name.Length <= 80, $"identity must fit the 1-80 agent-name rule, was {name.Length}");
+        Assert.Contains(role, name, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Two_long_role_keys_that_differ_only_in_their_last_character_are_still_two_identities()
+    {
+        // Round 2's reproduction, kept because the regression is what matters and not the mechanism that failed
+        // it: two legal 41-char validator roles were truncated to the same head and given one name, so the first
+        // session's 'role take' and 'validate claim' both came back unauthorized while conductor status still said
+        // two were running. Untruncated, the difference reaches the name by construction.
+        var first = ValidatorSessionLauncher.IdentityName("T-4", new string('v', 40) + "a");
+        var second = ValidatorSessionLauncher.IdentityName("T-4", new string('v', 40) + "b");
+
+        Assert.NotEqual(first, second);
+        Assert.EndsWith("a-t-4", first, StringComparison.Ordinal);
+        Assert.EndsWith("b-t-4", second, StringComparison.Ordinal);
+
+        // Still stable across retries of the same pair, and still keyed to the task.
+        Assert.Equal(first, ValidatorSessionLauncher.IdentityName("T-4", new string('v', 40) + "a"));
+        Assert.NotEqual(first, ValidatorSessionLauncher.IdentityName("T-5", new string('v', 40) + "a"));
+    }
+
+    [Fact]
+    public void A_role_key_that_spells_out_another_pairs_task_suffix_does_not_take_its_identity()
+    {
+        // The only shape an attack on a concatenated name can take: hide another pair's "-t-<id>" inside a role
+        // key. Round 3 was the same idea against the digest, and it worked. It cannot work here, and the reason is
+        // worth pinning rather than trusting: for 'a-t-1' + T-2 to collide with 'a' + something, that something
+        // would have to read "1-t-2", and a task key is "T-" followed by digits - no '-' and no 't' can appear in
+        // the run. 'a-t-1' is a perfectly legal role key; it just cannot reach another pair's name.
+        var hidden = ValidatorSessionLauncher.IdentityName("T-2", "a-t-1");
+
+        Assert.Equal("conductor-a-t-1-t-2", hidden);
+        Assert.NotEqual(hidden, ValidatorSessionLauncher.IdentityName("T-1", "a"));
+        Assert.NotEqual(hidden, ValidatorSessionLauncher.IdentityName("T-12", "a"));
+        Assert.NotEqual(hidden, ValidatorSessionLauncher.IdentityName("T-2", "a-t-1-t"));
+    }
+
+    [Fact]
+    public void No_two_pairs_the_hub_accepts_share_an_identity()
+    {
+        // Round 3 was found by a validator running a hash loop, so this is that search done here and in advance.
+        // Every role key over the alphabet that could possibly confuse the parse - 'a', 't', '-' and a digit, the
+        // exact characters "-t-<id>" is made of - up to 5 long, crossed with task ids of several digit lengths.
+        // A collision anywhere in here is a revoked token in production.
+        string[] tasks = ["T-1", "T-2", "T-12", "T-21", "T-121", "T-1121", "T-11", "T-2147483647"];
+        var roles = new List<string>();
+        for (var length = 1; length <= 5; length++) Extend(roles, "", length);
+
+        var names = new Dictionary<string, (string Task, string Role)>(StringComparer.Ordinal);
+        foreach (var role in roles)
+            foreach (var task in tasks)
+            {
+                var name = ValidatorSessionLauncher.IdentityName(task, role);
+                Assert.Matches("^[a-z0-9][a-z0-9._-]{0,79}$", name);   // AgentService.NamePattern
+                Assert.False(names.TryGetValue(name, out var owner),
+                    $"'{name}' is the identity of both ({owner.Task}, {owner.Role}) and ({task}, {role}).");
+                names[name] = (task, role);
+            }
+
+        Assert.Equal(roles.Count * tasks.Length, names.Count);
+        Assert.Equal(1023, roles.Count);
+
+        // Legal role keys only: RoleService.KeyPattern wants an alphanumeric first character.
+        static void Extend(List<string> into, string prefix, int remaining)
+        {
+            if (remaining == 0)
+            {
+                into.Add(prefix);
+                return;
+            }
+            foreach (var c in prefix.Length == 0 ? "at1" : "at1-") Extend(into, prefix + c, remaining - 1);
+        }
+    }
+
+    [Fact]
+    public async Task The_longest_identity_the_hub_can_produce_is_a_name_the_hub_accepts()
+    {
+        // Arithmetic in a comment is how the previous two rounds justified themselves, so this one goes through
+        // AgentService.RegisterAsync for real. If the 1-80 rule and the worst case ever drift apart, the session
+        // fails to register and the conductor stages a validator that cannot authenticate.
+        var role = new string('v', 48);
+
+        var identity = await RealLauncher().IdentityFor(Assignment("T-2147483647", role),
+            new Muthur.Launch.HarnessCandidate("codex", "opus", "chatgpt-subscription"), default);
+
+        Assert.Equal($"conductor-{role}-t-2147483647", identity.Name);
+        Assert.NotEmpty(identity.Token);
+
+        var agents = await _hub.CreateClient().GetFromJsonAsync(Routes.Agents, MuthurJsonContext.Default.IReadOnlyListAgentDto);
+        Assert.Single(agents!, a => a.Name == identity.Name);
+    }
+
+    [Fact]
+    public async Task A_role_key_outside_what_the_identity_rule_assumes_is_refused_at_definition()
+    {
+        // IdentityName holds its guarantee over the keys the hub accepts, not over arbitrary strings, and the
+        // bound is RoleService.KeyPattern's to hold - a cross-module invariant nothing in ValidatorSessionLauncher
+        // can enforce for itself. Nothing tested KeyPattern before this task. 1-48 chars of [a-z0-9-] keeps the
+        // worst-case identity at 71 of the 80 an agent name allows, and keeps every character in it legal there.
+        // Case is not in the list: Normalize lowercases the key before the pattern ever sees it.
+        foreach (var key in new[] { new string('v', 49), "win.validator", "win_validator" })
+        {
+            var refused = await _hub.Founder().PutAsJsonAsync(Routes.Roles, new DefineRoleRequest(key, $"# {key}\nDrive it."));
+
+            Assert.False(refused.IsSuccessStatusCode);
+            Assert.Equal("invalid_key", (await refused.ReadErrorAsync()).Code);
+        }
+    }
+
+    [Fact]
+    public async Task Two_concurrent_sessions_for_one_role_do_not_invalidate_each_others_tokens()
+    {
+        await SetUpAsync("win-validator");
+        await DefineAsync(2, "win-validator");
+        var launcher = RealLauncher();
+        var candidate = new Muthur.Launch.HarnessCandidate("codex", "opus", "chatgpt-subscription");
+
+        var first = await launcher.IdentityFor(Assignment("T-1", "win-validator"), candidate, default);
+        var second = await launcher.IdentityFor(Assignment("T-2", "win-validator"), candidate, default);
+
+        // The reproduction, asserted before the names so this test fails on the behaviour and not on a convention:
+        // the older session got 'unauthorized' on 'role take' while conductor status still said two were running.
+        (await _hub.CreateClient(first.Token).PostAsync(Routes.RoleAction("win-validator", "take"), null)).EnsureSuccessStatusCode();
+        (await _hub.CreateClient(second.Token).PostAsync(Routes.RoleAction("win-validator", "take"), null)).EnsureSuccessStatusCode();
+
+        Assert.NotEqual(first.Name, second.Name);
+
+        var roles = await _hub.Founder().GetFromJsonAsync(Routes.Roles, MuthurJsonContext.Default.IReadOnlyListRoleDto);
+        var role = Assert.Single(roles!, r => r.Key == "win-validator");
+        Assert.Equal(2, role.Holders.Count);
+        Assert.Contains(role.Holders, h => h.Agent == first.Name);
+        Assert.Contains(role.Holders, h => h.Agent == second.Name);
     }
 
     /// <summary>
@@ -913,13 +1239,14 @@ public sealed class ConductorTests : IDisposable
         var longest = new string('a', length);
         Assert.Equal(RoleKey.MaxLength, length);    // the number callers budget against is the pattern's own
 
-        var launcher = ActivatorUtilities.CreateInstance<ValidatorSessionLauncher>(_hub.Services);
-
         // IdentityFor builds the name the tree actually uses and registers it, so the name limit is asked of
         // AgentService the same way: one character too long comes back as invalid_name and fails this test.
-        var identity = await launcher.IdentityFor(longest, new Muthur.Launch.HarnessCandidate("codex", "opus", "acct"), default);
+        // The sibling test above spells the worst case out at 48; this one derives it, so raising RoleKey's
+        // limit without raising the agent-name limit fails here rather than in a staged validator session.
+        var identity = await RealLauncher().IdentityFor(Assignment("T-2147483647", longest),
+            new Muthur.Launch.HarnessCandidate("codex", "opus", "chatgpt-subscription"), default);
 
-        Assert.EndsWith(longest, identity.Name, StringComparison.Ordinal);
+        Assert.Equal($"conductor-{longest}-t-2147483647", identity.Name);
         Assert.NotEmpty(identity.Token);
     }
 

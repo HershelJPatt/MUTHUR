@@ -2,6 +2,7 @@
 using System;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Infrastructure;
+using Microsoft.EntityFrameworkCore.Migrations;
 using Microsoft.EntityFrameworkCore.Storage.ValueConversion;
 using Muthur.Data;
 
@@ -10,9 +11,11 @@ using Muthur.Data;
 namespace Muthur.Data.Migrations
 {
     [DbContext(typeof(MuthurDb))]
-    partial class MuthurDbModelSnapshot : ModelSnapshot
+    [Migration("20260918180843_ValidationClaim")]
+    partial class ValidationClaim
     {
-        protected override void BuildModel(ModelBuilder modelBuilder)
+        /// <inheritdoc />
+        protected override void BuildTargetModel(ModelBuilder modelBuilder)
         {
 #pragma warning disable 612, 618
             modelBuilder.HasAnnotation("ProductVersion", "10.0.12");
@@ -248,10 +251,6 @@ namespace Muthur.Data.Migrations
                     b.Property<string>("LastError")
                         .HasColumnType("TEXT")
                         .HasColumnName("last_error");
-
-                    b.Property<long?>("LastSuccessAt")
-                        .HasColumnType("INTEGER")
-                        .HasColumnName("last_success_at");
 
                     b.Property<long>("UpdatedAt")
                         .HasColumnType("INTEGER")
@@ -681,10 +680,6 @@ namespace Muthur.Data.Migrations
                         .ValueGeneratedOnAdd()
                         .HasColumnType("INTEGER")
                         .HasColumnName("id");
-
-                    b.Property<string>("AttendedReason")
-                        .HasColumnType("TEXT")
-                        .HasColumnName("attended_reason");
 
                     b.Property<string>("Body")
                         .IsRequired()

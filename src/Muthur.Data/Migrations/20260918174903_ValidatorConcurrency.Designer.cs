@@ -2,6 +2,7 @@
 using System;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Infrastructure;
+using Microsoft.EntityFrameworkCore.Migrations;
 using Microsoft.EntityFrameworkCore.Storage.ValueConversion;
 using Muthur.Data;
 
@@ -10,9 +11,11 @@ using Muthur.Data;
 namespace Muthur.Data.Migrations
 {
     [DbContext(typeof(MuthurDb))]
-    partial class MuthurDbModelSnapshot : ModelSnapshot
+    [Migration("20260918174903_ValidatorConcurrency")]
+    partial class ValidatorConcurrency
     {
-        protected override void BuildModel(ModelBuilder modelBuilder)
+        /// <inheritdoc />
+        protected override void BuildTargetModel(ModelBuilder modelBuilder)
         {
 #pragma warning disable 612, 618
             modelBuilder.HasAnnotation("ProductVersion", "10.0.12");
@@ -248,10 +251,6 @@ namespace Muthur.Data.Migrations
                     b.Property<string>("LastError")
                         .HasColumnType("TEXT")
                         .HasColumnName("last_error");
-
-                    b.Property<long?>("LastSuccessAt")
-                        .HasColumnType("INTEGER")
-                        .HasColumnName("last_success_at");
 
                     b.Property<long>("UpdatedAt")
                         .HasColumnType("INTEGER")
@@ -633,14 +632,6 @@ namespace Muthur.Data.Migrations
                         .HasColumnType("INTEGER")
                         .HasColumnName("at");
 
-                    b.Property<long?>("ClaimExpires")
-                        .HasColumnType("INTEGER")
-                        .HasColumnName("claim_expires");
-
-                    b.Property<Guid?>("ClaimedByAgentId")
-                        .HasColumnType("TEXT")
-                        .HasColumnName("claimed_by_agent_id");
-
                     b.Property<string>("Evidence")
                         .HasColumnType("TEXT")
                         .HasColumnName("evidence");
@@ -659,15 +650,9 @@ namespace Muthur.Data.Migrations
                         .HasColumnType("TEXT")
                         .HasColumnName("verdict");
 
-                    b.Property<long>("WaitingSince")
-                        .HasColumnType("INTEGER")
-                        .HasColumnName("waiting_since");
-
                     b.HasKey("Id");
 
                     b.HasIndex("AgentId");
-
-                    b.HasIndex("ClaimedByAgentId");
 
                     b.HasIndex("TaskId", "ValidatorKey")
                         .IsUnique();
@@ -681,10 +666,6 @@ namespace Muthur.Data.Migrations
                         .ValueGeneratedOnAdd()
                         .HasColumnType("INTEGER")
                         .HasColumnName("id");
-
-                    b.Property<string>("AttendedReason")
-                        .HasColumnType("TEXT")
-                        .HasColumnName("attended_reason");
 
                     b.Property<string>("Body")
                         .IsRequired()
@@ -808,11 +789,6 @@ namespace Muthur.Data.Migrations
                         .HasForeignKey("AgentId")
                         .OnDelete(DeleteBehavior.SetNull);
 
-                    b.HasOne("Muthur.Core.Entities.Agent", "ClaimedBy")
-                        .WithMany()
-                        .HasForeignKey("ClaimedByAgentId")
-                        .OnDelete(DeleteBehavior.SetNull);
-
                     b.HasOne("Muthur.Core.Entities.WorkTask", null)
                         .WithMany()
                         .HasForeignKey("TaskId")
@@ -820,8 +796,6 @@ namespace Muthur.Data.Migrations
                         .IsRequired();
 
                     b.Navigation("Agent");
-
-                    b.Navigation("ClaimedBy");
                 });
 
             modelBuilder.Entity("Muthur.Core.Entities.WorkTask", b =>

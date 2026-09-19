@@ -36,7 +36,25 @@ public sealed record TaskDto(
     IReadOnlyList<ValidationDto> Validations,
     string? AttendedReason);
 
-public sealed record ValidationDto(string Validator, string Verdict, string? Agent, string? Evidence, DateTimeOffset? At);
+public sealed record ValidationDto(
+    string Validator,
+    string Verdict,
+    string? Agent,
+    string? Evidence,
+    DateTimeOffset? At,
+    DateTimeOffset WaitingSince,
+    string? ClaimedBy,
+    DateTimeOffset? ClaimExpires);
+
+/// <param name="Waiting">Tasks in 'validating' with a pending verdict for this role.</param>
+/// <param name="Claimed">How many of those a validator has taken.</param>
+public sealed record ValidationQueueDto(
+    string Role,
+    int Capacity,
+    int Holders,
+    int Waiting,
+    int Claimed,
+    DateTimeOffset? OldestWaitingSince);
 
 public sealed record TaskDetailDto(TaskDto Task, IReadOnlyList<EventDto> Events);
 

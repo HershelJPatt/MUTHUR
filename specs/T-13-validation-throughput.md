@@ -1,0 +1,788 @@
+# T-13 — Validation throughput: more than one validator, and a queue you can see
+
+> Frozen spec. An implementer completes this without making design decisions.
+> If something here is wrong or missing, the implementer stops and reports; they do not improvise.
+
+## Goal
+
+After this task a validator role can be served by more than one session at once, two validators cannot
+spend themselves on the same task, and the depth of the validation queue is a number the founder and the
+conductor can both read.
+
+Today the bottleneck is structural, not a matter of nobody being on call. `RoleHold` is keyed on `RoleKey`
+— one row, one holder — and `ConductorService.PlanAsync` skips a task whose required role is held **at
+all**, by anybody, for any task. So N tasks sitting in `validating` are checked strictly one after another,
+and the conductor staffing five orchestrators' work into one role means four tasks wait on nothing.
+
+## The founder's decision
+
+This task's first question was not the implementer's to answer and was not guessed. Founder request #1,
+answered 2026-09-18:
+
+> **Option A.** Validator roles get a concurrency limit set at `role define` (default 1, so nothing changes
+> until the founder raises it); many agents may hold such a role at once; a per-(task, role) validation claim
+> stops two of them taking the same task; non-validator roles like `comms-oncall` stay strictly one holder,
+> because "who is on call" must have one answer.
+
+Everything below follows from that and is not open for reinterpretation. The reasoning, so the shape makes
+sense while implementing it: a validator role is a *skill* (a platform, a document set), not a seat. The
+exclusivity that matters is "no two validators working the same task for the same role" — which is a claim
+on the `(task, role)` pair, exactly like the claim a task already has. One-holder-per-role stays the rule
+everywhere it is really a seat.
+
+## Context
+
+Read before writing anything:
+
+- `src/Muthur.Server/Services/RoleService.cs` — `DefineAsync`, `TakeAsync`, `ReleaseAsync`,
+  `SweepExpiredHoldsAsync`, `ToDto`. Every one of them is written around `SingleOrDefaultAsync(h => h.RoleKey == key)`.
+- `src/Muthur.Data/MuthurDb.cs` around line 82 — `RoleHold` has `e.HasKey(x => x.RoleKey); // one holder per role`
+  and a `HasOne<Role>().WithOne()` relationship. Both change.
+- `src/Muthur.Server/Services/LifecycleService.cs` — `ImplementedAsync` creates the `TaskValidation` rows,
+  `PendingAsync` is what `muthur validate list` reads, `VerdictAsync` enforces role-holding and self-validation.
+- `src/Muthur.Server/Services/ConductorService.cs` — `PlanAsync`, and the line
+  `if (held.Contains(validation.ValidatorKey)) continue;` that is the bottleneck.
+- `src/Muthur.Server/Services/RoleLeases.cs` and `AgentService.HeartbeatAsync` — how a lease is renewed by
+  signs of life.
+- `src/Muthur.Server/Services/LeaseSweeper.cs` — where lapsed leases are reaped.
+- `src/Muthur.Server/Services/TaskService.cs` — `ClaimAsync` and `SweepExpiredClaimsAsync` are the model for
+  the validation claim: copy their shape, their conflict code, and their ledger events.
+- `tests/Muthur.Server.Tests/RoleTests.cs` — `A_role_has_one_holder_and_the_hold_is_a_lease` is the test
+  that encodes today's rule. It must survive, restated for a capacity-1 role.
+- `src/Muthur.Server/Components/Panels/HeaderStats.razor`, `BoardPanel.razor` — the dashboard patterns.
+
+Constraints that are not obvious from the code:
+
+- Every state change goes through `Ledger.MutateAsync` and records an event in the same transaction.
+- Services throw through `Fail.*` with a stable `code`. Rule violation → 422/exit 2, conflict → 409/exit 3.
+- Time comes from the injected `TimeProvider`.
+- Tests never sleep to synchronize: wait on a condition you can observe, or step the fake clock.
+- Warnings are errors.
+
+## Non-goals
+
+- Changing what a verdict *means*, or how many verdicts a task needs. A project still names required
+  validator roles and still needs one `yes` from each.
+- Letting a non-validator role have more than one holder. That is the explicit other half of the founder's
+  answer, and this task enforces it.
+- Any change to `ConductorMaxSessions` or to how a validator session is launched. The conductor gets to
+  *plan* more sessions; the budget that caps them is untouched.
+- Auto-assigning a task to a validator. A validator claims; nothing claims on its behalf.
+- Anything that expires or re-routes a task because validation is slow. A queue that is too deep is a fact
+  to show, not a thing to silently resolve.
+- The `RECEIPTS`-style "time in each state" analysis. That is T-17; this task provides the waiting-since
+  timestamp it will need, and stops there.
+
+## Design
+
+### Contracts — `src/Muthur.Contracts/Roles.cs`
+
+`RoleDto` loses its single holder. Replace the existing records with:
+
+```csharp
+public sealed record DefineRoleRequest(string Key, string? Brief = null, bool? IsValidator = null, int? Holders = null);
+
+/// <param name="Agent">The agent holding it. One row per live hold.</param>
+public sealed record RoleHolderDto(string Agent, DateTimeOffset HeldSince, DateTimeOffset LeaseExpires);
+
+/// <param name="Capacity">How many agents may hold this role at once. Always 1 for a non-validator role.</param>
+public sealed record RoleDto(
+    string Key,
+    bool IsValidator,
+    int Capacity,
+    IReadOnlyList<RoleHolderDto> Holders,
+    bool HasBrief,
+    DateTimeOffset UpdatedAt);
+
+public sealed record ClaimValidationRequest(string Validator);
+```
+
+`ClaimValidationRequest` belongs to **Unit B**, which is the unit that consumes it; Unit A adds the other
+three records and leaves it alone.
+
+`ValidationDto` (in `src/Muthur.Contracts/Tasks.cs`, wherever it is declared today) gains three members,
+appended so existing positional uses keep their meaning:
+
+```csharp
+    DateTimeOffset WaitingSince,
+    string? ClaimedBy,
+    DateTimeOffset? ClaimExpires
+```
+
+New:
+
+```csharp
+/// <param name="Waiting">Tasks in 'validating' with a pending verdict for this role.</param>
+/// <param name="Claimed">How many of those a validator has taken.</param>
+public sealed record ValidationQueueDto(
+    string Role,
+    int Capacity,
+    int Holders,
+    int Waiting,
+    int Claimed,
+    DateTimeOffset? OldestWaitingSince);
+```
+
+Register `RoleHolderDto`, `IReadOnlyList<RoleHolderDto>`, `ClaimValidationRequest`, `ValidationQueueDto`
+and `IReadOnlyList<ValidationQueueDto>` in `MuthurJsonContext`.
+
+Add to `src/Muthur.Contracts/Routes.cs`:
+
+```csharp
+public const string ValidationQueue = Validations + "/queue";
+```
+
+The claim and its release are task actions, reusing `Routes.TaskAction`:
+`POST /api/v1/tasks/{id}/validate-claim` and `POST /api/v1/tasks/{id}/validate-release`, both taking a
+`ClaimValidationRequest` body.
+
+### Schema
+
+`src/Muthur.Core/Entities/Entities.cs`:
+
+```csharp
+// on Role
+/// <summary>How many agents may hold this role at once. Only a validator role may exceed 1: "who is on call" has one answer.</summary>
+public int Holders { get; set; } = 1;
+```
+
+```csharp
+// on RoleHold — the class comment changes from "One holder per role" to:
+/// <summary>One agent's hold on a role. A role may have up to <see cref="Role.Holders"/> of these; the hold is a lease.</summary>
+```
+
+```csharp
+// on TaskValidation
+/// <summary>When this row started waiting — set when the round opens, never moved by a verdict.</summary>
+public DateTimeOffset WaitingSince { get; set; }
+/// <summary>The validator who has taken this (task, role) pair. Nobody else may spend a session on it.</summary>
+public Guid? ClaimedByAgentId { get; set; }
+public Agent? ClaimedBy { get; set; }
+public DateTimeOffset? ClaimExpires { get; set; }
+```
+
+`src/Muthur.Data/MuthurDb.cs`:
+
+```csharp
+modelBuilder.Entity<RoleHold>(e =>
+{
+    e.ToTable("role_holds");
+    e.HasKey(x => new { x.RoleKey, x.AgentId });   // a role may have several holders; an agent holds it once
+    e.HasOne<Role>().WithMany().HasForeignKey(x => x.RoleKey).OnDelete(DeleteBehavior.Cascade);
+    e.HasOne(x => x.Agent).WithMany().HasForeignKey(x => x.AgentId).OnDelete(DeleteBehavior.Cascade);
+});
+```
+
+`TaskValidation` gains `e.HasOne(x => x.ClaimedBy).WithMany().HasForeignKey(x => x.ClaimedByAgentId).OnDelete(DeleteBehavior.SetNull);`
+beside the existing `Agent` relationship.
+
+One migration for all of it:
+
+```
+dotnet ef migrations add ValidatorConcurrency -p src/Muthur.Data -s src/Muthur.Data -o Migrations
+```
+
+`dotnet ef` needs `dotnet tool restore` and a build first in a fresh worktree.
+
+Existing rows: `Role.Holders` defaults to 1, so every role defined before this change keeps exactly today's
+behaviour. `TaskValidation.WaitingSince` needs a value for rows that already exist — the migration sets it
+to the row's `At` where `At` is not null, and otherwise to the moment the migration runs. Say so in a
+comment in the migration; a `validating` task from before this change reporting its wait as "since the
+upgrade" is honest, and there are at most a handful.
+
+### Roles with capacity — `RoleService`
+
+**`DefineAsync`** takes `request.Holders`:
+
+- `null` → leave the current value (1 for a role being created).
+- `< 1` → `Fail.Rule("invalid_holders", "A role needs at least one holder.")`
+- `> 1` on a role that is not (and is not becoming) a validator →
+  `Fail.Rule("single_holder", "Only a validator role may have more than one holder: '<key>' is a standing post, and who holds it has to have one answer.")`
+  Evaluate this against the role's `IsValidator` **after** `request.IsValidator` has been applied, so
+  `role define x --validator true --holders 3` in one call works.
+- Lowering `Holders` below the number of live holds is allowed and removes nobody. Existing holds stand
+  until they lapse or are released; the new ceiling applies to the next `take`. The `role.updated` payload
+  carries `holders` so the ledger shows when it changed.
+
+**`TakeAsync`** replaces the single-hold lookup:
+
+- Load the role. Load *all* unexpired holds for it.
+- If one of them is mine → renew it, no ledger event (today's "taking a role you already hold" rule).
+- Else if `unexpiredHolds.Count >= role.Holders` → `Fail.Conflict("role_held", …)`:
+  - **exactly one live holder**: `"Role '<key>' is held by '<holder>' until <lease:O>."` — **unchanged from
+    today**, so the existing message and test survive.
+  - **more than one live holder**: `"Role '<key>' is full: <n> of <capacity> held by <comma-separated holders>."`
+
+  Branch on the number of live holders, **not** on `role.Holders`. The spec allows a founder to lower a
+  capacity below the number of standing holds, and a capacity-1 role with two holders left over from a
+  capacity-3 era would otherwise print the single-holder message and name only the oldest of them — telling
+  an agent to wait for one lease when two stand in its way.
+- Else add a hold and record `role.taken` with `{ role, agent, holders = <live count after>, capacity }`.
+  The `tookOverFrom` field disappears — with capacity, taking a role never displaces anyone.
+
+**`ReleaseAsync`**: releases *the caller's* hold. Not held by the caller → `Fail.Rule("not_holder", …)`
+naming who does hold it. The founder releasing a role removes **every** hold on it, and records one
+`role.released` per hold. Nothing is held at all → `Fail.Rule("role_not_held", "Role '<key>' is not held by anyone.")`,
+as today.
+
+**`SweepExpiredHoldsAsync`** already operates on a list; it needs no change beyond compiling against the
+new key.
+
+**`ListAsync` / `ToDto`** return every live hold, ordered by `AcquiredAt` then agent name, plus `Capacity`.
+
+**`RoleLeases`**: `HoldsAsync` and `HeldByAgentAsync` already query by `AgentId` and need no change.
+Add `public static Task<int> LiveHolderCountAsync(MuthurDb db, string roleKey, DateTimeOffset now, CancellationToken ct)`
+for the callers that only need the number.
+
+### The validation claim — `LifecycleService`
+
+**`ImplementedAsync`**: each `TaskValidation` it creates gets `WaitingSince = m.Now` and no claim.
+
+**New `ClaimValidationAsync(Caller caller, string id, ClaimValidationRequest request, CancellationToken ct)`:**
+
+- `caller.RequireIdentified()`; normalize the validator key the way `VerdictAsync` does.
+- Task not `Validating` → `Fail.Rule("not_validating", …)` with `VerdictAsync`'s existing wording.
+- No `TaskValidation` row for that key → `Fail.Rule("validator_not_required", …)`, as `VerdictAsync` says it.
+- Row's `Verdict` is not `Pending` → `Fail.Rule("already_decided", "'<validator>' has already given a verdict on <T-n>.")`
+- Caller does not hold the role → `Fail.Rule("role_not_held", "You do not hold the '<validator>' role. Take it first: muthur role take <validator>")`
+- Caller owns the task → `Fail.Rule("self_validation", "You own this task. Validation must come from someone who did not build it.")`
+  — the same rule `VerdictAsync` enforces, moved earlier so a validator finds out before it spends a session.
+- Claimed by someone else and not yet lapsed → `Fail.Conflict("validation_claimed", "<T-n> is being validated for '<validator>' by '<agent>' until <expires:O>.")`
+- Otherwise set `ClaimedByAgentId` and `ClaimExpires = m.Now + leases.ClaimLease`, and record
+  `validation.claimed` with `{ validator, by }`. Claiming one you already hold just renews it, with no event.
+
+**New `ReleaseValidationAsync`**: the claimer or the founder clears the claim and records
+`validation.released` with `{ validator, by }`. Not claimed by the caller and the caller is not the founder
+→ `Fail.Rule("not_claimer", …)`.
+
+**`VerdictAsync`** gains one rule, placed with the other checks on the row: if the row is claimed by a live
+claim belonging to someone else →
+`Fail.Conflict("validation_claimed", "<T-n> is being validated for '<validator>' by '<agent>'.")`.
+An unclaimed row is claimed implicitly by the verdict — a single validator needs no extra command — so set
+`ClaimedByAgentId` to the caller before writing the verdict. After a verdict is written, clear the claim
+(`ClaimedByAgentId = null; ClaimExpires = null`) on that row: it is decided and nobody is working it.
+
+When a failed verdict sends the task back to `InProgress`, clear the claim on **every** row of that task —
+the round is over.
+
+**`PendingAsync(string? validatorKey, bool includeClaimed, CancellationToken ct)`**: with `includeClaimed`
+false (the default), a task whose row for that role carries a live claim held by someone else is left out —
+`validate list` shows a validator what it can actually take. Passing no `--role` means no claim filtering
+can be meaningful, so `includeClaimed` is ignored when `validatorKey` is null.
+
+**New `QueueAsync`**: one `ValidationQueueDto` per role that is `IsValidator`, ordered by `Waiting`
+descending then `Role` ordinal. `Waiting` counts `Pending` rows on tasks in `Validating`; `Claimed` counts
+those with a live claim; `Holders` counts live holds; `Capacity` is `Role.Holders`; `OldestWaitingSince` is
+the smallest `WaitingSince` among the waiting rows, or null when there are none. A role with no live holds
+and nothing waiting still appears, with zeros — a queue view that hides idle roles cannot show you that the
+role nobody holds is also the role nothing is waiting for.
+
+**Claim renewal and expiry**: wherever `RoleLeases.RenewAsync` is called today (`AgentService.HeartbeatAsync`),
+also extend every live validation claim held by that agent to `m.Now + leases.ClaimLease`, the same way the
+task claims immediately above it are extended. Add `LifecycleService.SweepExpiredValidationClaimsAsync`,
+modelled on `TaskService.SweepExpiredClaimsAsync`: clear claims whose `ClaimExpires <= now`, record
+`validation.claim_expired` with `{ validator, agent }` per row, return the count. Call it from
+`LeaseSweeper` beside the two sweeps already there, logging
+`"Released {Count} validation claim(s) whose holders went quiet."`.
+
+### The conductor — `ConductorService.PlanAsync`
+
+Replace the role-is-held test with capacity and claims. Inside the read, alongside what it already loads:
+
+- live hold counts per role key,
+- the set of `(TaskId, ValidatorKey)` pairs with a live claim.
+
+Then, per pending validation:
+
+- skip when the pair has a live claim — someone is already on it;
+- skip when `liveHolders[role] >= role.Holders` — the role is full, and a session that cannot take the role
+  is a session that does nothing;
+- otherwise plan it, and **count it against that role for the rest of this pass**, so one pass does not plan
+  three sessions into two free slots.
+
+A slot is taken by a hold **or by a session already on its way to one.** Seed each role's count with the
+sessions `_running` already holds for it — its keys are `"T-n/role"`, so the role is the part after the
+slash — before comparing against `Role.Holders`. Without that, a session that has started but has not yet
+taken the role is invisible to the next pass, and with a short interval two passes in a row can plan more
+sessions than the role has slots. The extras start, fail to take the role, and produce nothing. That is the
+exact waste this organization spent five sessions on the week this task was written, and it costs one line
+to not repeat it.
+
+Everything else in `PlanAsync` — priority order, the failure ceiling, `_running`, the stall cooldown,
+`ConductorMaxSessions` — is unchanged.
+
+### The launcher's identity must be per session, not per role
+
+`ValidatorSessionLauncher.IdentityFor` names every session for a role `conductor-{role}`, and re-registering
+re-issues that agent's token. Its comment says why that was safe: *"Registering again re-issues the token,
+which is what we want: the previous session is over."* **This task makes that false.** Two sessions for the
+same role now run at once, the second registration invalidates the first's token, and the first session gets
+`unauthorized` / exit 6 on every call while `conductor status` still reports `running: 2`. Two validators
+that look staffed, one that works.
+
+The identity becomes unique per `(task, role)` — the same pair the conductor staffs, so a retry of the same
+pair still reuses its name and the ledger keeps a stable, readable actor:
+
+```csharp
+internal static string IdentityName(string task, string role) =>
+    $"conductor-{role}-{task.ToLowerInvariant()}";       // "T-3" -> "conductor-win-validator-t-3"
+```
+
+**No truncation, no digest, and the agent-name limit rises to 80 characters to make that possible.**
+`AgentService.NamePattern` becomes `^[a-z0-9][a-z0-9._-]{0,79}$` and its message says 1-80; nothing else in
+the codebase assumes 48 for an agent name, and the `agents.name` column is SQLite `TEXT` with no length of
+its own. Widening a validation rule invalidates no existing name.
+
+Two earlier attempts at this got it wrong and both failed validation, so the reasoning matters more than the
+code:
+
+1. Truncating `conductor-{role}` to fit discarded exactly the part that distinguishes two long role keys.
+   Two legal 41-character keys collided; one token was revoked; the conductor still reported two sessions.
+2. Appending a six-hex digest of the whole role made accidental collisions vanishingly unlikely but left a
+   24-bit residual. A validator **brute-forced it** — two legal keys whose SHA-256 digests both begin
+   `c0c1ec` — and reproduced the revoked token exactly. It was filed as an accepted residual; that was my
+   misjudgement, because "unlikely" is not what the spec promised.
+
+Concatenation is injective here, and that is provable rather than probable: worst case is
+`"conductor-"` (10) + a 48-character role + `"-t-"` + a 10-digit `int` task id = **71 characters**, inside
+80. And `R1 + "-t-" + d1 == R2 + "-t-" + d2` with digit-only `d`s forces `d1 = d2` and `R1 = R2` — a shorter
+digit run cannot absorb the other's `"-t-"`, because that would put a `'-'` or a `'t'` where a digit must be.
+A role key containing `-t-` does not break it.
+
+So the guarantee stops being statistical. There is nothing left to collide.
+
+`IdentityFor` takes the assignment (or its `TaskKey`) and uses this. Everything else about it stays: one
+registration per session, for the candidate about to run, so a fall-through to another vendor does not leave
+the ledger saying the first one did the work.
+
+The validator prompt in `ValidatorSessionLauncher` gains one line after the `role take` lines:
+
+```
+    muthur validate claim {assignment.TaskKey} --as {assignment.RoleKey}
+```
+
+and one sentence in the rules: `- Claim the task before you start. If the claim is refused, another validator has it: release the role and stop.`
+
+### CLI — `src/Muthur.Cli/Commands/RoleCommands.cs`
+
+- `role define` gains `--holders <n>`:
+  `"How many agents may hold this role at once (default 1). Only a validator role may exceed 1."`
+- `validate list` gains `--all`: `"Include tasks another validator has already claimed."` It adds
+  `all=true` to the query. Build the query the way `TaskCommands.list` and `InboundCommands.list` already do
+  — a list of `key=value` joined with `&` and prefixed with `?` only when non-empty — so `--all` alone
+  yields `?all=true` and not a query beginning with `&`. `--role` is escaped with `Uri.EscapeDataString`,
+  as it is today.
+- New `validate claim <id> --as <role>`:
+  `"Take a task for validation so no other validator spends a session on it. Exit 3 if someone already has it."`
+- New `validate release <id> --as <role>`: `"Give back a task you claimed but will not validate."`
+- New `validate queue`: `"How deep the validation queue is, per validator role."` `GET Routes.ValidationQueue`.
+
+All five follow the existing `Output.Emit` pattern exactly; none of them interprets the body.
+
+### Dashboard
+
+**New `src/Muthur.Server/Components/Panels/ValidationQueuePanel.razor`** — `@inherits LivePanel`,
+`@inject LifecycleService Lifecycle`, `@inject TimeProvider Clock`.
+
+- `LoadAsync` calls `Lifecycle.QueueAsync()`.
+- `ClockInterval => TimeSpan.FromSeconds(30)` — the oldest wait ages on its own.
+- `IsRelevant`: types starting (ordinal) with `validation.`, `task.` or `role.`.
+- Head: title `Validation queue`; sub `<total waiting> waiting`, or `clear` when nothing is.
+- Body: one `.role-row` per role — a `.tag` reading `<holders>/<capacity>` (class `tag-held` when
+  `Holders > 0`, `tag-open` when it is 0 and `Waiting > 0`, plain `tag` otherwise), the role key, and in a
+  `.role-holder` either `<waiting> waiting · oldest <age>` using `Format` the way `HarnessPanel` uses
+  `Format.Until`, or `clear`. `.empty` reading `No validator roles defined.` when there are none.
+- Place it in the right-hand aside of `src/Muthur.Server/Components/Pages/Board.razor`, above whatever is
+  there. If that page's asides are already full, put it at the top of the right aside anyway — the queue
+  depth is the number this task exists to make visible.
+
+**`HeaderStats.razor`**: the existing `@_validating validating` stat gains the wait behind it. Load
+`Lifecycle.QueueAsync()`, take the smallest non-null `OldestWaitingSince`, and render
+`<b>@_validating</b> validating` followed by ` · oldest @Format.Age(oldest, _now)` when there is one.
+Keep `stat-accent` on the same condition as today. `Format.Age(then, now)` in `Components/Shared/Format.cs`
+is already the "how long ago" helper — it is what `AgentsPanel` and `CommsPanel` use — so use it and add
+nothing. Do not format inline.
+
+No new CSS classes. Everything above uses classes that already exist in `wwwroot/app.css`.
+
+## Units of work
+
+### Unit A — capacity on roles
+- **Files:** `src/Muthur.Contracts/Roles.cs`, `MuthurJsonContext.cs`; `src/Muthur.Core/Entities/Entities.cs`
+  (`Role.Holders`, the `RoleHold` comment); `src/Muthur.Data/MuthurDb.cs` (`RoleHold` key and relationship);
+  a migration; `src/Muthur.Server/Services/RoleService.cs`, `RoleLeases.cs`;
+  `src/Muthur.Server/Components/Panels/CommsPanel.razor` if it fails to compile;
+  `tests/Muthur.Server.Tests/RoleTests.cs`.
+- **Does:** `Holders` on `Role`, the multi-holder `RoleHold`, `DefineAsync` / `TakeAsync` / `ReleaseAsync` /
+  `ListAsync` as specified, the new `RoleDto` shape, and `LiveHolderCountAsync`.
+- **Depends on:** nothing. Do this one first: B and C compile against `RoleDto` and `Role.Holders`.
+- **Acceptance:** `dotnet build` and `dotnet test` clean. `RoleTests.A_role_has_one_holder_and_the_hold_is_a_lease`
+  still passes, restated against `Holders`/`Capacity`. New tests: a validator role at `--holders 2` admits
+  two agents and refuses the third with `role_held` and exit 3; `--holders 2` on a non-validator role is
+  refused with `single_holder`; `--holders 0` is refused with `invalid_holders`; lowering the capacity
+  evicts nobody; each holder releases only their own hold, and the founder's release clears all of them.
+
+### Unit B — the validation claim
+- **Files:** `src/Muthur.Core/Entities/Entities.cs` (`TaskValidation`); `src/Muthur.Data/MuthurDb.cs`;
+  the same migration as Unit A if A has not run yet, otherwise a second one;
+  `src/Muthur.Server/Services/LifecycleService.cs`, `Validations.cs`, `AgentService.cs` (renewal),
+  `LeaseSweeper.cs`; `src/Muthur.Server/Api/RoleEndpoints.cs` and/or `TaskEndpoints.cs` for the two routes;
+  `src/Muthur.Contracts/Tasks.cs` (`ValidationDto`); `tests/Muthur.Server.Tests/`.
+- **Does:** `WaitingSince`, the claim columns, `ClaimValidationAsync`, `ReleaseValidationAsync`, the new rule
+  and the claim-clearing in `VerdictAsync`, `PendingAsync`'s filter, renewal, and the sweep.
+- **Depends on:** Unit A (for `RoleLeases.LiveHolderCountAsync` and the role-holding check).
+- **Acceptance:** `dotnet build` and `dotnet test` clean. Tests: two agents holding the same capacity-2 role,
+  the first claims a task, the second's claim is refused with `validation_claimed` and 409; the second's
+  *verdict* on that task is refused the same way; `validate list --role x` hides the claimed task for the
+  second agent and shows it with `--all`; a claim lapses on the fake clock and the sweep frees it, with a
+  `validation.claim_expired` event; an unclaimed verdict still works in one step; a failed verdict clears
+  every claim on the task; claiming a task you own is refused with `self_validation`.
+
+### Unit C — the conductor plans against capacity
+- **Files:** `src/Muthur.Server/Services/ConductorService.cs`, `ValidatorSessionLauncher.cs`;
+  `tests/Muthur.Server.Tests/` (the conductor tests).
+- **Does:** the `PlanAsync` change and the two lines in the validator prompt.
+- **Depends on:** Units A and B.
+- **Acceptance:** `dotnet build` and `dotnet test` clean. Tests: with a capacity-2 role and three tasks in
+  `validating`, one pass plans exactly two assignments, on the two highest-priority tasks; with capacity 1 it
+  plans exactly one, as today; **two concurrent sessions for one role get different agent identities and
+  neither invalidates the other's token**; **no name is ever truncated** — put a 48-character role key and a
+  10-digit task id through the real `AgentService.RegisterAsync`, not through the arithmetic, and assert the
+  whole role key survives in the registered name; **no two pairs the hub accepts share an identity** —
+  enumerate legal role keys over `{a, t, -, 1}`, the characters `-t-<id>` is itself built from, cross them
+  with several task ids, and assert every name is distinct **and** matches `AgentService.NamePattern`; and
+  **a role key that spells out another pair's task suffix does not take its identity**.
+
+  The real shape of the guarantee, worth saying plainly: **`IdentityName` is not injective over arbitrary
+  strings. It is injective over the strings the hub accepts.** Two gates enforce that domain —
+  `RoleService.KeyPattern` on the way in, and `ConductorService` planning only validations whose key names a
+  real `Role`. So `RoleService.KeyPattern` needs its own test: `role define win.validator` refused with
+  `invalid_key`, and a 49-character key refused too. What that test protects is now the **length bound and
+  the character set**, not the dot — under plain concatenation a dotted role key would break neither
+  injectivity nor name legality, and a comment claiming otherwise would mislead the next round.
+
+  One relationship holds the whole thing up and is worth writing down here because it is asserted nowhere in
+  code: **role-key max (48) + `"conductor-"` and `"-t-"` and a 10-digit id (23) ≤ agent-name max (80)**.
+  Nine characters of slack. Raising `RoleService.KeyPattern` past 57 would silently start producing agent
+  names the hub refuses; a task whose pair is already claimed is not planned; a role whose holds are
+  all live at capacity is not planned; a role whose slots are filled by sessions still in `_running` — started,
+  not yet holding — is not planned again on the following pass; `ConductorMaxSessions` still caps the total
+  below capacity.
+
+### Unit D — CLI
+- **Files:** `src/Muthur.Cli/Commands/RoleCommands.cs`.
+- **Does:** `--holders`, `validate claim`, `validate release`, `validate queue`, `validate list --all`.
+- **Depends on:** Units A and B for the contracts; it can be written against them as soon as those compile.
+- **Acceptance:** `dotnet build` and `dotnet test` clean; verified by hand per **Verification**.
+
+### Unit E — the queue on the dashboard
+- **Files:** new `src/Muthur.Server/Components/Panels/ValidationQueuePanel.razor`; modified
+  `src/Muthur.Server/Components/Pages/Board.razor`, `Panels/HeaderStats.razor`, and
+  `Components/Shared/Format.cs` if it needs a "how long ago" helper.
+- **Does:** the panel and the header stat.
+- **Depends on:** Unit B (`QueueAsync`).
+- **Acceptance:** `dotnet build` and `dotnet test` clean; verified by eye per **Verification**.
+
+## Verification
+
+```
+dotnet build
+dotnet test
+```
+
+Both clean — warnings are errors.
+
+End to end, against an installed build and a scratch home, never the live hub:
+
+```
+pwsh ./scripts/install.ps1 -Destination ./artifacts/t13
+$env:MUTHUR_HOME = "$PWD/artifacts/t13-home"; $env:MUTHUR_URL = "http://127.0.0.1:7432"
+./artifacts/t13/muthur.exe up
+```
+
+Then, as the founder and two registered agents:
+
+- `role define win-validator --validator true --holders 2 --founder` is accepted; the same with
+  `comms-oncall` is refused with `single_holder` and exit 2.
+- Two agents both `role take win-validator` and both succeed. A third is refused with `role_held`, exit 3,
+  and the message names both holders and the capacity.
+- With two tasks in `validating`, each validator claims a different one and both work at once — the thing
+  that was impossible before this task.
+- The second validator claiming the first's task is refused with `validation_claimed` and exit 3, and so is
+  a verdict on it.
+- `muthur validate queue` shows `win-validator` with `holders 2`, `capacity 2`, the waiting count, and an
+  `oldestWaitingSince` that matches when those tasks were marked implemented.
+- `muthur validate list --role win-validator` as the second validator does not list the task the first
+  claimed; `--all` lists it.
+### The dashboard, without a browser
+
+**No browser is required to validate this task, and none should be used.** The dashboard is Blazor Server
+and prerenders, so the panel and the header stat are both in the HTML that `GET /` returns:
+
+```
+(Invoke-WebRequest "$env:MUTHUR_URL/" -UseBasicParsing).Content |
+    Select-String -Pattern 'Validation queue', 'win-validator', 'waiting', 'oldest'
+```
+
+With the two tasks above waiting, that response contains `Validation queue`, a `win-validator` row, its
+`2/2` capacity tag, `2 waiting`, and the header's `validating` stat followed by the oldest wait. On a hub
+with no validator roles it contains `No validator roles defined.` instead.
+
+Note that the `·` separators are HTML-encoded in the response, so match on the words either side of them
+rather than on the separator.
+
+This section is written this way because the first version of it asked for the numbers to be checked "live
+on the dashboard", and conductor-started validators have no browser. They correctly refused, repeatedly. A
+spec that cannot be validated by the sessions this organization actually starts is a defect in the spec —
+the second time I have made it, and the reason it is spelled out at length here.
+- Turn the conductor on with two tasks waiting and capacity 2: `muthur conductor status` shows two sessions
+  running rather than one, and `lastAction` names the second task.
+
+## Out of scope / follow-ups
+
+- **Capacity the conductor sets itself.** A role whose queue is consistently deep could have its capacity
+  raised automatically. It should not, until a founder has watched it a while; file it if it proves out.
+- **Time-in-state analysis** — how long tasks sit in `validating` versus being worked, which is the number
+  that proves or disproves PLAN.md's claim that validation is the bottleneck. `WaitingSince` is what that
+  needs; the analysis is T-17.
+- **T-16** (two tasks in flight on the same files) becomes more likely the moment several validators land
+  work in parallel. Nothing here makes it worse than the conductor already does, and nothing here addresses it.
+- `HeaderStats` has no `IsRelevant` override, so it reloads on every ledger event, and this task gives it a
+  second query to run each time. Harmless at present scale, and the cheap fix is an `IsRelevant` override on
+  that component — worth doing if the board ever feels slow, not worth doing on suspicion.
+- `muthur role list` output changed shape (`holder` → `holders[]`, plus `capacity`). Any brief in `kit/` or
+  prose in `docs/` that quotes the old shape should be swept — check `kit/briefs/validator.md` and
+  `kit/core/`. If a sweep is needed beyond one or two lines, file it rather than widening this task.
+
+## Amendment after the first validation round (2026-09-19, top-right)
+
+`conductor-validator` failed this branch at `735937f` with one blocking defect and one observation. Both
+were real, both are fixed here, and both now have a test that fails without the fix.
+
+### The blocking defect: the capacity gate was attached to the argument, not to the role
+
+`role define standing-post --validator false` on a role already sitting at two holders was accepted, and
+the role then admitted two agents to a standing post. Defining the same thing directly
+(`--validator false --holders 2`) was correctly refused with `single_holder` — the gate lived inside
+`if (request.Holders is { } holders)`, so a call that changed only `IsValidator` walked straight past it.
+
+The spec said the invariant ("Letting a non-validator role have more than one holder" is a non-goal, "this
+task enforces it") but wrote the rule as a check on the incoming argument. That was the error. The rule now
+reads the role's state after both fields are applied:
+
+```
+if (role.Holders > 1 && !role.IsValidator) throw Fail.Rule("single_holder", …);
+```
+
+**Refused, not silently narrowed.** The founder converting a two-holder validator into a standing post gets
+exit 2 and writes `--validator false --holders 1`, which is accepted in one call. Quietly setting the
+capacity to 1 while answering a question about `--validator` would make the hub pick a number the founder
+did not say, and how many may hold a post is exactly the sentence this task exists to make explicit.
+
+### The observation: the define response reported an empty role
+
+`DefineAsync` returned `ToDto(role, [])`, so lowering a capacity from 2 to 1 while two agents held the role
+answered with `holders: []` — and the very next `take` answered `full: 2 of 1 held by v1, v2`. One of those
+was lying. `DefineAsync` now reads the live holds inside the same mutation and returns them, so the
+response agrees with `role list` and with the next `take`. Lapsed leases are not holders: the read filters
+on `LeaseExpires > m.Now`, and the test advances the clock two days to prove it.
+
+### Also in this commit
+
+`main` (82 commits) is merged in. Two conflicts, both resolved without a design decision:
+
+- `RoleCommands.cs` — main's `FileProvenance` guard on `--brief-file` plus this branch's `--holders`.
+- `ConductorTests.cs` — both sides added tests. Main's `The_longest_role_key_there_can_be_still_makes_an_agent_name_the_hub_accepts`
+  was written against the old `IdentityFor(string role, …)`; it is kept, adapted to the `(task, role)` pair,
+  and its assertion updated to the `conductor-<role>-t-<n>` name. It is worth keeping beside this branch's
+  `The_longest_identity_the_hub_can_produce_is_a_name_the_hub_accepts` because it *derives* the 48 from
+  `RoleKey`'s own rule instead of quoting it, so raising the key limit without raising the agent-name limit
+  fails here rather than in a staged validator session.
+
+`dotnet build`: clean, 0 warnings. `dotnet test`: 3708 Core, 23 Launch, 60 Cli, 266 Server — all green.
+
+## Amendment after the second validation round (2026-09-19, top-right)
+
+`conductor-validator` failed `4a33330`. The first round's fixes hold ("Original no-holders conversion gate
+and response fix work; full tests pass"), but the fix was incomplete, and the finding is the better one:
+
+> conversion with `--validator false --holders 1` leaves two live holders on a non-validator, and both can
+> renew via `role take` (exit 0)
+
+That is right, and it is not a detail. Two rules in this spec meet here:
+
+- **"Lowering the ceiling evicts nobody: existing holds stand until they lapse or are released."**
+- **"non-validator roles like `comms-oncall` stay strictly one holder"** — the founder's word, and a non-goal
+  of this task to weaken.
+
+Setting the ceiling to 1 satisfies the first and breaks the second: the role reads "1 holder" while two
+agents hold it, and because taking a role you already hold is a renewal — deliberately exempt from the
+capacity check, so a working agent never loses its post mid-task — the two never drain. Not "until they
+lapse": permanently.
+
+### The resolution: the conversion waits for the release
+
+`DefineAsync` now refuses to make a role a standing post while more than one agent holds it live, and names
+them:
+
+```
+'platform-checks' cannot become a standing post while 2 agents hold it: one, two.
+Lowering a capacity never evicts anyone, so the post would read one holder and have several.
+Release all but one first.
+```
+
+Both halves are checked against the role's state after the request is applied, not against the argument
+that was passed: `role.Holders > 1` (the ceiling) and `live.Count > 1` (the occupancy).
+
+**Refusing rather than evicting** is the only option that breaks neither rule. The two rejected alternatives:
+evicting all but the oldest holder contradicts "evicts nobody" and makes a call about `--validator` decide
+whose post it is; letting it through is what the validator just failed. Nothing here is a new product
+decision — it is the only reading that leaves both of the founder's sentences standing. If the founder
+would rather the conversion evict, it is one branch in this method.
+
+Renewal stays exempt from the capacity check. That exemption is correct — it is what stops a validator
+losing its role mid-verdict when the founder lowers a ceiling — and with this fix it can no longer be the
+thing that keeps a standing post over-held, because such a post cannot be created in the first place.
+
+### Tests
+
+- `A_role_two_agents_are_holding_cannot_be_converted_into_a_standing_post` — the validator's exact repro,
+  through the API: refused with `single_holder`, the role unmoved, both holders still able to renew, and the
+  conversion accepted the moment one releases, with the remaining holder keeping its lease.
+- `Lowering_a_validator_roles_capacity_below_its_holders_is_still_allowed` — the rule the new check must not
+  have swallowed. A validator role may still go from 2 to 1 with two holders standing.
+- `Converting_a_validator_role_into_a_standing_post_cannot_leave_its_capacity_behind` loses its tail, which
+  asserted the behaviour this round removed.
+
+`dotnet build`: clean, 0 warnings. `dotnet test`: 3708 Core, 23 Launch, 60 Cli, 268 Server — all green.
+
+### Proof, on the installed CLI against a scratch hub
+
+Build `adda99f`, installed to `artifacts/t13`, `MUTHUR_HOME=artifacts/scratch13`, `MUTHUR_URL=http://127.0.0.1:7513`
+— never the live hub. The validator's own repro, verbatim, and the two rules it has to leave standing:
+
+```
+role define platform-checks --validator true --holders 2 --founder   -> capacity 2
+role take platform-checks --as-agent v1 / v2                         -> both hold it
+
+role define platform-checks --validator false --holders 1 --founder  -> exit 2, single_holder
+   "'platform-checks' cannot become a standing post while 2 agents hold it: v1, v2. ..."
+role define platform-checks --validator false --founder              -> exit 2, single_holder (the ceiling)
+role list --founder                                                  -> still isValidator, capacity 2, [v1, v2]
+
+role release platform-checks --as-agent v2                           -> exit 0
+role define platform-checks --validator false --holders 1 --founder  -> exit 0, isValidator false,
+                                                                        capacity 1, holders [v1]
+
+role define win-validator --validator true --holders 2 --founder, both take, then
+role define win-validator --holders 1 --founder                      -> exit 0, capacity 1, holders [v1, v2]
+```
+
+The last line is the rule the new check must not have swallowed, and it is also the first round's response
+fix showing on a real hub: the define answers with both live holders where it used to answer `holders: []`.
+
+## Amendment after the third validation round (2026-09-19, top-right)
+
+`conductor-validator` failed `382896b` with the best finding yet, reproduced on an installed build with a
+harness stand-in and a 15-second conductor interval:
+
+> conductor counts the same session twice once it takes its role. Capacity 2 cannot staff a second task
+> arriving while the first validator is working.
+
+The observation that proves it: at capacity 2, one running validator, one waiting task, `running=1`,
+`holders=1`, `waiting=2`, and the pass staffs nothing — then changing *only* the capacity to 3 staffs it
+immediately.
+
+### Why it happened
+
+`PlanAsync` counts a role's occupied slots from two sources: the live `RoleHolds`, and the conductor's own
+`_running` set. The second is deliberate and stays — a session that has started but has not yet taken the
+role holds nothing the database can see, and without it the next pass plans straight over it and the extra
+session starts, fails to take the role, and produces nothing (the test
+`Sessions_on_their_way_to_a_role_occupy_its_slots_on_the_following_pass` is exactly that).
+
+What was missing is that the two sources overlap. The moment a running session takes its role it is a hold
+*and* a running session, and it was counted in both. So a capacity of two behaved like a capacity of two
+only during the seconds before the first session took its role, and like a capacity of one for the rest of
+that session's life — which is precisely the serialization this whole task exists to remove. Staggered
+arrivals are the normal case; simultaneous ones are the lucky case, and simultaneous ones are what the
+earlier tests happened to cover.
+
+### The fix
+
+The session's agent name is not incidental — `ValidatorSessionLauncher.IdentityName(task, role)` is the
+(task, role) pair's own name, stable across retries and distinct between pairs, and that property was
+established by this branch. So a hold under that name *is* that session. `PlanAsync` now loads the live
+holds with their agents and skips a running session that is already represented by one:
+
+```csharp
+var heldBy = holds.Select(h => (h.RoleKey, Name: h.Agent?.Name ?? "")).ToHashSet();
+…
+if (heldBy.Contains((role, ValidatorSessionLauncher.IdentityName(task, role)))) continue;
+liveHolders[role] = liveHolders.GetValueOrDefault(role) + 1;
+```
+
+One query more (the holds were already being read; they are now read as rows rather than as a grouped
+count) and no new state. A hold taken by anyone else — a human validator, an agent that took the role by
+hand — is still counted, because it is not that pair's name.
+
+### Test
+
+`A_running_session_that_has_taken_its_role_occupies_one_slot_not_two` walks the validator's sequence: one
+task staffed and its session still alive, that session takes the role under the launcher's own name, a
+second task arrives, and the plan picks it up. Then the second session takes the role too and a third task
+waits — so the fix frees the slot that was double-charged without turning the capacity into no ceiling at
+all. It fails on the previous commit with the second task unplanned.
+
+`dotnet build`: clean, 0 warnings. `dotnet test`: 3708 Core, 23 Launch, 60 Cli, 269 Server — all green.
+
+## Amendment after the fourth validation round (2026-09-19, top-right)
+
+`conductor-validator` passed every functional check at `a7dec4b` — the double-counting fix confirmed on a
+real hub with two sessions at capacity 2, and the whole role/claim/queue surface exercised — and failed the
+task on the startup log:
+
+> A fresh installed startup emitted two EF migration warnings from this task's ValidatorConcurrency and
+> ValidationClaim migrations. Both report PRAGMA foreign_keys = 0 cannot execute in a transaction and
+> interruption may leave migration partially applied, requiring manual recovery.
+
+That is a real statement about a founder's database, not log noise. SQLite cannot change a primary key or
+add a foreign key in place, so EF rebuilds the table, and its rebuild brackets the swap with
+`PRAGMA foreign_keys = 0` — which SQLite refuses inside a transaction. EF therefore drops the transaction
+for the whole migration, and an upgrade interrupted at the wrong moment leaves the hub half-migrated and
+needing hands. These two are the only migrations in the repository that rebuild a table on the way *up*;
+every other `DropColumn` in the tree is in a `Down`.
+
+### The fix: write the rebuilds out
+
+Both migrations now perform their own rebuild in plain DDL — create, copy, drop, rename, recreate indexes —
+instead of letting EF scaffold one. EF generates no pragma for SQL it did not plan, so both run inside the
+migration's transaction, where SQLite's DDL is atomic.
+
+The pragma was buying nothing here in the first place: **nothing in the schema points a foreign key at
+`role_holds` or `task_validations`**, so dropping either breaks no reference. Their own foreign keys are
+declared on the new table and satisfied by the rows copied into it.
+
+`ValidationClaim` also collapses from three `AddColumn`s plus an `AddForeignKey` into the one rebuild it was
+always going to be, which lets `waiting_since` be filled in the copy rather than defaulted to 1970 and then
+corrected by a follow-up `UPDATE`. The reasoning about that value is unchanged and the comment moved with it.
+
+`ValidatorConcurrency`'s `Down` needs one judgment it did not need before: a role several agents hold cannot
+fit a primary key of `role_key` alone, so the earliest hold survives. That is what a capacity of one meant
+before this migration existed.
+
+### Proof
+
+The suite runs the real migration path (`Startup` calls `MigrateAsync`; nothing uses `EnsureCreated`), so
+4060 green tests are 4060 exercises of these migrations on a fresh database. Two things tests do not cover
+were checked by hand on installed builds:
+
+- **Clean start.** New build, empty `MUTHUR_HOME`: the log is five `Information` lines from
+  `Microsoft.Hosting.Lifetime` and nothing else. Both warnings are gone.
+- **Upgrade.** A hub created and populated by the installed `main` build (`03cee01`) — `win-validator`
+  defined, agent `v1` holding it — then started with this build. The log is clean, `v1`'s hold survived the
+  rebuild, the role read back at capacity 1, raising it to 2 admitted `v2`, and both are listed. The
+  upgraded schema for both tables and all their indexes is byte-identical, modulo whitespace, to the schema
+  a fresh database gets.
+
+`dotnet build`: clean, 0 warnings. `dotnet test`: 3708 Core, 23 Launch, 60 Cli, 269 Server — all green.

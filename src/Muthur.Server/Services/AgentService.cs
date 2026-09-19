@@ -13,14 +13,14 @@ public sealed partial class AgentService(Ledger ledger, LeasePolicy leases, Time
     private static readonly TimeSpan TouchInterval = TimeSpan.FromSeconds(30);
     private readonly ConcurrentDictionary<Guid, DateTimeOffset> _lastTouch = new();
 
-    [GeneratedRegex("^[a-z0-9][a-z0-9._-]{0,47}$")]
+    [GeneratedRegex("^[a-z0-9][a-z0-9._-]{0,79}$")]
     private static partial Regex NamePattern();
 
     public async Task<RegisterAgentResponse> RegisterAsync(Caller caller, RegisterAgentRequest request, CancellationToken ct = default)
     {
         var name = (request.Name ?? "").Trim().ToLowerInvariant();
         if (!NamePattern().IsMatch(name) || name is "founder" or "muthur" or "anonymous")
-            throw Fail.Rule("invalid_name", "Agent names are 1-48 chars of a-z, 0-9, '.', '_' or '-', and may not be a reserved name.");
+            throw Fail.Rule("invalid_name", "Agent names are 1-80 chars of a-z, 0-9, '.', '_' or '-', and may not be a reserved name.");
         if (string.IsNullOrWhiteSpace(request.Harness) || string.IsNullOrWhiteSpace(request.Model))
             throw Fail.Rule("harness_required", "Both --harness and --model are required: the ledger records which model did what.");
 
@@ -84,6 +84,13 @@ public sealed partial class AgentService(Ledger ledger, LeasePolicy leases, Time
                 .ToListAsync(ct);
             foreach (var task in owned.Where(t => t.ClaimExpires is null || t.ClaimExpires < renewTo))
                 task.ClaimExpires = renewTo;
+
+            // A validator that is working and reporting in keeps the pairs it took. Only live claims: one that
+            // already lapsed belongs to whoever takes it next, not to whoever comes back first.
+            var claimed = await m.Db.TaskValidations
+                .Where(v => v.ClaimedByAgentId == agentId && v.ClaimExpires > m.Now && v.ClaimExpires < renewTo)
+                .ToListAsync(ct);
+            foreach (var row in claimed) row.ClaimExpires = renewTo;
 
             await RoleLeases.RenewAsync(m, agentId, leases, ct);
         }, ct);

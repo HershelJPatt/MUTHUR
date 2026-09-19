@@ -26,6 +26,7 @@ public static class Routes
     public static string RoleAction(string key, string action) => $"{Role(key)}/{action}";
 
     public const string Validations = Api + "/validations";
+    public const string ValidationQueue = Validations + "/queue";
 
     public const string Messages = Api + "/messages";
     public const string Inbox = Messages + "/inbox";

@@ -57,7 +57,7 @@ public sealed class ValidatorSessionLauncher(
                 AllowedCommands: Allowed,
                 DeniedCommands: Denied,
                 ScratchDirectory: scratch),
-            candidate => IdentityFor(assignment.RoleKey, candidate, ct),
+            candidate => IdentityFor(assignment, candidate, ct),
             TimeSpan.FromMinutes(options.ConductorSessionMinutes),
             candidate => MarkLimitedAsync(candidate.Account, ct),
             ct);
@@ -91,20 +91,43 @@ public sealed class ValidatorSessionLauncher(
     }
 
     /// <summary>
-    /// One agent per role, reused across sessions, so the ledger shows a stable name rather than a new stranger
-    /// every night. It is registered for the candidate that is about to run — a fall-through to another vendor
-    /// must not leave the ledger saying the first one did the work. Registering again re-issues the token, which
-    /// is what we want: the previous session is over.
+    /// One agent per (task, role) pair — the same pair the conductor staffs — so a retry of that pair reuses its
+    /// name and the ledger keeps a stable, readable actor. It must not be one agent per role: a validator role may
+    /// have several holders, registering re-issues that agent's token, and two sessions sharing a name would leave
+    /// the older one holding a revoked token, failing every call while the conductor still counts it as running.
+    /// It is registered for the candidate that is about to run — a fall-through to another vendor must not leave
+    /// the ledger saying the first one did the work.
     /// </summary>
-    internal async Task<AgentIdentity> IdentityFor(string role, HarnessCandidate candidate, CancellationToken ct)
+    internal async Task<AgentIdentity> IdentityFor(ConductorAssignment assignment, HarnessCandidate candidate, CancellationToken ct)
     {
-        var name = $"conductor-{role}";
+        var name = IdentityName(assignment.TaskKey, assignment.RoleKey);
         // A tier entry may leave the model blank to mean "the harness's own default"; the ledger still needs a word.
         var model = candidate.Model is { Length: > 0 } ? candidate.Model : "default";
         var registration = await agents.RegisterAsync(Caller.Founder,
             new RegisterAgentRequest(name, candidate.Harness, model, Tier, candidate.Account), ct);
         return new AgentIdentity(name, registration.Token);
     }
+
+    /// <summary>
+    /// The agent name for one staffed pair: stable across retries of that pair, distinct between pairs.
+    /// <para>
+    /// Plain concatenation, and the whole of both parts. Two earlier versions squeezed this into a 48-character
+    /// name and both failed validation: truncating the head discarded exactly what told two long role keys apart,
+    /// and a six-hex digest of the role left 24 bits a validator brute-forced. The fix was not a cleverer encoding
+    /// but removing the limit that forced one — <see cref="AgentService"/> allows 80 characters, and the worst case
+    /// the hub can produce is 71: "conductor-" (10) + a role key of at most 48 + "-t-" (3) + a 10-digit task id.
+    /// </para>
+    /// <para>
+    /// Injective over everything the hub accepts, by counting rather than by luck. Task keys are "T-" and a
+    /// positive int, so the tail is always a non-empty run of digits: R1 + "-t-" + d1 == R2 + "-t-" + d2 forces
+    /// the two role keys to be the same length — a tail shorter by one, two or three would land '-', 't' or '-'
+    /// where the other string has a digit — and equal lengths make R1 == R2 and d1 == d2. A role key that itself
+    /// contains "-t-" does not break it. The bound on the length, and the character set that keeps the result a
+    /// legal agent name, are <c>RoleService.KeyPattern</c>'s to hold; ConductorTests pins that.
+    /// </para>
+    /// </summary>
+    internal static string IdentityName(string task, string role) =>
+        $"conductor-{role}-{task.ToLowerInvariant()}";       // "T-3" -> "conductor-win-validator-t-3"
 
     /// <summary>An account that could not answer leaves the rotation, exactly as `muthur agent limited` does.</summary>
     private Task MarkLimitedAsync(string? account, CancellationToken ct) =>
@@ -149,11 +172,13 @@ public sealed class ValidatorSessionLauncher(
 
             muthur role take {assignment.RoleKey}
             muthur role brief {assignment.RoleKey}
+            muthur validate claim {assignment.TaskKey} --as {assignment.RoleKey}
 
         Then validate {assignment.TaskKey} ("{assignment.TaskTitle}"): follow the validate procedure in this
         repository, exercise the change end to end on the real product, and give a verdict with evidence.
 
         Rules that are not yours to bend:
+        - Claim the task before you start. If the claim is refused, another validator has it: release the role and stop.
         - You did not write this task and must not fix what you find. Report it.
         - A pass says you ran the product and it worked; it never says the diff looked right.
         - If the product cannot be driven unattended, the verdict is not pass: message the task's owner, say what
