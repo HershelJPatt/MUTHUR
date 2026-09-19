@@ -29,9 +29,10 @@ Every `muthur` call renews your leases. When idle for long stretches, run
    implementer in its own git worktree on branch `task/T-n-<slug>` (or sub-branches you will merge into it).
    Your harness may have a native way to do this; `muthur worker run --tier implementer --spec … --unit …` works from any
    harness and staffs the tier with whichever model and account is available.
-   Give it: the spec path, the unit it owns, the base branch it should be on by name, the exact verification
-   commands. Nothing else — no hub access, no authority to merge or push. Use a stronger (mastermind-tier)
-   sub-orchestrator instead of an implementer when the unit is itself a large or risky problem space.
+   Give it: the spec path, the unit it owns, the branch you committed the frozen spec to and no other, the
+   exact verification commands. Nothing else — no hub access, no authority to merge or push. Use a stronger
+   (mastermind-tier) sub-orchestrator instead of an implementer when the unit is itself a large or risky
+   problem space.
 
    `worker run` works — T-5 was built entirely this way, one unit on claude and one on codex. Three things
    it will not tell you, learned by exercising it (T-15):
