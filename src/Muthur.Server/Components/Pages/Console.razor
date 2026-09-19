@@ -1,0 +1,684 @@
+@page "/console"
+@inject AgentService Agents
+@inject HarnessService Harnesses
+@inject RoleService Roles
+@inject ProjectService Projects
+@inject OutboundService Outbound
+@inject TaskService Tasks
+@* The channels this hub has registered, which is what the channel select offers — the same set OutboundService
+   itself resolves a name against, so the page cannot offer one the service would then refuse. *@
+@inject IEnumerable<IOutboundChannel> Channels
+
+@*
+    Founder-only work, done by reading labels instead of remembering flags. Every control calls the same
+    service the CLI calls, with Caller.Founder — the hub runs on the founder's machine and this page is a
+    second client of those services, not a second authority. Nothing here is an endpoint of its own.
+
+    This page deliberately does not inherit LivePanel. These are forms: a live re-render arriving while the
+    founder is halfway through typing would wipe the field, which is the mistake RequestsPanel already keeps
+    per-request drafts to avoid. Re-read after a successful action, never on someone else's event.
+
+    Roles, Projects, Outbound and Tasks follow the Agents section, in that order.
+*@
+
+<PageTitle>MUTHUR · Console</PageTitle>
+
+<div class="page">
+    <div class="stack-scroll">
+        <section class="panel panel-fit">
+            <div class="panel-head">
+                <span class="panel-title">Agents</span>
+                <span class="panel-sub">register a session and take away its paste-line</span>
+            </div>
+            <div class="panel-body">
+                <dl class="kv">
+                    <dt><label for="agent-name">Name</label></dt>
+                    <dd><input id="agent-name" class="input" @bind="_name" @bind:event="oninput" /></dd>
+                    @*
+                        Suggested, never constrained. RegisterAsync takes any non-empty harness, so a fixed
+                        list here would be quietly narrower than the API behind it — and the one it left out
+                        would be whichever harness this organization adopted most recently.
+                    *@
+                    <dt><label for="agent-harness">Harness</label></dt>
+                    <dd>
+                        <input id="agent-harness" class="input" list="agent-harnesses" @bind="_harness" @bind:event="oninput" />
+                        <datalist id="agent-harnesses">
+                            @foreach (var harness in _harnesses)
+                            {
+                                <option value="@harness"></option>
+                            }
+                        </datalist>
+                    </dd>
+                    <dt><label for="agent-model">Model</label></dt>
+                    <dd><input id="agent-model" class="input" @bind="_model" @bind:event="oninput" /></dd>
+                    <dt><label for="agent-tier">Tier</label></dt>
+                    <dd>
+                        <input id="agent-tier" class="input" list="agent-tiers" @bind="_tier" @bind:event="oninput" />
+                        <datalist id="agent-tiers">
+                            @foreach (var tier in _tiers)
+                            {
+                                <option value="@tier"></option>
+                            }
+                        </datalist>
+                    </dd>
+                    <dt><label for="agent-account">Account</label></dt>
+                    <dd><input id="agent-account" class="input" @bind="_account" @bind:event="oninput" placeholder="optional" /></dd>
+                </dl>
+                <div class="btn-row">
+                    <button class="btn btn-go" @onclick="RegisterAsync">Register</button>
+                </div>
+                @if (_error is { } error)
+                {
+                    <div class="error-text">@error</div>
+                }
+                @if (_registered is { } agent && _token is { } token)
+                {
+                    <div class="section-note">Registered @agent.Name (@agent.Harness/@agent.Model, @agent.Tier).</div>
+                    <pre class="code">@PasteLine(agent, token)</pre>
+                }
+            </div>
+        </section>
+
+        <section class="panel panel-fit">
+            <div class="panel-head">
+                <span class="panel-title">Roles</span>
+                <span class="panel-sub">a standing post, described by a brief that is already a file</span>
+            </div>
+            <div class="panel-body">
+                <dl class="kv">
+                    <dt><label for="role-key">Key</label></dt>
+                    <dd><input id="role-key" class="input" value="@_roleKey" @oninput="RoleKeyTyped" /></dd>
+                    <dt><label for="role-brief">Brief file</label></dt>
+                    <dd><input id="role-brief" class="input" @bind="_roleBrief" @bind:event="oninput" placeholder="path from the repository root" /></dd>
+                    @*
+                        Inferred from the key rather than defaulted off, and left on screen either way. Off by
+                        default is the trap the CLI already works around: the hub reads the '-validator' suffix
+                        and nothing else, so 'muthur role define validator --brief-file …' quietly creates a
+                        role that may give no verdicts, and the founder finds out when a gated project will not
+                        let anything past. Inferring gets the founder what they meant; showing the box is what
+                        lets them see what was inferred and say otherwise before pressing Define.
+                    *@
+                    <dt><label for="role-validator">Gives validation verdicts</label></dt>
+                    <dd><input type="checkbox" id="role-validator" checked="@_roleIsValidator" @onchange="ValidatorToggled" /></dd>
+                </dl>
+                <div class="btn-row">
+                    <button class="btn btn-go" @onclick="DefineRoleAsync">Define</button>
+                </div>
+                @if (_roleError is { } roleError)
+                {
+                    <div class="error-text">@roleError</div>
+                }
+                @if (_defined is { } role)
+                {
+                    @* No paste-line: a role is a row in the ledger, and defining one needs no terminal. *@
+                    <div class="section-note">
+                        Defined @role.Key — @(role.IsValidator ? "gives validation verdicts" : "gives no verdicts").
+                    </div>
+                }
+            </div>
+        </section>
+
+        <section class="panel panel-fit">
+            <div class="panel-head">
+                <span class="panel-title">Projects</span>
+                <span class="panel-sub">who must pass before a task lands, and how it lands</span>
+            </div>
+            <div class="panel-body">
+                @if (_projects.Count == 0)
+                {
+                    <div class="empty">no projects yet · muthur project add &lt;key&gt; --repo &lt;path&gt; --founder</div>
+                }
+                @foreach (var p in _projects)
+                {
+                    var key = p.Key;
+                    <div class="agent">
+                        <div class="agent-head">
+                            <span class="agent-name">@key</span>
+                            <span class="agent-model">@p.Name</span>
+                            <span class="pill @(p.LandMode == LandMode.Pr ? "pill-role" : "pill-verdict-yes")">land: @p.LandMode.ToWire()</span>
+                            @if (p.Ungated)
+                            {
+                                <span class="pill pill-ungated">ungated</span>
+                            }
+                        </div>
+                        <div class="agent-meta">
+                            @foreach (var validator in p.RequiredValidators)
+                            {
+                                <span class="pill pill-role">@validator</span>
+                            }
+                            @if (p.Ungated)
+                            {
+                                @*
+                                    T-5's sentence, character for character, and the same element /projects
+                                    renders it in. Two pages describing one state in two wordings is how a
+                                    founder ends up believing the gate is set on a project that has none.
+                                *@
+                                <span class="panel-sub">none required — implemented goes straight to validated</span>
+                            }
+                        </div>
+                        <dl class="kv">
+                            <dt><label for="project-validators-@key">Validators</label></dt>
+                            <dd>
+                                <input id="project-validators-@key" class="input" @bind="_validators[key]" @bind:event="oninput"
+                                       placeholder="comma-separated; empty requires none" />
+                            </dd>
+                            <dt><label for="project-land-@key">Land mode</label></dt>
+                            <dd>
+                                @*
+                                    A closed set, and MUTHUR's own: LandMode has two members and TryParseLandMode
+                                    accepts nothing else, so a field that took free text could only ever hand the
+                                    founder a refusal they could have been spared.
+                                *@
+                                <select id="project-land-@key" class="select" @bind="_land[key]">
+                                    <option value="merge">merge</option>
+                                    <option value="pr">pr</option>
+                                </select>
+                            </dd>
+                        </dl>
+                        <div class="btn-row">
+                            <button class="btn btn-go" @onclick="() => SaveProjectAsync(key)">Save</button>
+                        </div>
+                        @if (_projectError is { } failed && failed.Key == key)
+                        {
+                            <div class="error-text">@failed.Message</div>
+                        }
+                        else if (_saved == key)
+                        {
+                            <div class="section-note">Saved @key.</div>
+                        }
+                    </div>
+                }
+            </div>
+        </section>
+
+        <section class="panel panel-fit">
+            <div class="panel-head">
+                <span class="panel-title">Outbound</span>
+                <span class="panel-sub">the allowlist: everywhere this organization may send</span>
+            </div>
+            <div class="panel-body">
+                @*
+                    The row carries the key, the channel, and whether the founder must approve each message. It
+                    does not carry the address, and adding it here would be the defect this section is shaped
+                    around: an address is routinely the credential itself — a webhook URL is the whole authority
+                    to post as this organization — so a page that echoed one back would put every such secret on
+                    a screen behind one bookmark, and into whatever is recording that screen.
+
+                    "Show the address so the founder can check it" is the obvious wrong idea, and it is wrong
+                    because checking is not what it would buy: an address that reads correctly can still be a
+                    revoked webhook, and one that reads wrong is confirmed wrong by the send that fails. What
+                    actually checks a target is `muthur doctor`, which probes it and names nothing of it.
+
+                    TargetDto has no address field at all, which is why this is cheap to keep: nothing the page
+                    can read back holds one. Do not add a field to that record to make this row richer.
+                *@
+                @if (_targets.Count == 0)
+                {
+                    <div class="empty">no targets yet · nothing can be sent anywhere</div>
+                }
+                @foreach (var target in _targets)
+                {
+                    <div class="agent">
+                        <div class="agent-head">
+                            <span class="agent-name">@target.Key</span>
+                            <span class="agent-model">@target.Channel</span>
+                            @if (target.RequiresFounderApproval)
+                            {
+                                <span class="pill pill-role">founder approves</span>
+                            }
+                        </div>
+                    </div>
+                }
+                <dl class="kv">
+                    <dt><label for="target-key">Key</label></dt>
+                    <dd><input id="target-key" class="input" @bind="_targetKey" @bind:event="oninput" /></dd>
+                    <dt><label for="target-channel">Channel</label></dt>
+                    <dd>
+                        @*
+                            A closed set, and read from the channels this hub has registered rather than listed
+                            here: FindChannel accepts those and refuses everything else, so free text could only
+                            hand the founder a refusal they could have been spared — and a channel added to the
+                            server appears in this list without anyone editing this file. No vendor is named,
+                            because a channel is a way out of the machine and not a model.
+                        *@
+                        <select id="target-channel" class="select" @bind="_targetChannel">
+                            @foreach (var channel in Channels)
+                            {
+                                <option value="@channel.Name">@channel.Name</option>
+                            }
+                        </select>
+                    </dd>
+                    <dt><label for="target-address">Address</label></dt>
+                    <dd>
+                        @*
+                            Write-only. It is typed here, it goes to the service, and it never comes back: the
+                            field is empty after a save even for a target that was just corrected, because there
+                            is nowhere to read the old value from. That is the inconvenience, and it is the
+                            cheaper half of the trade — re-typing a webhook URL costs a minute, and rotating one
+                            that was read off a shared screen costs whoever depends on it.
+                        *@
+                        <input id="target-address" class="input" @bind="_targetAddress" @bind:event="oninput"
+                               placeholder="absolute file path, webhook URL, or owner/repo#number" />
+                    </dd>
+                    @*
+                        Sent every time, because DefineTargetAsync writes it unconditionally on an existing key:
+                        a console that left it out would strip founder approval from a target the first time
+                        anyone corrected its address, silently. `muthur out target --founder-approval` carries it,
+                        and two clients of one operation must not have different safety rules.
+                    *@
+                    <dt><label for="target-approval">Founder approves every message</label></dt>
+                    <dd><input type="checkbox" id="target-approval" @bind="_targetApproval" /></dd>
+                </dl>
+                <div class="btn-row">
+                    <button class="btn btn-go" @onclick="AddTargetAsync">Add</button>
+                </div>
+                @if (_targetError is { } targetError)
+                {
+                    <div class="error-text">@targetError</div>
+                }
+                @if (_addedTarget is { } added)
+                {
+                    @* The key and the channel. Naming the address back here would undo the whole section. *@
+                    <div class="section-note">Allowed @added.Key on @added.Channel.</div>
+                }
+            </div>
+        </section>
+
+        <section class="panel panel-fit">
+            <div class="panel-head">
+                <span class="panel-title">Tasks</span>
+                <span class="panel-sub">one task, named by id — the board is the list</span>
+            </div>
+            <div class="panel-body">
+                @*
+                    No list of tasks here. The board already is that list, and a second rendering of the same
+                    backlog on a page that reloads on its own schedule is how two views of one thing start
+                    disagreeing — and how a founder acts on whichever of them is stale. Typing the id is also
+                    what makes three destructive-looking buttons safe: nothing here can fire against a row the
+                    founder did not name.
+                *@
+                <dl class="kv">
+                    <dt><label for="task-id">Task</label></dt>
+                    <dd><input id="task-id" class="input" @bind="_taskId" @bind:event="oninput" placeholder="T-<number>" /></dd>
+                    <dt><label for="task-priority">Priority</label></dt>
+                    <dd><input type="number" id="task-priority" class="input" @bind="_taskPriority" @bind:event="oninput" /></dd>
+                    @*
+                        Optional, exactly as `muthur task cancel --reason` is optional: CancelTaskRequest takes a
+                        nullable reason and the hub refuses neither. Whether a cancellation must be explained is
+                        the hub's rule to make, so this box validates nothing ahead of it and sends what it has.
+                    *@
+                    <dt><label for="task-reason">Cancel reason</label></dt>
+                    <dd><input id="task-reason" class="input" @bind="_cancelReason" @bind:event="oninput" /></dd>
+                </dl>
+                <div class="btn-row">
+                    <button class="btn btn-go" @onclick="SetTaskPriorityAsync">Set priority</button>
+                    <button class="btn btn-stop" @onclick="CancelTaskAsync">Cancel</button>
+                    <button class="btn" @onclick="ReopenTaskAsync">Reopen</button>
+                </div>
+                @if (_taskError is { } taskError)
+                {
+                    <div class="error-text">@taskError</div>
+                }
+                @if (_taskNote is { } taskNote)
+                {
+                    <div class="section-note">@taskNote</div>
+                }
+            </div>
+        </section>
+    </div>
+</div>
+
+@code {
+    private string _name = "";
+    private string _harness = "";
+    private string _model = "";
+    private string _tier = "";
+    private string _account = "";
+
+    private AgentDto? _registered;
+    private string? _error;
+
+    private IReadOnlyList<string> _harnesses = [];
+    private IReadOnlyList<string> _tiers = [];
+
+    private string _roleKey = "";
+    private string _roleBrief = "";
+    private bool _roleIsValidator;
+    private bool _roleValidatorTouched;
+    private RoleDto? _defined;
+    private string? _roleError;
+
+    private IReadOnlyList<ProjectDto> _projects = [];
+    private readonly Dictionary<string, string> _validators = new(StringComparer.Ordinal);
+    private readonly Dictionary<string, string> _land = new(StringComparer.Ordinal);
+    private string? _saved;
+    private (string Key, string Message)? _projectError;
+
+    private IReadOnlyList<TargetDto> _targets = [];
+    private string _targetKey = "";
+    private string _targetChannel = "";
+    private bool _targetApproval;
+    private TargetDto? _addedTarget;
+    private string? _targetError;
+
+    /// <summary>
+    /// The address being typed, and the only place on this page it ever lives. It is sent and forgotten: nothing
+    /// reads it back, because nothing can — <see cref="TargetDto"/> has no address on it and the service returns
+    /// one of those. <b>Do not add a read path for it</b>, here or in the contract: an outbound address is as
+    /// often as not the credential itself, and a field that could be re-rendered would eventually be rendered.
+    /// </summary>
+    private string _targetAddress = "";
+
+    private string _taskId = "";
+    private int _taskPriority;
+    private string _cancelReason = "";
+    private string? _taskNote;
+    private string? _taskError;
+
+    /// <summary>
+    /// The registration token, shown exactly once and then gone. The hub keeps only its hash, so once this
+    /// field is cleared the string cannot be recovered from anywhere — which is the point, and the same
+    /// contract the CLI keeps when it writes the token and never prints it again.
+    /// <para>
+    /// It is cleared by <see cref="ClearOnce"/> before any other action on this page runs, and it dies with
+    /// the circuit when the page is left or reloaded. <b>Do not persist it</b>: not in a field that survives
+    /// a reload, not in browser storage, not in the ledger, not "just until the founder has copied it". The
+    /// next reader's instinct is to keep it for convenience, and that instinct is the defect — it turns a
+    /// credential the founder saw once into one that is sitting somewhere nobody is watching.
+    /// </para>
+    /// </summary>
+    private string? _token;
+
+    protected override async Task OnInitializedAsync()
+    {
+        await SuggestAsync();
+        await LoadProjectsAsync();
+        await LoadTargetsAsync();
+        // The select needs something standing before the founder touches it, and the first registered channel is
+        // as good an answer as this page can give: the order is the container's, not a preference of this file's.
+        _targetChannel = Channels.Select(c => c.Name).FirstOrDefault() ?? "";
+    }
+
+    /// <summary>
+    /// What to offer in the harness and tier fields: the harnesses and tiers this organization already uses.
+    /// Both come from the founder's own <c>harnesses.json</c>, read through the service <c>muthur harness
+    /// tiers</c> reads it with, plus whatever the agents in the ledger were actually registered as — so
+    /// nothing on this page has to name a harness itself, and a harness adopted after this file was written
+    /// appears in the list the moment one agent runs on it.
+    /// <para>
+    /// On a hub with no agents and an untouched catalog the list is short. That is honest: it says what this
+    /// organization uses, and the field is free text either way.
+    /// </para>
+    /// </summary>
+    private async Task SuggestAsync()
+    {
+        var registered = await Agents.ListAsync();
+        var harnesses = registered.Select(a => a.Harness);
+        var tiers = registered.Select(a => a.Tier).OfType<string>();
+        try
+        {
+            var catalog = await Harnesses.TiersAsync();
+            harnesses = harnesses.Concat(catalog.SelectMany(t => t.Candidates).Select(c => c.Harness));
+            tiers = tiers.Concat(catalog.Select(t => t.Tier));
+        }
+        catch (Muthur.Core.MuthurException)
+        {
+            // The catalog is a file the founder edits by hand and a typo in it must not take this page down.
+            // The Tiers panel on /operations is where that error is reported and fixed; here it costs only
+            // suggestions, and both fields go on accepting anything that is typed into them.
+        }
+        _harnesses = Suggestions(harnesses);
+        _tiers = Suggestions(tiers);
+    }
+
+    private static IReadOnlyList<string> Suggestions(IEnumerable<string> values) =>
+        values.Where(v => v.Length > 0).Distinct(StringComparer.Ordinal).Order(StringComparer.Ordinal).ToList();
+
+    private async Task RegisterAsync()
+    {
+        ClearOnce();
+        _error = null;
+        try
+        {
+            var registered = await Agents.RegisterAsync(
+                Caller.Founder,
+                new RegisterAgentRequest(_name, _harness, _model, _tier, _account is { Length: > 0 } a ? a : null));
+            _registered = registered.Agent;
+            _token = registered.Token;
+            // Re-read after a successful action and at no other time: an agent on a harness nobody had used
+            // before is exactly the one the next registration will want suggested.
+            await SuggestAsync();
+        }
+        catch (Muthur.Core.MuthurException ex)
+        {
+            // The service's own words. A console that reworded a refusal would drift from what the CLI says
+            // about the same one, and the founder would have two accounts of a single rule.
+            _error = ex.Message;
+        }
+    }
+
+    /// <summary>
+    /// What the founder pastes into a terminal to become the agent just registered. The third line is the
+    /// harness this agent was registered on and never a fixed one: a session started by typing the name of
+    /// some other harness is a different agent from the one the ledger now holds this token for.
+    /// </summary>
+    private static string PasteLine(AgentDto agent, string token) =>
+        $"""
+        $env:MUTHUR_AGENT = '{agent.Name}'
+        $env:MUTHUR_TOKEN = '{token}'
+        {agent.Harness,-18}# then: /muthur-orchestrate next
+        """;
+
+    // -- Roles --------------------------------------------------------------------------------------------
+
+    /// <summary>
+    /// Whether a role key says, by itself, that its holders may give validation verdicts. The hub's own rule,
+    /// read forward: <c>RoleService</c> sets the flag for a key ending in <c>-validator</c> and for nothing
+    /// else, so a founder who types the bare key <c>validator</c> gets a role that cannot validate — the trap
+    /// this control exists to close. A plain function of the key, and tested as one: the checkbox it drives
+    /// lives behind a SignalR circuit no test can click.
+    /// </summary>
+    internal static bool InfersValidator(string key)
+    {
+        var normalized = key.Trim().ToLowerInvariant();
+        return normalized == "validator" || normalized.EndsWith("-validator", StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    /// What the checkbox should read after a keystroke in the key field. Inference is a <em>default</em>, for a
+    /// key nobody has ruled on yet, and it stops the moment the founder touches the box: an override that the
+    /// next keystroke revokes is not an override. Without the latch a founder who unticks the box and then goes
+    /// back to fix a typo in the key gets it silently re-ticked and defines the validator they just declined —
+    /// and the control exists so they can see <em>and</em> disagree with what was inferred, not only see it.
+    /// </summary>
+    internal static bool ValidatorAfterKeystroke(string key, bool current, bool touched) =>
+        touched ? current : InfersValidator(key);
+
+    /// <summary>Re-infers as the key is typed, until the founder has said what they want.</summary>
+    private void RoleKeyTyped(ChangeEventArgs e)
+    {
+        _roleKey = e.Value?.ToString() ?? "";
+        _roleIsValidator = ValidatorAfterKeystroke(_roleKey, _roleIsValidator, _roleValidatorTouched);
+    }
+
+    /// <summary>Touching the box is the founder ruling on this entry, and it is what ends the inference.</summary>
+    private void ValidatorToggled(ChangeEventArgs e)
+    {
+        _roleIsValidator = e.Value is true;
+        _roleValidatorTouched = true;
+    }
+
+    private async Task DefineRoleAsync()
+    {
+        ClearOnce();
+        _roleError = null;
+        _defined = null;
+        if (await ReadBriefAsync(_roleBrief) is not { } brief) return;
+        try
+        {
+            _defined = await Roles.DefineAsync(Caller.Founder, new DefineRoleRequest(_roleKey, brief, _roleIsValidator));
+            // The ruling was about the role just defined. The next key typed into this field is a different
+            // entry and infers again, or the founder's one refusal would quietly govern every role after it.
+            _roleValidatorTouched = false;
+        }
+        catch (Muthur.Core.MuthurException ex)
+        {
+            _roleError = ex.Message;
+        }
+    }
+
+    /// <summary>
+    /// The brief's markdown, or null with <see cref="_roleError"/> already set. A brief is a committed file and
+    /// <c>role define --brief-file</c> takes its path from the repository root, so the path is resolved against
+    /// the repositories the hub already knows and against nothing else: this control reads the founder's disk,
+    /// and a path free to climb out of a checkout with <c>..</c> would let a browser tab read anything on it.
+    /// </summary>
+    private async Task<string?> ReadBriefAsync(string path)
+    {
+        if (path.Trim() is not { Length: > 0 } relative)
+        {
+            _roleError = "A role needs a brief: the path of its markdown file, from the repository root.";
+            return null;
+        }
+        var repositories = _projects.Select(p => p.RepoPath).Distinct(StringComparer.Ordinal).ToList();
+        foreach (var root in repositories)
+        {
+            var full = Path.GetFullPath(Path.Combine(root, relative));
+            if (IsInside(root, full) && File.Exists(full)) return await File.ReadAllTextAsync(full);
+        }
+        _roleError = repositories.Count == 0
+            ? "No project exists yet, so there is no repository to read a brief from. muthur project add <key> --repo <path> --founder"
+            : $"No file at '{relative}' in {string.Join(" or ", repositories)}. The path is read from the repository root and stays inside it.";
+        return null;
+    }
+
+    private static bool IsInside(string root, string full)
+    {
+        var trimmed = Path.GetFullPath(root).TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
+        var comparison = OperatingSystem.IsWindows() ? StringComparison.OrdinalIgnoreCase : StringComparison.Ordinal;
+        return full.Length > trimmed.Length
+            && full.StartsWith(trimmed, comparison)
+            && (full[trimmed.Length] == Path.DirectorySeparatorChar || full[trimmed.Length] == Path.AltDirectorySeparatorChar);
+    }
+
+    // -- Projects -----------------------------------------------------------------------------------------
+
+    /// <summary>
+    /// Re-read after a successful save and at no other time, and the fields re-seeded from what came back —
+    /// so a validator the service dropped as a duplicate, or trimmed, shows the founder the state it actually
+    /// stored rather than the text they typed at it.
+    /// </summary>
+    private async Task LoadProjectsAsync()
+    {
+        _projects = await Projects.ListAsync();
+        foreach (var project in _projects)
+        {
+            _validators[project.Key] = string.Join(", ", project.RequiredValidators);
+            _land[project.Key] = project.LandMode.ToWire();
+        }
+    }
+
+    private async Task SaveProjectAsync(string key)
+    {
+        ClearOnce();
+        _projectError = null;
+        _saved = null;
+        try
+        {
+            // An empty box is an empty list, never null: null leaves the gate alone, and "I cleared the box and
+            // nothing changed" is exactly the silence this control is here to break.
+            var validators = _validators[key].Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+            // The select offers only the two words the parser takes, so this never answers false; if it
+            // somehow did, TryParseLandMode has already left `mode` at merge, the hub's own default.
+            _ = Wire.TryParseLandMode(_land[key], out var mode);
+            await Projects.UpdateAsync(Caller.Founder, key, new UpdateProjectRequest(LandMode: mode, RequiredValidators: validators));
+            _saved = key;
+            await LoadProjectsAsync();
+        }
+        catch (Muthur.Core.MuthurException ex)
+        {
+            // The service's own words, and the boxes keep what was typed into them: a refused validator name is
+            // something to correct, not to type again from the beginning.
+            _projectError = (key, ex.Message);
+        }
+    }
+
+    // -- Outbound -----------------------------------------------------------------------------------------
+
+    private async Task LoadTargetsAsync() => _targets = await Outbound.TargetsAsync();
+
+    private async Task AddTargetAsync()
+    {
+        ClearOnce();
+        _targetError = null;
+        _addedTarget = null;
+        try
+        {
+            _addedTarget = await Outbound.DefineTargetAsync(
+                Caller.Founder, new DefineTargetRequest(_targetKey, _targetChannel, _targetAddress, _targetApproval));
+            // Written, then dropped. The founder saw what they typed; from here the hub is the only holder of it,
+            // which is the state this control exists to reach rather than a tidiness the page performs.
+            _targetAddress = "";
+            await LoadTargetsAsync();
+        }
+        catch (Muthur.Core.MuthurException ex)
+        {
+            // The service's own words, and the address stays in the box: a refusal about the key or the channel
+            // must not cost the founder a credential they now have to fetch again from wherever it came from.
+            _targetError = ex.Message;
+        }
+    }
+
+    // -- Tasks --------------------------------------------------------------------------------------------
+
+    private Task SetTaskPriorityAsync() => ActOnTaskAsync(async () =>
+    {
+        var task = await Tasks.SetPriorityAsync(Caller.Founder, _taskId, new SetPriorityRequest(_taskPriority));
+        return $"{task.Id} is priority {task.Priority}.";
+    });
+
+    private Task CancelTaskAsync() => ActOnTaskAsync(async () =>
+    {
+        // Blank is no reason, not an empty one, which is what the CLI sends when --reason is left off.
+        var reason = _cancelReason.Trim() is { Length: > 0 } text ? text : null;
+        var task = await Tasks.CancelAsync(Caller.Founder, _taskId, new CancelTaskRequest(reason));
+        return $"{task.Id} is {task.State.ToWire()}.";
+    });
+
+    private Task ReopenTaskAsync() => ActOnTaskAsync(async () =>
+    {
+        var task = await Tasks.ReopenAsync(Caller.Founder, _taskId);
+        return $"{task.Id} is {task.State.ToWire()}.";
+    });
+
+    /// <summary>
+    /// One shape for all three buttons: the service's answer, or the service's refusal, and the fields keep what
+    /// was typed either way — a task id refused because the task is in the wrong state is one to press a
+    /// different button on, not one to type again.
+    /// </summary>
+    private async Task ActOnTaskAsync(Func<Task<string>> act)
+    {
+        ClearOnce();
+        _taskError = null;
+        _taskNote = null;
+        try
+        {
+            _taskNote = await act();
+        }
+        catch (Muthur.Core.MuthurException ex)
+        {
+            _taskError = ex.Message;
+        }
+    }
+
+    /// <summary>
+    /// Called first by every action on this page, including the ones that come after Agents: the one-shot
+    /// token belongs to the action that produced it and to no later one, so pressing any other control is
+    /// what takes it off the screen.
+    /// </summary>
+    private void ClearOnce()
+    {
+        _registered = null;
+        _token = null;
+    }
+}

@@ -26,6 +26,7 @@ public static class AgentEndpoints
         app.MapGet(Routes.AgentMe, (HttpContext http, AgentService agents, CancellationToken ct) =>
             agents.GetAsync(http.GetCaller().RequireAgent(), ct));
 
-        app.MapGet(Routes.Agents, (AgentService agents, CancellationToken ct) => agents.ListAsync(ct));
+        app.MapGet(Routes.Agents, (bool? all, AgentService agents, CancellationToken ct) =>
+            agents.RosterAsync(all ?? false, ct));
     }
 }
