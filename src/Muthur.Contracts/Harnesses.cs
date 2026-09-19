@@ -1,6 +1,6 @@
 namespace Muthur.Contracts;
 
-public sealed record HarnessCandidateDto(string Harness, string Model, string? Account, bool Limited, DateTimeOffset? LimitedUntil);
+public sealed record HarnessCandidateDto(string Harness, string Model, string? Account, bool Limited, DateTimeOffset? LimitedUntil, string? ReasoningEffort);
 
 public sealed record TierDto(string Tier, IReadOnlyList<HarnessCandidateDto> Candidates);
 
