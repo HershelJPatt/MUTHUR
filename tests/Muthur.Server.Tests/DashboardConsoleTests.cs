@@ -53,7 +53,21 @@ public sealed class DashboardConsoleTests : IDisposable
         Assert.Matches("<input id=\"agent-tier\"[^>]*list=\"agent-tiers\"", page);
         Assert.Contains("<datalist id=\"agent-harnesses\">", page);
         Assert.Contains("<datalist id=\"agent-tiers\">", page);
-        Assert.DoesNotContain("<select", page, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain("<select", AgentsSection(page), StringComparison.OrdinalIgnoreCase);
+    }
+
+    /// <summary>
+    /// The Agents section alone, which is what the rule above is about. Harness and tier are open sets, and a
+    /// closed control would be narrower than the API behind them; later sections on this page choose from sets
+    /// that really are closed — a project's land mode is MUTHUR's own two-member enum, and nothing else parses —
+    /// so a &lt;select&gt; is the right control there and this assertion must not reach it.
+    /// </summary>
+    private static string AgentsSection(string page)
+    {
+        var start = page.IndexOf("class=\"panel-title\">Agents<", StringComparison.Ordinal);
+        Assert.True(start >= 0, "the console renders no Agents section");
+        var end = page.IndexOf("<section", start, StringComparison.Ordinal);
+        return end < 0 ? page[start..] : page[start..end];
     }
 
     /// <summary>

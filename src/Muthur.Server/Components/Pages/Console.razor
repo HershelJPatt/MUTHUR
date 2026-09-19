@@ -1,6 +1,8 @@
 @page "/console"
 @inject AgentService Agents
 @inject HarnessService Harnesses
+@inject RoleService Roles
+@inject ProjectService Projects
 
 @*
     Founder-only work, done by reading labels instead of remembering flags. Every control calls the same
@@ -71,6 +73,118 @@
                 }
             </div>
         </section>
+
+        <section class="panel panel-fit">
+            <div class="panel-head">
+                <span class="panel-title">Roles</span>
+                <span class="panel-sub">a standing post, described by a brief that is already a file</span>
+            </div>
+            <div class="panel-body">
+                <dl class="kv">
+                    <dt><label for="role-key">Key</label></dt>
+                    <dd><input id="role-key" class="input" value="@_roleKey" @oninput="RoleKeyTyped" /></dd>
+                    <dt><label for="role-brief">Brief file</label></dt>
+                    <dd><input id="role-brief" class="input" @bind="_roleBrief" @bind:event="oninput" placeholder="path from the repository root" /></dd>
+                    @*
+                        Inferred from the key rather than defaulted off, and left on screen either way. Off by
+                        default is the trap the CLI already works around: the hub reads the '-validator' suffix
+                        and nothing else, so 'muthur role define validator --brief-file …' quietly creates a
+                        role that may give no verdicts, and the founder finds out when a gated project will not
+                        let anything past. Inferring gets the founder what they meant; showing the box is what
+                        lets them see what was inferred and say otherwise before pressing Define.
+                    *@
+                    <dt><label for="role-validator">Gives validation verdicts</label></dt>
+                    <dd><input type="checkbox" id="role-validator" @bind="_roleIsValidator" /></dd>
+                </dl>
+                <div class="btn-row">
+                    <button class="btn btn-go" @onclick="DefineRoleAsync">Define</button>
+                </div>
+                @if (_roleError is { } roleError)
+                {
+                    <div class="error-text">@roleError</div>
+                }
+                @if (_defined is { } role)
+                {
+                    @* No paste-line: a role is a row in the ledger, and defining one needs no terminal. *@
+                    <div class="section-note">
+                        Defined @role.Key — @(role.IsValidator ? "gives validation verdicts" : "gives no verdicts").
+                    </div>
+                }
+            </div>
+        </section>
+
+        <section class="panel panel-fit">
+            <div class="panel-head">
+                <span class="panel-title">Projects</span>
+                <span class="panel-sub">who must pass before a task lands, and how it lands</span>
+            </div>
+            <div class="panel-body">
+                @if (_projects.Count == 0)
+                {
+                    <div class="empty">no projects yet · muthur project add &lt;key&gt; --repo &lt;path&gt; --founder</div>
+                }
+                @foreach (var p in _projects)
+                {
+                    var key = p.Key;
+                    <div class="agent">
+                        <div class="agent-head">
+                            <span class="agent-name">@key</span>
+                            <span class="agent-model">@p.Name</span>
+                            <span class="pill @(p.LandMode == LandMode.Pr ? "pill-role" : "pill-verdict-yes")">land: @p.LandMode.ToWire()</span>
+                            @if (p.Ungated)
+                            {
+                                <span class="pill pill-ungated">ungated</span>
+                            }
+                        </div>
+                        <div class="agent-meta">
+                            @foreach (var validator in p.RequiredValidators)
+                            {
+                                <span class="pill pill-role">@validator</span>
+                            }
+                            @if (p.Ungated)
+                            {
+                                @*
+                                    T-5's sentence, character for character, and the same element /projects
+                                    renders it in. Two pages describing one state in two wordings is how a
+                                    founder ends up believing the gate is set on a project that has none.
+                                *@
+                                <span class="panel-sub">none required — implemented goes straight to validated</span>
+                            }
+                        </div>
+                        <dl class="kv">
+                            <dt><label for="project-validators-@key">Validators</label></dt>
+                            <dd>
+                                <input id="project-validators-@key" class="input" @bind="_validators[key]" @bind:event="oninput"
+                                       placeholder="comma-separated; empty requires none" />
+                            </dd>
+                            <dt><label for="project-land-@key">Land mode</label></dt>
+                            <dd>
+                                @*
+                                    A closed set, and MUTHUR's own: LandMode has two members and TryParseLandMode
+                                    accepts nothing else, so a field that took free text could only ever hand the
+                                    founder a refusal they could have been spared.
+                                *@
+                                <select id="project-land-@key" class="select" @bind="_land[key]">
+                                    <option value="merge">merge</option>
+                                    <option value="pr">pr</option>
+                                </select>
+                            </dd>
+                        </dl>
+                        <div class="btn-row">
+                            <button class="btn btn-go" @onclick="() => SaveProjectAsync(key)">Save</button>
+                        </div>
+                        @if (_projectError is { } failed && failed.Key == key)
+                        {
+                            <div class="error-text">@failed.Message</div>
+                        }
+                        else if (_saved == key)
+                        {
+                            <div class="section-note">Saved @key.</div>
+                        }
+                    </div>
+                }
+            </div>
+        </section>
     </div>
 </div>
 
@@ -87,6 +201,18 @@
     private IReadOnlyList<string> _harnesses = [];
     private IReadOnlyList<string> _tiers = [];
 
+    private string _roleKey = "";
+    private string _roleBrief = "";
+    private bool _roleIsValidator;
+    private RoleDto? _defined;
+    private string? _roleError;
+
+    private IReadOnlyList<ProjectDto> _projects = [];
+    private readonly Dictionary<string, string> _validators = new(StringComparer.Ordinal);
+    private readonly Dictionary<string, string> _land = new(StringComparer.Ordinal);
+    private string? _saved;
+    private (string Key, string Message)? _projectError;
+
     /// <summary>
     /// The registration token, shown exactly once and then gone. The hub keeps only its hash, so once this
     /// field is cleared the string cannot be recovered from anywhere — which is the point, and the same
@@ -101,7 +227,11 @@
     /// </summary>
     private string? _token;
 
-    protected override Task OnInitializedAsync() => SuggestAsync();
+    protected override async Task OnInitializedAsync()
+    {
+        await SuggestAsync();
+        await LoadProjectsAsync();
+    }
 
     /// <summary>
     /// What to offer in the harness and tier fields: the harnesses and tiers this organization already uses.
@@ -172,6 +302,120 @@
         $env:MUTHUR_TOKEN = '{token}'
         {agent.Harness,-18}# then: /muthur-orchestrate next
         """;
+
+    // -- Roles --------------------------------------------------------------------------------------------
+
+    /// <summary>
+    /// Whether a role key says, by itself, that its holders may give validation verdicts. The hub's own rule,
+    /// read forward: <c>RoleService</c> sets the flag for a key ending in <c>-validator</c> and for nothing
+    /// else, so a founder who types the bare key <c>validator</c> gets a role that cannot validate — the trap
+    /// this control exists to close. A plain function of the key, and tested as one: the checkbox it drives
+    /// lives behind a SignalR circuit no test can click.
+    /// </summary>
+    internal static bool InfersValidator(string key)
+    {
+        var normalized = key.Trim().ToLowerInvariant();
+        return normalized == "validator" || normalized.EndsWith("-validator", StringComparison.Ordinal);
+    }
+
+    /// <summary>Re-infers as the key is typed, so what the box shows is always what this key would mean.</summary>
+    private void RoleKeyTyped(ChangeEventArgs e)
+    {
+        _roleKey = e.Value?.ToString() ?? "";
+        _roleIsValidator = InfersValidator(_roleKey);
+    }
+
+    private async Task DefineRoleAsync()
+    {
+        ClearOnce();
+        _roleError = null;
+        _defined = null;
+        if (await ReadBriefAsync(_roleBrief) is not { } brief) return;
+        try
+        {
+            _defined = await Roles.DefineAsync(Caller.Founder, new DefineRoleRequest(_roleKey, brief, _roleIsValidator));
+        }
+        catch (Muthur.Core.MuthurException ex)
+        {
+            _roleError = ex.Message;
+        }
+    }
+
+    /// <summary>
+    /// The brief's markdown, or null with <see cref="_roleError"/> already set. A brief is a committed file and
+    /// <c>role define --brief-file</c> takes its path from the repository root, so the path is resolved against
+    /// the repositories the hub already knows and against nothing else: this control reads the founder's disk,
+    /// and a path free to climb out of a checkout with <c>..</c> would let a browser tab read anything on it.
+    /// </summary>
+    private async Task<string?> ReadBriefAsync(string path)
+    {
+        if (path.Trim() is not { Length: > 0 } relative)
+        {
+            _roleError = "A role needs a brief: the path of its markdown file, from the repository root.";
+            return null;
+        }
+        var repositories = _projects.Select(p => p.RepoPath).Distinct(StringComparer.Ordinal).ToList();
+        foreach (var root in repositories)
+        {
+            var full = Path.GetFullPath(Path.Combine(root, relative));
+            if (IsInside(root, full) && File.Exists(full)) return await File.ReadAllTextAsync(full);
+        }
+        _roleError = repositories.Count == 0
+            ? "No project exists yet, so there is no repository to read a brief from. muthur project add <key> --repo <path> --founder"
+            : $"No file at '{relative}' in {string.Join(" or ", repositories)}. The path is read from the repository root and stays inside it.";
+        return null;
+    }
+
+    private static bool IsInside(string root, string full)
+    {
+        var trimmed = Path.GetFullPath(root).TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
+        var comparison = OperatingSystem.IsWindows() ? StringComparison.OrdinalIgnoreCase : StringComparison.Ordinal;
+        return full.Length > trimmed.Length
+            && full.StartsWith(trimmed, comparison)
+            && (full[trimmed.Length] == Path.DirectorySeparatorChar || full[trimmed.Length] == Path.AltDirectorySeparatorChar);
+    }
+
+    // -- Projects -----------------------------------------------------------------------------------------
+
+    /// <summary>
+    /// Re-read after a successful save and at no other time, and the fields re-seeded from what came back —
+    /// so a validator the service dropped as a duplicate, or trimmed, shows the founder the state it actually
+    /// stored rather than the text they typed at it.
+    /// </summary>
+    private async Task LoadProjectsAsync()
+    {
+        _projects = await Projects.ListAsync();
+        foreach (var project in _projects)
+        {
+            _validators[project.Key] = string.Join(", ", project.RequiredValidators);
+            _land[project.Key] = project.LandMode.ToWire();
+        }
+    }
+
+    private async Task SaveProjectAsync(string key)
+    {
+        ClearOnce();
+        _projectError = null;
+        _saved = null;
+        try
+        {
+            // An empty box is an empty list, never null: null leaves the gate alone, and "I cleared the box and
+            // nothing changed" is exactly the silence this control is here to break.
+            var validators = _validators[key].Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+            // The select offers only the two words the parser takes, so this never answers false; if it
+            // somehow did, TryParseLandMode has already left `mode` at merge, the hub's own default.
+            _ = Wire.TryParseLandMode(_land[key], out var mode);
+            await Projects.UpdateAsync(Caller.Founder, key, new UpdateProjectRequest(LandMode: mode, RequiredValidators: validators));
+            _saved = key;
+            await LoadProjectsAsync();
+        }
+        catch (Muthur.Core.MuthurException ex)
+        {
+            // The service's own words, and the boxes keep what was typed into them: a refused validator name is
+            // something to correct, not to type again from the beginning.
+            _projectError = (key, ex.Message);
+        }
+    }
 
     /// <summary>
     /// Called first by every action on this page, including the ones that come after Agents: the one-shot
