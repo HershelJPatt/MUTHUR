@@ -220,3 +220,57 @@ brief entry that is easy to get wrong.
   starting with a role.
 - **Once T-46 lands**, asserting the knowledge brief arrives through a real `kit install` is one line in
   `KitInstallTests`. Left out here so the two tasks do not collide.
+
+## Proof (2026-09-19)
+
+Integrated branch, `TEMP`/`TMP` on a fresh scratch directory:
+
+```
+dotnet build   →  0 Warning(s), 0 Error(s)
+dotnet test
+  Muthur.Launch.Tests    23/23
+  Muthur.Core.Tests      3708/3708
+  Muthur.Cli.Tests       57/57      (55 before this task)
+  Muthur.Server.Tests    233/233
+```
+
+`kit/briefs/knowledge-oncall.md` and `briefs/knowledge-oncall.md` are the same git blob, not merely equal on
+disk.
+
+The install proof, with a CLI built from this branch:
+
+```
+claude   brief=True status=created
+         define: muthur role define knowledge-oncall --brief-file briefs/knowledge-oncall.md --founder
+         validator: False
+codex    brief=True status=created   (same define line, validator False)
+generic  brief=True status=created   (same define line, validator False)
+```
+
+No `--validator` flag, as intended — the role gives no verdicts.
+
+Re-running `kit install` over a founder's edit, which is the one thing about a `create` entry that is easy to
+get wrong:
+
+```
+re-install status: kept
+founder edit survived: True
+```
+
+The manifest-removal check, run by the implementer: deleting the entry from `kit/codex/kit.json` alone failed
+`Every_harness_ships_the_same_briefs` with *"briefs/knowledge-oncall.md is missing from codex"*, and restoring
+it returned the suite to green.
+
+`muthur log --since <seq>`, the one command string in the brief that could not be checked by reading the
+repository, is real: `--since  Only events after this sequence number.`
+
+No browser was used to validate this task.
+
+## Amendment 1 — two underspecified points, both resolved in the implementer's favour (2026-09-19)
+
+- **Length.** The spec said to compare `kit/briefs/observability-oncall.md` "(41 lines) for length". That was a
+  reference, not a target, and the brief is 53 lines. It carries eight required points against
+  observability's four, and the implementer cut it twice rather than pad it. Nothing in it is filler; a line
+  count is not a quality bar and should not have been written as if it were one.
+- **Which roster the second test checks.** The spec said "assert that set contains", singular, without saying
+  whose. Checking all three costs nothing and makes the test independent of the first one passing. Kept.
