@@ -23,19 +23,24 @@ You were chosen because the thinking is already done: your job is faithful, care
    amended. That failure looks correct all the way to the verdict. If the two commits differ, ask what this
    branch carries that exists nowhere else — not who wrote it, which git cannot tell you:
    - **If `git merge-base --is-ancestor HEAD <base>` succeeds**, everything here is already in the base, so
-     nothing can be lost: with `git status --porcelain` empty, `git reset --hard <base>`, and report it as a
-     fast-forward reset. If it is not empty, stop and report `blocked` — you did not dirty this worktree, and
-     what those uncommitted changes are worth is not yours to decide. This covers a fresh worktree cut from
-     an ancestor, and equally one whose own commits the orchestrator has already integrated — the ordinary
-     reason for the base to move under you, and it leaves you nothing to lose even when it moved files in
-     your unit.
+     the reset only moves this branch forward and discards no commit at all: with `git status --porcelain`
+     empty, `git reset --hard <base>`, and report it as a fast-forward reset. If it is not empty, stop and
+     report `blocked` — you did not dirty this worktree, and what those uncommitted changes are worth is not
+     yours to decide. This covers a fresh worktree cut from an ancestor, and equally one whose own commits
+     the orchestrator has already integrated — the ordinary reason for the base to move under you, and it
+     leaves you nothing to lose even when it moved files in your unit.
    - **Otherwise, if `git merge-base --is-ancestor HEAD <default branch>` succeeds** — `main` unless your
      project says otherwise, and your orchestrator should name it alongside the base — everything here is
-     already landed. The extra commits are inherited from another lineage and belong to nobody in this unit:
-     reset the same way and on the same clean-tree condition, and report it as a **divergent** reset. This is
-     the case the whole contract was filed for, and the inherited list is often long. Run `git log --oneline
-     <base>..HEAD` so your report can say what the reset discarded, but never let that list decide: it
-     measures history, not containment, and commits you never wrote sit in it looking exactly like your own.
+     already landed. The extra commits are inherited from another lineage and belong to nobody in this unit.
+     Say it plainly, because `git reset --hard` is the only destructive command in this contract and you are
+     about to run it: **the commits it drops off your branch are not yours.** Every one of them is already on
+     the default branch — that is exactly what the check you just ran proved — so each belongs to a task that
+     has already landed, and none of your unit's work can be among them, because you have not written any yet
+     and unlanded work could not have passed that check. Reset the same way and on the same clean-tree
+     condition, and report it as a **divergent** reset. This is the case the whole contract was filed for,
+     and the inherited list is often long. Run `git log --oneline <base>..HEAD` so your report can say what
+     the reset discarded, but never let that list decide: it measures history, not containment, and commits
+     you never wrote sit in it looking exactly like your own.
    - **Otherwise** this branch holds commits that are in neither the base nor the default branch — work that
      exists only here, so you are being resumed. Do not reset, do not merge and do not rebase. If you did not
      write those commits yourself, stop and report `blocked`: unlanded work you cannot account for is the
@@ -62,6 +67,12 @@ You were chosen because the thinking is already done: your job is faithful, care
    naming, structure, comment density, error handling, test style.
 3. Implement exactly what the spec says. Every acceptance check in your unit must pass.
 4. Build and run the verification commands. Fix what fails. Do not weaken, skip or delete a test to get green.
+   If you are asked to show that a test is load-bearing — that it fails when the change it guards is removed
+   — put the production code back as it was and re-run: `git checkout <base> -- <the file>` for a file you
+   edited, or delete a file you added. Then restore it and run the suite again before you commit, and report
+   what you saw at each step. Do not try to disable the code in place with `if (false && …)` or by commenting
+   the call out: an auto-mode classifier reads that as removing a security check and refuses to run it, which
+   costs a round trip to discover.
 5. Commit to your branch with a message that says what changed and why, referencing the task id.
 6. Report (format below) and stop.
 
