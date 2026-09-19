@@ -398,3 +398,50 @@ And on why the residual gap is acceptable now when option B was not this morning
 
 Both go in `CLAUDE.md` under `## Commands`, in that file's voice — it is terse and every line earns its
 place, so this is two or three sentences, not a section.
+
+## Proof (2026-09-19)
+
+Rebased onto `main` at `a18831f`, verified by the orchestrator with `TEMP`/`TMP` on a fresh scratch root:
+
+```
+dotnet build   →  0 Warning(s), 0 Error(s)
+dotnet test
+  Muthur.Launch.Tests    28/28
+  Muthur.Core.Tests      3736/3736
+  Muthur.Cli.Tests       188/188
+  Muthur.Server.Tests    453/453
+plain dotnet test exit = 0
+
+muthur-tests: 378 removed, 0 kept (logged an error), 0 could not be removed.
+leftovers: 0
+```
+
+`0 could not be removed` across 378 directories is the number the founder's reversal rests on: after the
+handle fixes and this retry, the event the abandoned mechanism would have reported is expected to fire never.
+
+### What landed
+
+- **Unit A's bounded retry** — three attempts, 50 ms then 100 ms, catching only `IOException` and
+  `UnauthorizedAccessException`, zero cost on the happy path. Its comment draws the founder's distinction
+  between a budget against an external resource and synchronization with the system under test, so the next
+  reader does not delete the sleep as a house-rule violation.
+- **The summary, unchanged.**
+- **`CLAUDE.md`'s two sentences**, beside the `dotnet test` they describe.
+
+### What did not
+
+- **Unit B's throw.** `task/T-58-b-fail-the-test` is unmerged and stays as the record: it works, and it fails
+  a legitimate restart test 3/3.
+- **`ExitCode()` and its assignment**, removed. Three call sites, not the two Amendment 3 predicted.
+
+### Ratified from Unit C
+
+- Renaming the two tests off `reddens_the_run` and `exit_code`. Leaving those words would have preserved the
+  abandoned intent in the test names while removing it from the code.
+- A sentence at the `ProcessExit` handler saying `dotnet test` derives its exit code from test results, so a
+  code set there never reaches the shell — without it a future reader sees a handler that only prints and
+  re-adds the assignment.
+- **Declining to touch `TestRepo.cs`.** This spec asserted the `ExitCode` grep would come back empty; it does
+  not, because `TestRepo.cs` has an unrelated `process.ExitCode` from a git subprocess. The implementer
+  reported that the stated form of the check was wrong while the measurement it was reaching for passed,
+  rather than editing an unrelated file to make a brief true.
