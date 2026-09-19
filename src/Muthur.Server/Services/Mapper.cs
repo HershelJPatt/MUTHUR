@@ -11,7 +11,7 @@ public static class Mapper
         new(p.Id, p.Key, p.Name, p.RepoPath, p.DefaultBranch, p.LandMode, p.RequiredValidators, p.CreatedAt, p.IngestSources);
 
     public static AgentDto ToDto(this Agent a, LeasePolicy leases, DateTimeOffset now, IReadOnlyList<string> roles, int openTasks) =>
-        new(a.Id, a.Name, leases.StatusOf(a, now), a.LastHeartbeat, a.LimitedUntil, a.Summary, a.Harness, a.Model, a.Tier, a.Account, roles, openTasks);
+        new(a.Id, a.Name, leases.StatusOf(a, now), a.LastHeartbeat, a.LimitedUntil, a.Summary, a.Harness, a.Model, a.Tier, a.Account, roles, openTasks, a.ConductorStaffed);
 
     /// <summary>Requires <see cref="WorkTask.Project"/> and <see cref="WorkTask.Owner"/> to be loaded.</summary>
     public static TaskDto ToDto(this WorkTask t, IReadOnlyList<ValidationDto>? validations = null) =>

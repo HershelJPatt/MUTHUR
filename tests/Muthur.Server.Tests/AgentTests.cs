@@ -1,6 +1,8 @@
 using System.Net;
 using System.Net.Http.Json;
+using Microsoft.Extensions.DependencyInjection;
 using Muthur.Contracts;
+using Muthur.Server.Services;
 
 namespace Muthur.Server.Tests;
 
@@ -34,7 +36,7 @@ public sealed class AgentTests : IDisposable
     {
         var agent = await _hub.RegisterAgentAsync("pulse");
         async Task<AgentStatus> StatusAsync() =>
-            (await _hub.CreateClient().GetFromJsonAsync(Routes.Agents, MuthurJsonContext.Default.IReadOnlyListAgentDto))!.Single().Status;
+            (await _hub.CreateClient().GetFromJsonAsync(Routes.Agents, MuthurJsonContext.Default.AgentRosterDto))!.Agents.Single().Status;
 
         Assert.Equal(AgentStatus.Live, await StatusAsync());
 
@@ -69,4 +71,74 @@ public sealed class AgentTests : IDisposable
         var response = await agent.PostAsJsonAsync(Routes.Projects, new AddProjectRequest("rogue", "C:/somewhere"));
         Assert.Equal(HttpStatusCode.Unauthorized, response.StatusCode);
     }
+
+    [Fact]
+    public async Task An_agent_a_person_registered_is_standing_and_hides_nobody()
+    {
+        await _hub.RegisterAgentAsync("top-left");
+
+        var roster = await RosterAsync();
+
+        var registered = Assert.Single(roster.Agents);
+        Assert.Equal("top-left", registered.Name);
+        Assert.False(registered.ConductorStaffed);
+        Assert.Equal(0, roster.ConductorHidden);
+    }
+
+    [Fact]
+    public async Task A_session_the_conductor_staffed_is_counted_rather_than_listed()
+    {
+        var identity = await StaffAsync("win-validator");
+        Assert.Equal("conductor-win-validator-t-1", identity.Name);
+
+        // The whole point of the count: a roster that drops rows without saying so reads like a quiet organization.
+        var roster = await RosterAsync();
+        Assert.DoesNotContain(roster.Agents, a => a.Name == identity.Name);
+        Assert.Equal(1, roster.ConductorHidden);
+
+        var all = await RosterAsync(all: true);
+        Assert.True(Assert.Single(all.Agents, a => a.Name == identity.Name).ConductorStaffed);
+    }
+
+    [Fact]
+    public async Task Re_registering_a_staffed_session_through_the_public_endpoint_does_not_make_it_standing()
+    {
+        // The orchestrate procedure tells a session whose token is gone to run `muthur agent register` again.
+        // Nothing about the marker crosses the wire, so the only honest answer is to leave it alone.
+        var identity = await StaffAsync("win-validator");
+
+        var again = await _hub.CreateClient(identity.Token).PostAsJsonAsync(Routes.AgentRegister,
+            new RegisterAgentRequest(identity.Name, "codex", "gpt-5"));
+        again.EnsureSuccessStatusCode();
+
+        var reregistered = (await again.Content.ReadFromJsonAsync(MuthurJsonContext.Default.RegisterAgentResponse))!.Agent;
+        Assert.True(reregistered.ConductorStaffed);
+
+        var roster = await RosterAsync();
+        Assert.DoesNotContain(roster.Agents, a => a.Name == identity.Name);
+        Assert.Equal(1, roster.ConductorHidden);
+    }
+
+    [Fact]
+    public async Task All_returns_every_row_and_says_it_left_nothing_out()
+    {
+        await _hub.RegisterAgentAsync("top-left");
+        var staffed = await StaffAsync("win-validator");
+
+        var all = await RosterAsync(all: true);
+
+        Assert.Equal([staffed.Name, "top-left"], all.Agents.Select(a => a.Name));
+        Assert.Equal([true, false], all.Agents.Select(a => a.ConductorStaffed));
+        Assert.Equal(0, all.ConductorHidden);
+    }
+
+    private async Task<AgentRosterDto> RosterAsync(bool all = false) =>
+        (await _hub.CreateClient().GetFromJsonAsync(Routes.Agents + (all ? "?all=true" : ""), MuthurJsonContext.Default.AgentRosterDto))!;
+
+    /// <summary>Staffs one validator session the way the conductor does — the real launcher over the hub's own services.</summary>
+    private Task<Muthur.Launch.AgentIdentity> StaffAsync(string role) =>
+        ActivatorUtilities.CreateInstance<ValidatorSessionLauncher>(_hub.Services).IdentityFor(
+            new ConductorAssignment(1, "T-1", "Build T-1", "muthur", role, AvoidHarness: null),
+            new Muthur.Launch.HarnessCandidate("codex", "opus", "chatgpt-subscription"),
+            default);
 }
