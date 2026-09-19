@@ -365,3 +365,29 @@ that entry.
 - A test asserting the string `ingest` appears nowhere on `/console`, so nobody adds the field without
   reading why it was cut.
 - Not rendering `RepoPath` on the Projects row: the console is a control surface, not a second description.
+
+## Amendment 3 — the security check was written against a command that does not exist
+
+The Verification section tells the validator to add a target with `muthur out targets put … --founder` and
+then confirm the address never appears in `/console`. That check is the one security-shaped assertion a
+machine can make here, and as written it could not be run: there is no `put` verb, and `targets` is a leaf
+that lists the allowlist rather than a group holding subcommands.
+
+Measured against `src/Muthur.Cli/Commands/OutboundCommands.cs:15-28` — `targets` is a `Command` with its own
+`SetAction` (a GET of `Routes.OutboundTargets`), and the writer is a **sibling** named `target` added to
+`out`, not to `targets`.
+
+The command is:
+
+```
+muthur out target <key> --channel file --address <absolute path> --founder
+```
+
+`--channel` and `--address` are both `Required = true`; `--founder-approval` is the optional flag that makes
+every message to the target need the founder as well.
+
+Nothing about the requirement changes — the address must still appear nowhere in the HTML, and that check is
+still mandatory. Only the incantation was wrong. I am recording it rather than quietly fixing the line
+because the same wrong form was in front of me each time I read this spec and I did not catch it until I went
+to run it; a validator reading the spec cold would have hit exit 1 and had to decide for themselves whether
+the product or the spec was broken.
