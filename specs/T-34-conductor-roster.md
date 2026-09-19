@@ -206,10 +206,23 @@ app.MapGet(Routes.Agents, (bool? all, AgentService agents, CancellationToken ct)
 var listAll = new Option<bool>("--all") { Description = "Include the sessions the conductor staffed." };
 var list = new Command("list", "List standing agents with status, roles and open task counts.") { listAll };
 list.SetAction(async (parse, ct) => Output.Emit(parse, await HubClient.For(parse).GetAsync(
-    Routes.Agents + (parse.GetValue(listAll) ? "?all=true" : ""), ct)));
+    Routes.Agents + AgentListQuery(parse.GetValue(listAll)), ct)));
+```
+
+with the query in an `internal static` helper beside it, so a test can reach it — the same shape as
+`SystemCommands.ReceiptsQuery` and `RoleCommands.ValidationListQuery`:
+
+```csharp
+/// <summary>The query behind `agent list`. One optional filter, so the leading '?' belongs to it.</summary>
+internal static string AgentListQuery(bool all) => all ? "?all=true" : "";
 ```
 
 No deserialization, no reshaping: the CLI stays a pure HTTP client and prints what the hub sent.
+
+**Correction, after the first implementation round.** An earlier draft of this spec said no CLI test project
+existed. It was wrong: `tests/Muthur.Cli.Tests` exists and already covers this exact flag shape for
+`validate list` (`ValidationListQueryTests.cs`) and for `receipts` (`ReceiptsCommandTests.cs`). So the flag
+gets a test there too — see Unit A's new test 6.
 
 ### 7. The rail
 
@@ -266,6 +279,7 @@ than it saves.
   - modified: `src/Muthur.Cli/Commands/AgentCommands.cs`
   - modified: `src/Muthur.Server/Components/Panels/AgentsPanel.razor`
   - modified: `tests/Muthur.Server.Tests/AgentTests.cs`, `ConductorTests.cs`, `RoleTests.cs`
+  - created: `tests/Muthur.Cli.Tests/AgentListQueryTests.cs`
   - created: tests per "New tests" below (put them in `tests/Muthur.Server.Tests/AgentTests.cs`, except the
     orchestrator one, which belongs beside its launcher's tests in `ConductorTests.cs`)
 - **Does:** sections 1–8 above, exactly.
@@ -291,8 +305,13 @@ dotnet ef migrations add AgentConductorStaffed -p src/Muthur.Data -s src/Muthur.
    HTTP endpoint (as that agent, presenting its token) leaves `conductorStaffed` true and the row still
    hidden from the default roster.
 5. `?all=true` reports `conductorHidden` 0 and returns every row, standing and staffed.
+6. In **`tests/Muthur.Cli.Tests/AgentListQueryTests.cs`** (new file): `AgentListQuery(false)` is `""` and
+   `AgentListQuery(true)` is `"?all=true"`; and the `--all` option is actually wired to it — parse
+   `["agent", "list", "--all"]` and `["agent", "list"]` through a `RootCommand`, exactly as
+   `ReceiptsCommandTests.The_parsed_option_is_the_one_the_query_string_is_built_from` does. That second
+   assertion is the one with value: it catches a flag that exists but is never read.
 
-- **Acceptance:** `dotnet build` and `dotnet test` both clean, with the five new tests present and passing,
+- **Acceptance:** `dotnet build` and `dotnet test` both clean, with the six new tests present and passing,
   and no warnings (warnings are errors here).
 
 ## Verification
