@@ -391,3 +391,73 @@ still mandatory. Only the incantation was wrong. I am recording it rather than q
 because the same wrong form was in front of me each time I read this spec and I did not catch it until I went
 to run it; a validator reading the spec cold would have hit exit 1 and had to decide for themselves whether
 the product or the spec was broken.
+
+## Amendment 4 — an addition I ordered and never checked, and three deviations ratified
+
+### 1. Amendment 2's `brief_file_dirty` mirror was never built, and I did not notice
+
+Amendment 2 §2 ratified Unit B's brief-file handling "with one addition": mirror `RoleCommands.cs:29`, which
+refuses a brief file with uncommitted changes so the hub's stored brief always corresponds to something in git.
+
+It is not on the branch. `ReadBriefAsync` resolves the path, guards it with `IsInside`, and reads the file. The
+path guard — the part that stops a browser tab reading anything on the founder's disk — is there and is the
+more important half. The dirty refusal is absent. Unit C found this while reading the code it was extending;
+I ordered the addition, did not verify it, and wrote the next amendment as though it existed.
+
+It is also harder than the one line Amendment 2 implied, which is worth recording because it is the reason a
+future reader should not just add it here:
+
+- `FileProvenance` lives in **`src/Muthur.Cli/Infrastructure/`**. `Muthur.Server` does not reference
+  `Muthur.Cli` and must not — the CLI is a client of the server, and that dependency points the wrong way.
+- `FileProvenance.IsDirty` shells out to git **directly**, not through `IProcessRunner`. Lifted as-is into the
+  server it would be the one piece of the console no test could fake, in a codebase whose rule is that
+  anything talking to the outside sits behind an interface.
+
+So the honest state is: **the console is currently the laxer of the two paths to `role define`**, and the
+principle Amendment 2 invoked against that — and that Unit C invoked again, correctly, for founder approval on
+outbound targets — is not upheld here. That is a real gap, it is filed as its own task rather than folded into
+this one, and the human validating this task should know it is open.
+
+### 2. The outbound acceptance check was vacuous, and Unit C repaired it rather than passing it
+
+The Design's check — "an added target's address never appears in `GET /console`" — passes trivially against a
+page with no Outbound section at all. Unit C made it fail honestly first: assert the row **is** rendered (key
+in `agent-name`, channel in `agent-model`) and only then that the address is absent. Without those two lines
+it measured nothing, and it would have gone green the whole time the section did not exist.
+
+This is the same defect as the `-match`/`-cmatch` false pass in this task's own headless harness, found the
+same afternoon: an assertion nobody has ever seen fail is not evidence.
+
+### 3. Ratified deviations
+
+- **The fourth Outbound input, the founder-approval checkbox.** Ratified, and it was the right call to make
+  rather than ask. `DefineTargetAsync` is an upsert that writes `RequiresFounderApproval` **unconditionally**,
+  and `DefineTargetRequest` defaults it to `false` — so a console sending only key/channel/address would strip
+  founder approval from an existing target the first time anyone corrected its address, silently, while
+  `muthur out target --founder-approval` carries it. That is precisely "two clients of one operation with
+  different safety rules", which this spec's own Amendment 2 forbids. The row's pill follows from the same
+  flag and names no address.
+- **"Key", not "Name".** The service field is `Key`, the CLI argument is `key`, and the refusal says "Target
+  keys are 1-48 chars". A label reading "Name" would have the founder reading one word and the error another.
+- **`@inject IEnumerable<IOutboundChannel>`.** Ratified. `IOutboundChannel` is declared in
+  `src/Muthur.Server/Services/OutboundService.cs` and `OutboundService` takes the identical injection, so the
+  page reads a service-layer capability list — not data behind the services, and nowhere near `MuthurDb`. It is
+  also strictly better than a literal list: a channel registered on the server appears in the select with no
+  edit here, and the set offered is by construction the set `FindChannel` accepts.
+
+### 4. Two more corrections to this spec
+
+- **"Cancel takes a reason (text, required by the service)" is untrue.** `CancelTaskRequest(string? Reason =
+  null)`; `CancelAsync` records it and validates nothing, and `muthur task cancel --reason` is optional. The
+  console sends what was typed, blank as `null`, and validates nothing ahead of the hub.
+- **The attended checklist is in an unrunnable order.** It has the founder define a role (step 4) before any
+  project exists, but `ReadBriefAsync` resolves brief paths against `ProjectDto.RepoPath` and a hub with no
+  project refuses every brief. **Add a project first** — the checklist should open with
+  `muthur project add <key> --repo <path> --founder`.
+
+### 5. A warning for anyone writing a headless check against this dashboard
+
+`BoardPanel` wraps its columns in `<Virtualize>`, which renders nothing on the prerender pass. **No fetched
+page ever contains a task title.** A headless assertion that looks for one in `/` will fail against a hub where
+the task plainly exists. Unit C's `The_console_is_not_a_second_task_list` proves the task through
+`GET /tasks/{id}` instead, which is the shape such a check has to take here.
