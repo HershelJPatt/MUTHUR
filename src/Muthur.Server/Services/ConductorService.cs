@@ -1,3 +1,4 @@
+using System.Globalization;
 using System.Text.Json;
 using Microsoft.EntityFrameworkCore;
 using Muthur.Contracts;
@@ -87,16 +88,22 @@ public sealed class ConductorService(Ledger ledger, MuthurOptions options, TimeP
     /// <summary>Sessions the conductor believes it has running, by "T-n/role".</summary>
     public int RunningCount { get { lock (_running) return _running.Count; } }
 
-    public async Task<ConductorStatusDto> StatusAsync(CancellationToken ct = default) => new(
-        await EnabledAsync(ct),
-        RunningCount,
-        options.ConductorMaxSessions,
-        options.ConductorSessionMinutes,
-        options.ConductorMaxAttempts,
-        options.EffectiveConductorIntervalSeconds,   // what it runs at, not what was asked for
-        options.ConductorStallProbeMinutes,
-        _lastPass,
-        _lastAction);
+    public async Task<ConductorStatusDto> StatusAsync(CancellationToken ct = default)
+    {
+        var ceiling = await CeilingAsync(ct);
+        return new(
+            await EnabledAsync(ct),
+            RunningCount,
+            options.ConductorMaxSessions,
+            options.ConductorSessionMinutes,
+            options.ConductorMaxAttempts,
+            options.EffectiveConductorIntervalSeconds,   // what it runs at, not what was asked for
+            options.ConductorStallProbeMinutes,
+            _lastPass,
+            _lastAction,
+            ceiling.Sessions,
+            ceiling.Reason);
+    }
 
     /// <summary>The founder turns staffing on and off; the decision is in the ledger like any other.</summary>
     public async Task<ConductorStatusDto> SetEnabledAsync(Caller caller, bool enabled, CancellationToken ct = default)
@@ -112,6 +119,128 @@ public sealed class ConductorService(Ledger ledger, MuthurOptions options, TimeP
             // Turning it on is the founder saying "try again"; a stall from before that is not their answer.
             if (enabled) lock (_stalls) _stalls.Clear();
         }, ct);
+        return await StatusAsync(ct);
+    }
+
+    /// <summary>An unattended window in local time, and the ceiling it holds the conductor to while it is open.</summary>
+    private sealed record Window(TimeSpan From, TimeSpan To, int Sessions);
+
+    /// <summary>
+    /// How many sessions a pass may run, and the one sentence that says where the number came from.
+    /// <para>
+    /// The founder moves this while the hub runs, so it lives in the database beside the on/off switch and for the
+    /// same reason: a restart must not quietly hand the configuration file back its say. Configuration is the
+    /// default, not the authority.
+    /// </para>
+    /// </summary>
+    private Task<(int Sessions, string Reason)> CeilingAsync(CancellationToken ct) =>
+        ledger.ReadAsync(async (db, now) =>
+        {
+            var stored = await db.Meta
+                .Where(e => e.Key == MetaEntry.ConductorSessions || e.Key == MetaEntry.ConductorUnattended)
+                .ToDictionaryAsync(e => e.Key, e => e.Value, ct);
+            return Ceiling(
+                stored.GetValueOrDefault(MetaEntry.ConductorSessions),
+                stored.GetValueOrDefault(MetaEntry.ConductorUnattended),
+                // Local time, because "while I am asleep" is a fact about the founder's night and not about UTC.
+                TimeZoneInfo.ConvertTime(now, clock.LocalTimeZone).TimeOfDay);
+        }, ct);
+
+    private (int Sessions, string Reason) Ceiling(string? sessions, string? unattended, TimeSpan localNow)
+    {
+        var (configured, reason) = int.TryParse(sessions, CultureInfo.InvariantCulture, out var set) && set >= 1
+            ? (set, "Set by the founder.")
+            : (options.ConductorMaxSessions, "Muthur:ConductorMaxSessions.");
+
+        if (ParseWindow(unattended) is not { } window || !IsInside(window, localNow)) return (configured, reason);
+        var capped = Math.Min(configured, window.Sessions);
+        return (capped, $"Unattended {window.From:hh\\:mm}-{window.To:hh\\:mm} caps this at {capped}.");
+    }
+
+    /// <summary>"22:00-07:00@1". Written only by <see cref="SetCeilingAsync"/>, so anything else is read as no window.</summary>
+    private static Window? ParseWindow(string? stored)
+    {
+        if (stored is not { Length: > 0 }) return null;
+        var at = stored.LastIndexOf('@');
+        var dash = stored.IndexOf('-');
+        if (dash < 0 || at < dash) return null;
+        if (ParseTime(stored[..dash]) is not { } from || ParseTime(stored[(dash + 1)..at]) is not { } to) return null;
+        if (!int.TryParse(stored[(at + 1)..], CultureInfo.InvariantCulture, out var sessions) || sessions < 1) return null;
+        return from == to ? null : new Window(from, to, sessions);   // a window with no width is not a window
+    }
+
+    /// <summary>A window runs from its start to its end, and one that ends before it starts has crossed midnight.</summary>
+    private static bool IsInside(Window window, TimeSpan localNow) =>
+        window.From < window.To
+            ? localNow >= window.From && localNow < window.To
+            : localNow >= window.From || localNow < window.To;
+
+    /// <summary>"HH:mm", 24-hour, exactly as the founder is told. Null means that is not a time.</summary>
+    private static TimeSpan? ParseTime(string? text)
+    {
+        if (text is not { Length: 5 } || text[2] != ':') return null;
+        if (!char.IsAsciiDigit(text[0]) || !char.IsAsciiDigit(text[1]) ||
+            !char.IsAsciiDigit(text[3]) || !char.IsAsciiDigit(text[4])) return null;
+        var hours = ((text[0] - '0') * 10) + (text[1] - '0');
+        var minutes = ((text[3] - '0') * 10) + (text[4] - '0');
+        return hours <= 23 && minutes <= 59 ? new TimeSpan(hours, minutes, 0) : null;
+    }
+
+    private static MuthurException SessionsInvalid() =>
+        Fail.Rule("sessions_invalid", "The conductor needs at least one session to do anything.");
+
+    private static MuthurException TimeInvalid() => Fail.Rule("time_invalid", "Times are HH:mm, 24-hour.");
+
+    /// <summary>
+    /// The founder raises or lowers the ceiling, or caps the hours nobody is watching. Recorded in the ledger like
+    /// every other decision, and kept in the database so the next restart still knows about it.
+    /// </summary>
+    public async Task<ConductorStatusDto> SetCeilingAsync(Caller caller, ConductorSessionsRequest request, CancellationToken ct = default)
+    {
+        if (request.Sessions is < 1 || request.UnattendedSessions is < 1) throw SessionsInvalid();
+
+        var given = new[] { request.UnattendedFrom is { Length: > 0 }, request.UnattendedTo is { Length: > 0 }, request.UnattendedSessions is not null };
+        if (given.Any(g => g) && !given.All(g => g))
+            throw Fail.Rule("unattended_incomplete", "An unattended window needs --from, --to and --sessions.");
+
+        // Both times before anything is written: half a window is worse than none.
+        var window = given[0]
+            ? new Window(ParseTime(request.UnattendedFrom) ?? throw TimeInvalid(),
+                ParseTime(request.UnattendedTo) ?? throw TimeInvalid(), request.UnattendedSessions!.Value)
+            : null;
+
+        await ledger.MutateAsync(caller, async m =>
+        {
+            async Task StoreAsync(string key, string? value)
+            {
+                var row = await m.Db.Meta.SingleOrDefaultAsync(e => e.Key == key, ct);
+                if (value is null) { if (row is not null) m.Db.Meta.Remove(row); }
+                else if (row is null) m.Db.Meta.Add(new MetaEntry { Key = key, Value = value });
+                else row.Value = value;
+            }
+
+            if (request.Clear)
+            {
+                await StoreAsync(MetaEntry.ConductorSessions, null);
+                await StoreAsync(MetaEntry.ConductorUnattended, null);
+                m.Record("conductor.ceiling_cleared");
+                return;
+            }
+
+            if (request.Sessions is { } sessions)
+            {
+                await StoreAsync(MetaEntry.ConductorSessions, sessions.ToString(CultureInfo.InvariantCulture));
+                m.Record("conductor.sessions_set", payload: new { sessions });
+            }
+
+            if (window is not null)
+            {
+                var (from, to) = ($"{window.From:hh\\:mm}", $"{window.To:hh\\:mm}");
+                await StoreAsync(MetaEntry.ConductorUnattended, $"{from}-{to}@{window.Sessions}");
+                m.Record("conductor.unattended_set", payload: new { from, to, sessions = window.Sessions });
+            }
+        }, ct);
+
         return await StatusAsync(ct);
     }
 
@@ -276,13 +405,17 @@ public sealed class ConductorService(Ledger ledger, MuthurOptions options, TimeP
             _lastPass = clock.GetUtcNow();
             await EscalateExhaustedAsync(ct);
 
+            // Read once per pass: the founder may move it mid-pass, and a ceiling that changes under the loop
+            // would let a pass start more sessions than either number allows.
+            var ceiling = (await CeilingAsync(ct)).Sessions;
+
             var started = 0;
             foreach (var assignment in await PlanAsync(ct))
             {
                 var key = $"{assignment.TaskKey}/{assignment.RoleKey}";
                 lock (_running)
                 {
-                    if (_running.Count >= options.ConductorMaxSessions) break;
+                    if (_running.Count >= ceiling) break;
                     if (!_running.Add(key)) continue;
                 }
 
