@@ -441,3 +441,77 @@ next reader does not have to rediscover them:
 3. **A malformed stored `conductor_unattended` reads as no window rather than throwing.** Only
    `SetCeilingAsync` writes that key and it validates first, so this can only be reached by editing the
    database by hand — and a hub that refuses to start because someone did is worse than one that ignores it.
+
+## Amendment 3 — what Unit C found, and what it may not leave behind
+
+Unit C's implementer raised one judgment call and three spec problems. All four are settled here.
+
+### The judgment call is accepted, and it is the most important thing in this unit
+
+A session that starts, runs its forty-five minutes, exits cleanly and **never claims its task** leaves that
+task in `Backlog`, where the next pass stages it again — and the next, all night. The spec covered "an
+orchestrator that will not start" and said nothing about one that starts and achieves nothing. That is the
+money-burning failure mode this unit exists to avoid.
+
+The implementer's answer stands exactly as built: on a clean return, read the task's state. Still `Backlog`
+means charge it through the **unchanged** `UnproductiveAsync` and the **unchanged** `_stalls` map, so it
+stalls half-open at `ConductorMaxAttempts` precisely as a validator reaching no verdict does. Any other
+state — claimed, blocked, cancelled, landed — clears the stall, because the session did what it was for.
+"Did it record a verdict" and "did it claim the task" are the same question asked of two tiers.
+
+### `conductor status` must say whether this half is on
+
+The spec added `Ceiling` and `CeilingReason` to `ConductorStatusDto` for Unit B and named no field for Unit C,
+so today the only way to learn whether orchestrator staffing is on is to read the ledger. The spec's own
+Verification section walks a validator through typing the command and then checking `muthur log`, which is
+the workaround standing in for the missing field.
+
+That will not do for the most expensive switch in the system. `ConductorStatusDto` gains one final member:
+
+```csharp
+    int Ceiling, string CeilingReason, bool Orchestrators);
+```
+
+`true` when the `conductor_orchestrators` key says so. `muthur conductor status` therefore answers "is the
+hub allowed to start orchestrators" without anyone reading events, and the Verification section's ledger
+check becomes a corroboration rather than the only route.
+
+### The founder must not be sent to the wrong place at 3am
+
+Reusing `UnproductiveAsync` unchanged was right for the mechanism and wrong for the words: a stalled
+orchestrator currently tells the founder *"The conductor could not start a validator for T-5
+(#orchestrator) 3 times…"*. The validator brief this organization runs on says it plainly — "the wording of
+a failure is a feature here; a message that sends the founder to the wrong place at 3am is a defect, not a
+nit."
+
+`UnproductiveAsync` picks the noun from the role: `"#orchestrator"` reads "an orchestrator", anything else
+reads "a validator". No existing test's expected string changes.
+
+### One deny list, not two
+
+Unit C duplicated `Allowed` and `Denied` into `OrchestratorSessionLauncher` because the file list excluded
+`ValidatorSessionLauncher.cs` and the spec said "member for member". The implementer flagged that they can
+now drift. They must not: that deny list is what stops a launched session pushing, merging or checking out
+the default branch, and two copies of a security boundary is how one of them quietly grows a hole.
+
+Hoist both arrays to one `internal static` home shared by the two launchers — `ValidatorSessionLauncher` is
+added to Unit C's file list for this. The lists' contents do not change.
+
+### Accepted without change
+
+- **DI is registered in `Infrastructure/Startup.cs:75`, not `Program.cs`.** The spec's file list was wrong
+  in the same way Amendment 1's "two construction sites" was wrong.
+- **`EnsureSomethingRan` is called rather than copied.** One fork is easier to keep honest than two.
+- **`AttendedReason` is not consulted when planning orchestrators.** The implementer read it correctly:
+  attended means this task needs a human *validator*, so the work is still worth orchestrating and it is the
+  validation half that must skip it.
+- `_lastAction` wording, the `ConductorWorker` log line, and orchestrators-on not clearing `_stalls`.
+- The honest note on the `#` skip: it is defence rather than a live bug fix, because `liveHolders` is only
+  read by `validation.ValidatorKey` today. Keeping the invariant local to the code that depends on it is
+  worth the line, and the comment says exactly that rather than claiming more.
+
+### Follow-up, not this task
+
+`ValidatorLaunchException` and `ValidatorSessionException` now carry orchestrator failures too, so their
+names under-describe them. Renaming touches several files for no behaviour change; it belongs in its own
+task rather than in the diff a validator is about to read.
