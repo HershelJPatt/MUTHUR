@@ -655,3 +655,28 @@ thing that keeps a standing post over-held, because such a post cannot be create
   asserted the behaviour this round removed.
 
 `dotnet build`: clean, 0 warnings. `dotnet test`: 3708 Core, 23 Launch, 60 Cli, 268 Server — all green.
+
+### Proof, on the installed CLI against a scratch hub
+
+Build `adda99f`, installed to `artifacts/t13`, `MUTHUR_HOME=artifacts/scratch13`, `MUTHUR_URL=http://127.0.0.1:7513`
+— never the live hub. The validator's own repro, verbatim, and the two rules it has to leave standing:
+
+```
+role define platform-checks --validator true --holders 2 --founder   -> capacity 2
+role take platform-checks --as-agent v1 / v2                         -> both hold it
+
+role define platform-checks --validator false --holders 1 --founder  -> exit 2, single_holder
+   "'platform-checks' cannot become a standing post while 2 agents hold it: v1, v2. ..."
+role define platform-checks --validator false --founder              -> exit 2, single_holder (the ceiling)
+role list --founder                                                  -> still isValidator, capacity 2, [v1, v2]
+
+role release platform-checks --as-agent v2                           -> exit 0
+role define platform-checks --validator false --holders 1 --founder  -> exit 0, isValidator false,
+                                                                        capacity 1, holders [v1]
+
+role define win-validator --validator true --holders 2 --founder, both take, then
+role define win-validator --holders 1 --founder                      -> exit 0, capacity 1, holders [v1, v2]
+```
+
+The last line is the rule the new check must not have swallowed, and it is also the first round's response
+fix showing on a real hub: the define answers with both live holders where it used to answer `holders: []`.
