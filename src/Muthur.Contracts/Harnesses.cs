@@ -31,5 +31,11 @@ public sealed record ConductorStatusDto(
 
 public sealed record ConductorSwitch(bool Enabled);
 
+/// <summary>
+/// Whether the conductor may also start orchestrator sessions from the backlog. Its own switch, and its own
+/// route, because it is the half that begins new work rather than finishing work somebody else began.
+/// </summary>
+public sealed record ConductorOrchestratorSwitch(bool Enabled);
+
 /// <summary>The founder moving the ceiling: a number of sessions, an unattended window, or <c>Clear</c> for both.</summary>
 public sealed record ConductorSessionsRequest(int? Sessions, string? UnattendedFrom, string? UnattendedTo, int? UnattendedSessions, bool Clear);

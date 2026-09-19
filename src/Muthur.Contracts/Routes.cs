@@ -38,6 +38,7 @@ public static class Routes
     public const string Tiers = Api + "/harness/tiers";
     public const string Conductor = Api + "/conductor";
     public const string ConductorSessions = Api + "/conductor/sessions";
+    public const string ConductorOrchestrators = Api + "/conductor/orchestrators";
     public const string AccountLimits = Api + "/harness/limits";
     public const string WorkerRuns = Api + "/workers/runs";
 

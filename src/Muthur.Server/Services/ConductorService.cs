@@ -20,6 +20,21 @@ public interface IValidatorSessionLauncher
 }
 
 /// <summary>
+/// One orchestrator session the conductor intends to start: a task in the backlog, and nobody on it yet.
+/// <para>
+/// No role, because an orchestrator takes none. The session claims the task itself, which is also the only thing
+/// standing between two sessions and one task: the claim is the hub's, and the loser of that race exits.
+/// </para>
+/// </summary>
+public sealed record OrchestratorAssignment(int TaskId, string TaskKey, string TaskTitle, string Project);
+
+/// <summary>Starts one orchestrator session. Faked in tests; the real one launches a harness through <c>AgentLauncher</c>.</summary>
+public interface IOrchestratorSessionLauncher
+{
+    Task StartAsync(OrchestratorAssignment assignment, CancellationToken ct = default);
+}
+
+/// <summary>
 /// Staffs validation so a task that passes needs nobody awake.
 /// <para>
 /// The conductor adds no state to the task machine it serves. It only notices a task sitting in
@@ -27,11 +42,31 @@ public interface IValidatorSessionLauncher
 /// task is already back with its owner; if that session has gone, the claim lapses and the task is staffable
 /// again on a later pass — the bounce-back loop closes on machinery that already existed.
 /// </para>
+/// <para>
+/// With the second switch on it also starts work: an orchestrator session for a task sitting in the backlog, which
+/// claims the task itself. That half adds no state to the machine either — the backlog is where unstarted work
+/// already lives, and a claim is how a task stops being unstarted — and validation is staffed first out of the one
+/// shared ceiling, because a task in validation is closer to done than a task nobody has begun.
+/// </para>
 /// </summary>
-public sealed class ConductorService(Ledger ledger, MuthurOptions options, TimeProvider clock, IValidatorSessionLauncher launcher)
+public sealed class ConductorService(
+    Ledger ledger,
+    MuthurOptions options,
+    TimeProvider clock,
+    IValidatorSessionLauncher launcher,
+    IOrchestratorSessionLauncher orchestrators)
 {
     private readonly SemaphoreSlim _pass = new(1, 1);
     private readonly HashSet<string> _running = [];
+
+    /// <summary>
+    /// The role part of an orchestrator's <see cref="_running"/> and <see cref="_stalls"/> key. Both maps are keyed
+    /// "T-n/role" and <see cref="PlanAsync"/> charges every running session to the role it names, so the two key
+    /// spaces must not be able to meet. <c>RoleKey</c>'s pattern is <c>^[a-z0-9][a-z0-9-]{0,37}$</c>: a key can
+    /// neither contain '#' nor begin with one, so nothing a founder can define reaches this name, and no
+    /// orchestrator can be miscounted into a validator's slot.
+    /// </summary>
+    internal const string OrchestratorRole = "#orchestrator";
 
     /// <summary>Task id → the <see cref="CapState.RoundSeq"/> already announced, so a later round can announce again.</summary>
     private readonly Dictionary<int, long> _escalated = [];
@@ -84,6 +119,29 @@ public sealed class ConductorService(Ledger ledger, MuthurOptions options, TimeP
         ledger.ReadAsync(async (db, _) =>
             await db.Meta.Where(e => e.Key == MetaEntry.ConductorEnabled).Select(e => e.Value).SingleOrDefaultAsync(ct)
                 is { } stored ? stored == "true" : options.ConductorEnabled, ct);
+
+    /// <summary>
+    /// Whether the conductor may also start orchestrators. Absent means no — there is deliberately no
+    /// configuration default to fall back on, so a hub that upgrades into this build spends nothing new until the
+    /// founder says so, and says so in the database where a restart cannot quietly take it back.
+    /// </summary>
+    private Task<bool> OrchestratorsEnabledAsync(CancellationToken ct) =>
+        ledger.ReadAsync(async (db, _) =>
+            await db.Meta.Where(e => e.Key == MetaEntry.ConductorOrchestrators).Select(e => e.Value).SingleOrDefaultAsync(ct) == "true", ct);
+
+    /// <summary>The founder turns the orchestrator half on and off; the decision is in the ledger like any other.</summary>
+    public async Task<ConductorStatusDto> SetOrchestratorsAsync(Caller caller, bool enabled, CancellationToken ct = default)
+    {
+        var was = await OrchestratorsEnabledAsync(ct);
+        await ledger.MutateAsync(caller, async m =>
+        {
+            var row = await m.Db.Meta.SingleOrDefaultAsync(e => e.Key == MetaEntry.ConductorOrchestrators, ct);
+            if (row is null) m.Db.Meta.Add(new MetaEntry { Key = MetaEntry.ConductorOrchestrators, Value = enabled ? "true" : "false" });
+            else row.Value = enabled ? "true" : "false";
+            if (was != enabled) m.Record(enabled ? "conductor.orchestrators_on" : "conductor.orchestrators_off");
+        }, ct);
+        return await StatusAsync(ct);
+    }
 
     /// <summary>Sessions the conductor believes it has running, by "T-n/role".</summary>
     public int RunningCount { get { lock (_running) return _running.Count; } }
@@ -341,6 +399,11 @@ public sealed class ConductorService(Ledger ledger, MuthurOptions options, TimeP
                 {
                     var slash = session.IndexOf('/');                   // keys are "T-n/role"
                     var (task, role) = (session[..slash], session[(slash + 1)..]);
+                    // Not every running session is a validator. An orchestrator's key is "T-n/#orchestrator" and it
+                    // holds no role at all, so nothing here is its slot to take. Skipping it keeps that fact local
+                    // rather than resting on the reader knowing that no role key the hub accepts can begin with a
+                    // '#', which is what would otherwise have to hold for a validator never to be starved by one.
+                    if (role.StartsWith('#')) continue;
                     if (heldBy.Contains((role, ValidatorSessionLauncher.IdentityName(task, role)))) continue;
                     liveHolders[role] = liveHolders.GetValueOrDefault(role) + 1;
                 }
@@ -395,6 +458,50 @@ public sealed class ConductorService(Ledger ledger, MuthurOptions options, TimeP
         }, ct);
     }
 
+    /// <summary>The <see cref="_running"/> and <see cref="_stalls"/> key for one task's orchestrator.</summary>
+    private static string OrchestratorKey(string taskKey) => $"{taskKey}/{OrchestratorRole}";
+
+    /// <summary>
+    /// What the conductor would start work on right now, most urgent first. Separated from starting anything for
+    /// the same reason <see cref="PlanAsync"/> is: the decision has to be testable without spending a session.
+    /// <para>
+    /// Backlog only, and that one word carries most of the safety. A task somebody has claimed is
+    /// <see cref="TaskState.InProgress"/>, a task waiting on the founder is <see cref="TaskState.Blocked"/>, and a
+    /// task under validation is somebody else's pass — none of them is work nobody has started.
+    /// </para>
+    /// </summary>
+    public async Task<IReadOnlyList<OrchestratorAssignment>> PlanOrchestratorsAsync(CancellationToken ct = default)
+    {
+        // Two switches, both of which must be on. The main one is the conductor as a whole; the second is the half
+        // that begins new work, and it is off until the founder has said otherwise on this hub.
+        if (!await EnabledAsync(ct) || !await OrchestratorsEnabledAsync(ct)) return [];
+
+        return await ledger.ReadAsync<IReadOnlyList<OrchestratorAssignment>>(async (db, now) =>
+        {
+            // A project with no repository on record has nowhere for a session to run, and starting one there
+            // spends a subscription to find that out.
+            var tasks = await db.Tasks.Include(t => t.Project)
+                .Where(t => t.State == TaskState.Backlog && t.Project != null && t.Project.RepoPath != "")
+                .OrderByDescending(t => t.Priority).ThenBy(t => t.Id)
+                .ToListAsync(ct);
+
+            var plan = new List<OrchestratorAssignment>();
+            foreach (var task in tasks)
+            {
+                var key = OrchestratorKey(Wire.TaskId(task.Id));
+                lock (_running)
+                    if (_running.Contains(key)) continue;
+                lock (_stalls)
+                    if (_stalls.GetValueOrDefault(key) is { StalledAt: { } stalled } &&
+                        stalled + TimeSpan.FromMinutes(options.ConductorStallProbeMinutes) > now)
+                        continue;
+
+                plan.Add(new OrchestratorAssignment(task.Id, Wire.TaskId(task.Id), task.Title, task.Project?.Key ?? ""));
+            }
+            return plan;
+        }, ct);
+    }
+
     /// <summary>One pass: start what the plan asks for, up to the session budget. Returns how many it started.</summary>
     public async Task<int> RunPassAsync(CancellationToken ct = default)
     {
@@ -428,6 +535,29 @@ public sealed class ConductorService(Ledger ledger, MuthurOptions options, TimeP
 
                 _lastAction = $"staffed {assignment.TaskKey} for {assignment.RoleKey}";
                 _ = RunSessionAsync(assignment, key);
+                started++;
+            }
+
+            // Validation first, and only then new work, against the one ceiling both halves share. A task in
+            // validating is closer to done than a task in the backlog, so a full ceiling drains what is nearly
+            // finished rather than starting more of what will have to be validated later.
+            foreach (var assignment in await PlanOrchestratorsAsync(ct))
+            {
+                var key = OrchestratorKey(assignment.TaskKey);
+                lock (_running)
+                {
+                    if (_running.Count >= ceiling) break;
+                    if (!_running.Add(key)) continue;
+                }
+
+                await ledger.MutateAsync(Caller.Founder, m =>
+                {
+                    m.Record("conductor.staffing", assignment.TaskId, new { role = OrchestratorRole });
+                    return Task.CompletedTask;
+                }, ct);
+
+                _lastAction = $"staffed an orchestrator for {assignment.TaskKey}";
+                _ = RunOrchestratorSessionAsync(assignment, key);
                 started++;
             }
             return started;
@@ -482,6 +612,57 @@ public sealed class ConductorService(Ledger ledger, MuthurOptions options, TimeP
             lock (_running) _running.Remove(key);
         }
     }
+
+    /// <summary>
+    /// One orchestrator session, from start to whatever it left behind.
+    /// <para>
+    /// The same three endings a validator has, read off the one thing an orchestrator was started to do. It threw
+    /// before a process existed, or a process ran and died — those are the launch/session split validators already
+    /// make. Otherwise it exited cleanly, and the question is whether the task moved: a session that ran its whole
+    /// timeout and left the task sitting in the backlog claimed nothing, and restarting it every interval spends
+    /// three quarters of an hour a time to achieve exactly that again. So it is charged like a validator that
+    /// reached no verdict, on the same counter and the same half-open cooldown.
+    /// </para>
+    /// </summary>
+    private async Task RunOrchestratorSessionAsync(OrchestratorAssignment assignment, string key)
+    {
+        // The stall machinery speaks in (task, role) pairs. An orchestrator is one more pair, under the role name
+        // no role key can spell.
+        var pair = new ConductorAssignment(assignment.TaskId, assignment.TaskKey, assignment.TaskTitle,
+            assignment.Project, OrchestratorRole, AvoidHarness: null);
+        try
+        {
+            Exception? failure = null;
+            try { await orchestrators.StartAsync(assignment, CancellationToken.None); }
+            catch (Exception thrown) { failure = thrown; }
+
+            if (failure is { } ex)
+            {
+                await UnproductiveAsync(pair, key,
+                    ex is ValidatorSessionException ? Unproductive.RanAndFailed : Unproductive.NeverStarted, ex.Message);
+            }
+            else if (await StillInBacklogAsync(assignment.TaskId))
+            {
+                await UnproductiveAsync(pair, key, Unproductive.NoVerdict, null);
+            }
+            else
+            {
+                lock (_stalls) _stalls.Remove(key);   // the task left the backlog: the session did what it was for
+            }
+        }
+        finally
+        {
+            lock (_running) _running.Remove(key);
+        }
+    }
+
+    /// <summary>
+    /// Whether the task is still where the plan found it. Anything else — claimed, blocked, cancelled, landed — is
+    /// a task that moved, and the session that was started for it is not charged for the move it did not make.
+    /// </summary>
+    private Task<bool> StillInBacklogAsync(int taskId) =>
+        ledger.ReadAsync((db, _) =>
+            db.Tasks.AnyAsync(t => t.Id == taskId && t.State == TaskState.Backlog, CancellationToken.None), CancellationToken.None);
 
     /// <summary>
     /// What a session that exited cleanly actually left behind. A pair's own row is not enough to tell: sessions are
@@ -623,7 +804,7 @@ public sealed class ConductorWorker(IServiceProvider services, MuthurOptions opt
             try
             {
                 var started = await services.GetRequiredService<ConductorService>().RunPassAsync(stoppingToken);
-                if (started > 0) logger.LogInformation("Conductor started {Count} validator session(s).", started);
+                if (started > 0) logger.LogInformation("Conductor started {Count} session(s).", started);
             }
             catch (Exception ex) when (ex is not OperationCanceledException)
             {

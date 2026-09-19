@@ -1715,4 +1715,332 @@ public sealed class ConductorTests : IDisposable
 
         Assert.Equal(System.Net.HttpStatusCode.Unauthorized, refused.StatusCode);
     }
+
+    // ---- the conductor staffs orchestrators too -----------------------------------------------------------------
+
+    /// <summary>The founder turning the half that begins new work on or off.</summary>
+    private Task<HttpResponseMessage> OrchestratorsAsync(bool enabled) =>
+        _hub.Founder().PostAsJsonAsync(Routes.ConductorOrchestrators, new ConductorOrchestratorSwitch(enabled));
+
+    /// <summary>Staffing backlog tasks, on, in a project whose repository is on disk.</summary>
+    private async Task<HttpClient> OrchestratingAsync()
+    {
+        await SetUpAsync();
+        (await OrchestratorsAsync(true)).EnsureSuccessStatusCode();
+        return await _hub.RegisterAgentAsync("author");
+    }
+
+    [Fact]
+    public async Task Orchestrators_are_off_until_the_founder_asks_and_validation_is_unaffected()
+    {
+        // The whole reason for a third switch. A hub that upgrades into this build has no row for the key, and no
+        // row means no: landing this must not spend one session the build before it would not have spent.
+        await SetUpAsync("win-validator");
+        await DefineAsync("win-validator");
+        await TaskInValidationAsync();                          // T-1, waiting on a validator
+        var author = await _hub.RegisterAgentAsync("author");
+        await author.AddTaskAsync("Nobody has started this");   // T-2, sitting in the backlog
+
+        Assert.Empty(await Conductor.PlanOrchestratorsAsync());
+        Assert.Equal(1, await Conductor.RunPassAsync());
+        await SettledAsync();
+
+        Assert.Empty(_hub.Orchestrators.Started);
+        Assert.Equal("T-1", Assert.Single(_hub.Validators.Started).TaskKey);
+    }
+
+    [Fact]
+    public async Task Turned_on_it_staffs_one_orchestrator_for_an_unclaimed_backlog_task()
+    {
+        var author = await OrchestratingAsync();
+        var id = (await author.AddTaskAsync("Ship the export")).Id;
+
+        Assert.Equal(1, await Conductor.RunPassAsync());
+        await SettledAsync();
+
+        var started = Assert.Single(_hub.Orchestrators.Started);
+        Assert.Equal(id, started.TaskKey);
+        Assert.Equal("Ship the export", started.TaskTitle);
+        Assert.Equal("demo", started.Project);
+
+        // Who the session acts as, and what it is told. Neither is observable anywhere else, and the prompt is the
+        // whole of the brief: a task it cannot name is a task it cannot claim.
+        Assert.Equal("orchestrator-t-1", OrchestratorSessionLauncher.IdentityName(id));
+        var prompt = OrchestratorSessionLauncher.Prompt(started, new Muthur.Launch.HarnessCandidate("codex", "gpt", "acct"));
+        Assert.Contains($"""Claim {id} ("Ship the export")""", prompt, StringComparison.Ordinal);
+        Assert.Contains($"muthur task claim {id}", prompt, StringComparison.Ordinal);
+
+        var staffed = Assert.Single(await EventsAsync(), e => e.Type == "conductor.staffing");
+        Assert.Equal(id, staffed.TaskId);
+        Assert.Equal("#orchestrator", RoleOf(staffed));
+    }
+
+    [Fact]
+    public async Task A_task_somebody_has_claimed_is_not_orchestrated()
+    {
+        // The expensive mistake: a second mastermind staged onto work another session is already doing. A claim
+        // takes the task out of the backlog, and the backlog is the only place this plan looks.
+        var author = await OrchestratingAsync();
+        var task = await author.AddTaskAsync("Already being worked on");
+        (await author.ClaimAsync(task.Id)).EnsureSuccessStatusCode();
+
+        Assert.Empty(await Conductor.PlanOrchestratorsAsync());
+        Assert.Equal(0, await Conductor.RunPassAsync());
+        Assert.Empty(_hub.Orchestrators.Started);
+    }
+
+    [Fact]
+    public async Task A_blocked_task_is_never_orchestrated()
+    {
+        // It is waiting on the founder. A session started for it would spend three quarters of an hour learning
+        // what the task already says, and the conductor must never answer a founder request on their behalf.
+        var author = await OrchestratingAsync();
+        var task = await author.AddTaskAsync("Needs a decision");
+        (await author.ClaimAsync(task.Id)).EnsureSuccessStatusCode();
+        (await author.PostAsJsonAsync(Routes.Requests, new AskRequest("Monthly or annual?", task.Id, ["monthly", "annual"]))).EnsureSuccessStatusCode();
+
+        Assert.Empty(await Conductor.PlanOrchestratorsAsync());
+        Assert.Equal(0, await Conductor.RunPassAsync());
+        Assert.Empty(_hub.Orchestrators.Started);
+    }
+
+    [Fact]
+    public async Task A_project_with_no_repository_on_record_is_not_orchestrated()
+    {
+        // There is nowhere for the session to run, and starting one to find that out costs a session. The API
+        // refuses an empty path, so the only way into this state is a hand-edited database - which is exactly the
+        // state a guard is for.
+        var author = await OrchestratingAsync();
+        await author.AddTaskAsync("Nowhere to run it");
+        await using (var db = await _hub.Services.GetRequiredService<IDbContextFactory<MuthurDb>>().CreateDbContextAsync())
+        {
+            (await db.Projects.SingleAsync()).RepoPath = "";
+            await db.SaveChangesAsync();
+        }
+
+        Assert.Empty(await Conductor.PlanOrchestratorsAsync());
+        Assert.Equal(0, await Conductor.RunPassAsync());
+        Assert.Empty(_hub.Orchestrators.Started);
+    }
+
+    [Fact]
+    public async Task Two_backlog_tasks_and_room_for_one_start_one()
+    {
+        _hub.Settings["Muthur:ConductorMaxSessions"] = "1";
+        var author = await OrchestratingAsync();
+        _hub.Orchestrators.Block = true;   // the first session is still running when the pass looks at the second
+        var urgent = (await author.AddTaskAsync("Urgent", priority: 3)).Id;
+        await author.AddTaskAsync("Can wait", priority: 1);
+
+        Assert.Equal(2, (await Conductor.PlanOrchestratorsAsync()).Count);   // both are staffable
+        Assert.Equal(1, await Conductor.RunPassAsync());                     // the ceiling is what says no
+        Assert.Equal(urgent, Assert.Single(_hub.Orchestrators.Started).TaskKey);
+
+        _hub.Orchestrators.Finish();
+        await SettledAsync();
+    }
+
+    [Fact]
+    public async Task Validation_drains_before_the_conductor_starts_anything_new()
+    {
+        // One ceiling for both halves, and validation has it first: a task in validating is closer to done than a
+        // task in the backlog, and staffing the backlog instead only makes more work to validate later.
+        _hub.Settings["Muthur:ConductorMaxSessions"] = "1";
+        await SetUpAsync("win-validator");
+        await DefineAsync("win-validator");
+        (await OrchestratorsAsync(true)).EnsureSuccessStatusCode();
+        _hub.Validators.Block = true;
+        _hub.Orchestrators.Block = true;
+        await TaskInValidationAsync();                       // T-1, waiting on a validator
+        var author = await _hub.RegisterAgentAsync("author");
+        await author.AddTaskAsync("Not started yet");        // T-2, sitting in the backlog
+
+        Assert.Single(await Conductor.PlanAsync());
+        Assert.Single(await Conductor.PlanOrchestratorsAsync());
+        Assert.Equal(1, await Conductor.RunPassAsync());
+
+        Assert.Equal("T-1", Assert.Single(_hub.Validators.Started).TaskKey);
+        Assert.Empty(_hub.Orchestrators.Started);
+
+        _hub.Validators.Finish();
+        await SettledAsync();
+    }
+
+    [Fact]
+    public async Task One_task_is_never_staffed_by_two_orchestrators_at_once()
+    {
+        // A session's first act is to claim, so between starting and claiming the task is still in the backlog and
+        // the plan would find it again. The running set is what stops the second one.
+        var author = await OrchestratingAsync();
+        _hub.Orchestrators.Block = true;
+        var id = (await author.AddTaskAsync("Only once")).Id;
+
+        Assert.Equal(1, await Conductor.RunPassAsync());
+        Assert.Equal(1, Conductor.RunningCount);
+
+        Assert.Empty(await Conductor.PlanOrchestratorsAsync());
+        Assert.Equal(0, await Conductor.RunPassAsync());
+        Assert.Equal(id, Assert.Single(_hub.Orchestrators.Started).TaskKey);
+
+        _hub.Orchestrators.Finish();
+        await SettledAsync();
+    }
+
+    [Fact]
+    public async Task An_orchestrator_that_cannot_start_is_retried_but_not_all_night()
+    {
+        _hub.Settings["Muthur:ConductorMaxAttempts"] = "2";
+        _hub.Settings["Muthur:ConductorStallProbeMinutes"] = "30";
+        var author = await OrchestratingAsync();
+        await author.AddTaskAsync("Nothing can start it");
+        _hub.Orchestrators.Throw = new ValidatorLaunchException("No available mastermind candidate to orchestrate T-1.");
+
+        // A throw must leave the running entry removed, or the task is never staffed again at all.
+        Assert.Equal(1, await Conductor.RunPassAsync());
+        await SettledAsync();
+        Assert.Equal(0, Conductor.RunningCount);
+
+        for (var pass = 0; pass < 4; pass++)
+        {
+            await Conductor.RunPassAsync();
+            await SettledAsync();
+        }
+        Assert.Equal(2, _hub.Orchestrators.Started.Count);   // two attempts, then the cooldown holds it
+
+        // Half-open, like every other pair: whatever was wrong is usually fixed from outside the hub.
+        _hub.Clock.Advance(TimeSpan.FromMinutes(31));
+        _hub.Orchestrators.Throw = null;
+        _hub.Orchestrators.Claim = async a => (await author.ClaimAsync(a.TaskKey)).EnsureSuccessStatusCode();
+        Assert.Equal(1, await Conductor.RunPassAsync());
+        await SettledAsync();
+
+        Assert.Equal(3, _hub.Orchestrators.Started.Count);
+        var events = await _hub.EventsWhenAsync(e => e.Count(x => x.Type == "conductor.failed") == 2,
+            "two orchestrator launch failures were never recorded");
+        Assert.All(events.Where(e => e.Type == "conductor.failed"), e => Assert.Equal("#orchestrator", RoleOf(e)));
+        Assert.Single(events, e => e.Type == "conductor.stalled");
+    }
+
+    [Fact]
+    public async Task A_session_that_ran_and_claimed_nothing_is_not_mistaken_for_progress()
+    {
+        // The 45-minute nothing. A session that exits cleanly having never claimed leaves the task exactly where
+        // the plan found it, so the next pass stages it again - three quarters of an hour at a time, all night.
+        // Charged on the counter a validator that reaches no verdict is charged on, and stalled by the same cap.
+        _hub.Settings["Muthur:ConductorMaxAttempts"] = "2";
+        var author = await OrchestratingAsync();
+        var id = (await author.AddTaskAsync("Nobody claims it")).Id;
+
+        for (var pass = 0; pass < 4; pass++)
+        {
+            await Conductor.RunPassAsync();
+            await SettledAsync();
+        }
+
+        Assert.Equal(2, _hub.Orchestrators.Started.Count);
+        var events = await _hub.EventsWhenAsync(e => e.Count(x => x.Type == "conductor.no_verdict") == 2,
+            "two orchestrator sessions that claimed nothing were never recorded");
+        Assert.All(events.Where(e => e.Type == "conductor.no_verdict"), e =>
+        {
+            Assert.Equal(id, e.TaskId);
+            Assert.Equal("#orchestrator", RoleOf(e));
+        });
+        Assert.Single(events, e => e.Type == "conductor.stalled");
+    }
+
+    [Fact]
+    public async Task A_session_that_claimed_its_task_leaves_no_strike_behind_it()
+    {
+        var author = await OrchestratingAsync();
+        var id = (await author.AddTaskAsync("Claimed on the way in")).Id;
+        _hub.Orchestrators.Claim = async a => (await author.ClaimAsync(a.TaskKey)).EnsureSuccessStatusCode();
+
+        Assert.Equal(1, await Conductor.RunPassAsync());
+        await SettledAsync();
+
+        // Claimed, so out of the backlog, so never staffed again and nothing charged against the pass.
+        Assert.Equal(TaskState.InProgress, (await author.GetTaskAsync(id)).Task.State);
+        Assert.Equal(0, await Conductor.RunPassAsync());
+        Assert.Single(_hub.Orchestrators.Started);
+        Assert.DoesNotContain(await EventsAsync(), e => e.Type is "conductor.no_verdict" or "conductor.failed" or "conductor.stalled");
+    }
+
+    [Fact]
+    public async Task An_orchestrators_running_key_is_never_counted_as_a_validators_slot()
+    {
+        // Both halves share one running set, keyed "T-n/role", and PlanAsync charges every entry in it to the role
+        // it names. '#' is the whole of the guarantee that the two key spaces cannot meet: no role key may contain
+        // one, so no orchestrator can ever be charged to a role that exists. The skip in PlanAsync makes that
+        // local rather than something inferred two files away from RoleKey's pattern - so what this pins is the
+        // property both rest on, and the behaviour a founder would lose if either drifted: a role with room for
+        // one holder still staffs validation while an orchestrator is running.
+        _hub.Settings["Muthur:ConductorMaxSessions"] = "5";
+        Assert.False(RoleKey.IsValid("#orchestrator"));
+        var refused = await _hub.Founder().PutAsJsonAsync(Routes.Roles, new DefineRoleRequest("#orchestrator", "# no\nDrive it."));
+        Assert.Equal("invalid_key", (await refused.ReadErrorAsync()).Code);
+
+        await SetUpAsync("win-validator");
+        await DefineAsync("win-validator");              // room for exactly one holder
+        (await OrchestratorsAsync(true)).EnsureSuccessStatusCode();
+        _hub.Validators.Block = true;
+        _hub.Orchestrators.Block = true;
+        var author = await _hub.RegisterAgentAsync("author");
+        var backlog = (await author.AddTaskAsync("Not started yet", priority: 5)).Id;
+
+        Assert.Equal(1, await Conductor.RunPassAsync());
+        Assert.Equal(backlog, Assert.Single(_hub.Orchestrators.Started).TaskKey);
+        Assert.Equal(1, Conductor.RunningCount);
+
+        // Work arrives for the validator while that orchestrator is still running. Its slot is free, and stays free.
+        var validating = await ValidatingTaskAsync(author, "Waiting on a validator", priority: 1);
+        Assert.Equal(validating, Assert.Single(await Conductor.PlanAsync()).TaskKey);
+        Assert.Equal(1, await Conductor.RunPassAsync());
+        Assert.Equal(validating, Assert.Single(_hub.Validators.Started).TaskKey);
+
+        _hub.Validators.Finish();
+        _hub.Orchestrators.Finish();
+        await SettledAsync();
+    }
+
+    [Fact]
+    public async Task The_decision_to_staff_orchestrators_outlives_the_process_that_heard_it()
+    {
+        // The hub is off for hours at a time. A founder who turned this on must not find it silently off - and,
+        // far more importantly, one who turned it off must not find it silently on.
+        await SetUpAsync();
+        var author = await _hub.RegisterAgentAsync("author");
+        await author.AddTaskAsync("Not started yet");
+        var founder = _hub.Founder();
+        (await founder.PostAsJsonAsync(Routes.Conductor, new ConductorSwitch(true))).EnsureSuccessStatusCode();
+        (await founder.PostAsJsonAsync(Routes.ConductorOrchestrators, new ConductorOrchestratorSwitch(true))).EnsureSuccessStatusCode();
+
+        using var restarted = new HubFactory { DataDir = _hub.DataDir };
+        var planned = await restarted.Services.GetRequiredService<ConductorService>().PlanOrchestratorsAsync();
+
+        Assert.Equal("T-1", Assert.Single(planned).TaskKey);
+    }
+
+    [Fact]
+    public async Task The_founder_turns_orchestrators_on_and_off_and_the_ledger_says_so()
+    {
+        var founder = _hub.Founder();
+        (await founder.PostAsJsonAsync(Routes.ConductorOrchestrators, new ConductorOrchestratorSwitch(true))).EnsureSuccessStatusCode();
+        (await founder.PostAsJsonAsync(Routes.ConductorOrchestrators, new ConductorOrchestratorSwitch(true))).EnsureSuccessStatusCode();
+        (await founder.PostAsJsonAsync(Routes.ConductorOrchestrators, new ConductorOrchestratorSwitch(false))).EnsureSuccessStatusCode();
+
+        // Said twice, recorded once: the ledger carries decisions, not keystrokes.
+        var events = await EventsAsync();
+        Assert.Single(events, e => e.Type == "conductor.orchestrators_on");
+        Assert.Single(events, e => e.Type == "conductor.orchestrators_off");
+    }
+
+    [Fact]
+    public async Task An_agent_may_not_turn_orchestrators_on()
+    {
+        var agent = await _hub.RegisterAgentAsync("nosy");
+
+        var refused = await agent.PostAsJsonAsync(Routes.ConductorOrchestrators, new ConductorOrchestratorSwitch(true));
+
+        Assert.Equal(System.Net.HttpStatusCode.Unauthorized, refused.StatusCode);
+    }
 }
