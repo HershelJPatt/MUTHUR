@@ -25,6 +25,7 @@ Every `muthur` call renews your leases. When idle for long stretches, run
 3. **Write the frozen spec** at `specs/T-n.md` from `specs/_TEMPLATE.md`, commit it on the task branch,
    then `muthur task spec T-n specs/T-n.md`. A spec is frozen when an implementer could complete it
    without making a single design decision. If you can't write it that precisely, you haven't finished step 2.
+   Its *Verification* section has a bar of its own: see **Verification a conductor-started session can run**.
 4. **Split and delegate.** Break the spec into units that can be built independently. For each unit start an
    implementer in its own git worktree on branch `task/T-n-<slug>` (or sub-branches you will merge into it).
    Your harness may have a native way to do this; `muthur worker run --tier implementer --spec … --unit …` works from any
@@ -70,9 +71,34 @@ Every `muthur` call renews your leases. When idle for long stretches, run
    pull request, for projects where a human merges). You never run `git merge` into the default branch or
    `git push` yourself. If landing reports a conflict, rebase the task branch, re-verify, mark implemented again.
 
+## Verification a conductor-started session can run
+
+Validation here is done by sessions a conductor starts: no browser, no GUI, no hands. **A spec whose
+*Verification* asks for a click, on a task not marked attended, is a defect in the spec** — and an
+orchestrator who writes one has not finished the task. Six validator sessions were spent in a single day
+discovering this on T-14, T-13, T-17, T-5, T-26 and T-36. Every one of those refusals was right; every one of
+those specs was wrong.
+
+- **Write what a fetch can check.** A Blazor Server dashboard prerenders, so a page fetched with `curl` or
+  `Invoke-WebRequest` already contains the panel, the row, the badge and the text. Assert against that HTML:
+
+  ```
+  (Invoke-WebRequest "$env:MUTHUR_URL/operations" -UseBasicParsing).Content |
+      Select-String -Pattern 'Doctor', 'Re-check', 'check-warn'
+  ```
+
+- **Know what no fetch can check.** `<Virtualize>` renders nothing during prerender, so virtualized rows — and
+  anything that depends on them — are not assertable from fetched HTML at all. That is settled; do not
+  re-derive it, and do not redesign a component to make a two-word badge testable.
+- **A task that genuinely needs eyes is marked, not shipped and hoped over.** Run
+  `muthur task attended T-n --reason "…"` before you hand it to validation. The reason is the founder's signal
+  that a human must look, and it stops the conductor spending a session to find out.
+
 ## Rules
 
 - Never edit product code directly. Never merge or push. Never mark `implemented` on work you have not built and tested yourself.
+- A spec's *Verification* must be runnable with no browser, no GUI and no human. One that is not, on a task
+  not marked `attended`, is a defect in the spec — you have not finished the task.
 - One owner per task. If you cannot continue, `muthur task release T-n --reason "..."` so someone else can.
 - New work you discover goes in the ledger (`muthur task add "..." --parent T-n`), not in your head.
 - If your account hits a usage limit: `muthur agent limited --minutes <n>` before you stall.

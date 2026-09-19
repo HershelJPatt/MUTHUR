@@ -42,6 +42,10 @@ dotnet test
 
 Plus anything a validator should exercise end to end (the user-visible behavior, not the unit tests).
 
+Every command here runs with no browser, no GUI and no human — the sessions that validate this are started by
+a conductor. If the change can only be seen by eye, mark the task
+`muthur task attended <id> --reason "…"` and say so here.
+
 ## Out of scope / follow-ups
 
 Known work this task exposes but does not do. Each becomes its own ledger task.
