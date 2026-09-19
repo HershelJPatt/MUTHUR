@@ -219,12 +219,24 @@ public static partial class KitCommands
 
             var kitRoot = Path.GetFullPath(kitDir);
             var repoRoot = Path.GetFullPath(repo);
+            var realKitRoot = RealPath(kitRoot);
+            if (realKitRoot is null)
+            {
+                problem = $"{manifestPath}: the kit directory \"{kitDir}\" could not be resolved; MUTHUR cannot tell what is inside it.";
+                return false;
+            }
+            var realRepoRoot = RealPath(repoRoot);
+            if (realRepoRoot is null)
+            {
+                problem = $"{manifestPath}: the repository directory \"{repo}\" could not be resolved; MUTHUR cannot tell what is inside it.";
+                return false;
+            }
             var validated = new List<KitEntry>();
             var destinations = new List<Destination>();
             foreach (var file in files.EnumerateArray())
             {
                 var index = validated.Count;
-                if (!TryReadEntry(manifestPath, harnessDir, kitRoot, repoRoot, file, index, out var entry, out var destination, out problem))
+                if (!TryReadEntry(manifestPath, harnessDir, kitRoot, repoRoot, realKitRoot, realRepoRoot, file, index, out var entry, out var destination, out problem))
                     return false;
                 validated.Add(entry);
                 destinations.Add(new Destination(index, entry.To, destination));
@@ -233,7 +245,7 @@ public static partial class KitCommands
             // Seeded with the files Install writes whether or not the manifest asks for them: an entry writing
             // under one turns it into a directory, and no entry names it, so no comparison of entries sees it.
             foreach (var own in InstallerFiles)
-                destinations.Add(new Destination(null, own, Path.Combine(repoRoot, own)));
+                destinations.Add(new Destination(null, own, Path.Combine(realRepoRoot, own)));
 
             if (Collision(destinations) is { } collision)
             {
@@ -247,7 +259,7 @@ public static partial class KitCommands
             // address dump rather than a sentence. Checked before anything is written, not caught after: a
             // try/catch round the write loop turns the crash into a sentence and leaves the half-installed
             // repository, which is the worse half.
-            if (Unwritable(manifestPath, harnessDir, kitRoot, repoRoot, destinations, validated) is { } blocked)
+            if (Unwritable(manifestPath, harnessDir, kitRoot, realRepoRoot, destinations, validated) is { } blocked)
             {
                 problem = blocked;
                 return false;
@@ -376,13 +388,13 @@ public static partial class KitCommands
     }
 
     /// <summary>One entry of <c>files</c>, checked field by field so the message can name the field that is wrong.</summary>
-    /// <param name="destination">The resolved <c>to</c>, which rule 20 needs to compare entries against each other.</param>
+    /// <param name="resolvedDestination">The resolved <c>to</c>, which rule 20 needs to compare entries against each other.</param>
     private static bool TryReadEntry(
-        string manifestPath, string harnessDir, string kitRoot, string repoRoot,
-        JsonElement file, int index, out KitEntry entry, out string destination, out string problem)
+        string manifestPath, string harnessDir, string kitRoot, string repoRoot, string realKitRoot, string realRepoRoot,
+        JsonElement file, int index, out KitEntry entry, out string resolvedDestination, out string problem)
     {
         entry = default;
-        destination = "";
+        resolvedDestination = "";
         problem = "";
 
         if (file.ValueKind is not JsonValueKind.Object)
@@ -476,6 +488,17 @@ public static partial class KitCommands
             problem = $"{manifestPath}: entry {index} ({to}) reads \"{from}\", which is outside the kit directory.";
             return false;
         }
+        var realSource = RealPath(source);
+        if (realSource is null)
+        {
+            problem = $"{manifestPath}: entry {index} ({to}) reads \"{from}\", whose location on disk could not be determined.";
+            return false;
+        }
+        if (!IsInside(realSource, realKitRoot))
+        {
+            problem = $"{manifestPath}: entry {index} ({to}) reads \"{from}\", which resolves through a link to \"{realSource}\", outside the kit directory.";
+            return false;
+        }
         if (!File.Exists(source))
         {
             problem = $"{manifestPath}: entry {index} ({to}) reads \"{from}\", which does not exist.";
@@ -490,7 +513,7 @@ public static partial class KitCommands
 
         // The same for the destination, plus the rooted case: Path.Combine(repo, to) is just 'to' when 'to' is
         // absolute, which is how a manifest can write to C:\Windows while --repo says otherwise.
-        if (!TryResolve(repoRoot, to, out destination, out refusal))
+        if (!TryResolve(repoRoot, to, out var destination, out refusal))
         {
             problem = $"{manifestPath}: entry {index} has a \"to\" that is not a usable path: {refusal}";
             return false;
@@ -533,6 +556,19 @@ public static partial class KitCommands
                 + "ends in a space or a dot, which this platform cannot create.";
             return false;
         }
+
+        var realDestination = RealPath(destination);
+        if (realDestination is null)
+        {
+            problem = $"{manifestPath}: entry {index} writes \"{to}\", whose location on disk could not be determined.";
+            return false;
+        }
+        if (!IsInside(realDestination, realRepoRoot))
+        {
+            problem = $"{manifestPath}: entry {index} writes \"{to}\", which resolves through a link to \"{realDestination}\", outside the repository.";
+            return false;
+        }
+        resolvedDestination = realDestination;
 
         // Decided by the repository rather than by the manifest, which is the question rule 13 already asks one
         // directory over: it calls File.Exists on the source. WriteFile would ask File.WriteAllText to overwrite
@@ -585,6 +621,41 @@ public static partial class KitCommands
     /// <summary>Containment by full path, which a string test on the manifest's own spelling cannot give.</summary>
     private static bool IsInside(string path, string root) =>
         path.StartsWith(root.TrimEnd(Path.DirectorySeparatorChar) + Path.DirectorySeparatorChar, StringComparison.OrdinalIgnoreCase);
+
+    /// <summary>
+    /// Rule 22. Where <paramref name="absolute"/> actually leads, following every reparse point on the way down,
+    /// or null when the platform will not say. Path.GetFullPath normalises a path as a string and does not follow
+    /// links, so a destination textually under the repository can still send its write somewhere else entirely;
+    /// this is the only answer that a containment test can be built on. Each component is tested rather than the
+    /// leaf alone, because a path *under* a link is not itself reported as a link. Existence is asked first
+    /// because resolving a path that does not exist throws, and because that check is what makes the
+    /// "parent is a file" case unreachable. returnFinalTarget collapses a chain of links itself, so there is no
+    /// loop here to bound: every iteration consumes one component of a finite string.
+    /// </summary>
+    private static string? RealPath(string absolute)
+    {
+        var current = Path.GetPathRoot(absolute);
+        if (string.IsNullOrEmpty(current)) return null;
+
+        foreach (var component in absolute[current.Length..]
+                     .Split(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar))
+        {
+            if (component.Length == 0) continue;
+            var candidate = Path.Combine(current, component);
+            try
+            {
+                var link = Directory.Exists(candidate) ? Directory.ResolveLinkTarget(candidate, returnFinalTarget: true)
+                         : File.Exists(candidate) ? File.ResolveLinkTarget(candidate, returnFinalTarget: true)
+                         : null;
+                current = link?.FullName ?? candidate;
+            }
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+            {
+                return null;
+            }
+        }
+        return current;
+    }
 
     /// <summary>
     /// Rule 16. Resolution is where manifest text meets the platform's own idea of a path, and a string the
