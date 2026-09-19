@@ -971,3 +971,18 @@ Two permission fixtures make the difficult rows deterministic, with no timing ra
 Test environment: if overriding TEMP/TMP, use a dedicated directory **outside every Git repository**.
 The FileProvenanceTests outside-repository fixture intentionally requires this; putting TEMP inside a
 worktree makes the fixture itself belong to that repository.
+
+Final orchestrator verification: `dotnet build` passed with zero warnings/errors. The final complete
+`dotnet test --no-build -m:1 -v normal` run, using a dedicated external TEMP/TMP, passed **4,531 tests**:
+CLI 229, Core 3,736, Launch 28, Server 538. No tests skipped. Server cleanup reported 444 directories
+removed, zero kept, zero unremovable; the outer test scratch was then removed as well.
+
+For an honest record, the first full run had two failures: the misplaced TEMP provenance fixture described
+above, and an unchanged CollisionTests concurrency case. The CLI suite and all six collision tests passed
+on focused rechecks; the final full run then passed every test. No test or product code was changed to
+obtain those results. Logs are retained in artifacts/t55-final-build.log and
+artifacts/t55-final-clean-test.log; the AOT evidence is under
+artifacts/t55-unit-b-results-20260919-213059-657618/ (assertion-failures.txt is empty).
+
+Product source, test source, and kit bytes at the final verification commit are identical to the published
+and exercised AOT commit d7d1699; subsequent commits only preserve this evidence and the verification script.
