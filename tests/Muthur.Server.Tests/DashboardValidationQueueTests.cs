@@ -19,7 +19,7 @@ public sealed class DashboardValidationQueueTests : IDisposable
     {
         var task = await owner.AddTaskAsync(title);
         (await owner.ClaimAsync(task.Id)).EnsureSuccessStatusCode();
-        (await owner.PostActionAsync(task.Id, "spec", new SetSpecRequest($"specs/{task.Id}.md"))).EnsureSuccessStatusCode();
+        (await owner.PostActionAsync(task.Id, "spec", new SetSpecRequest(_repo.WriteSpec(task.Id)))).EnsureSuccessStatusCode();
         var branch = $"task/{task.Id}-work";
         _repo.BranchWithFile(branch, file, $"{file}\n");
         (await owner.PostActionAsync(task.Id, "implemented", new ImplementedRequest(branch))).EnsureSuccessStatusCode();
