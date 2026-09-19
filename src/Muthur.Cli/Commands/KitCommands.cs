@@ -241,6 +241,18 @@ public static partial class KitCommands
                 return false;
             }
 
+            // The same pass, asked what the repository actually looks like. A manifest can be faultless and
+            // still be unwritable here, and every one of these reaches File.WriteAllText or
+            // Directory.CreateDirectory and throws - which in an AOT build with StackTraceSupport=false is an
+            // address dump rather than a sentence. Checked before anything is written, not caught after: a
+            // try/catch round the write loop turns the crash into a sentence and leaves the half-installed
+            // repository, which is the worse half.
+            if (Unwritable(manifestPath, harnessDir, kitRoot, repoRoot, destinations, validated) is { } blocked)
+            {
+                problem = blocked;
+                return false;
+            }
+
             entries = validated;
         }
         return true;
@@ -258,6 +270,86 @@ public static partial class KitCommands
     /// own, and it is the pair that cannot be honoured. Two entries naming the same path are not a collision —
     /// that is last-one-wins, which the format has always allowed — so only file-versus-directory counts.
     /// </summary>
+    /// <summary>
+    /// Why the repository cannot take these writes, or null when it can. Three questions the manifest cannot
+    /// answer, in the order a founder would meet them: something in the way of a path, then a path that is a
+    /// directory, then one that will not be overwritten.
+    /// </summary>
+    private static string? Unwritable(string manifestPath, string harnessDir, string kitRoot, string repoRoot, List<Destination> destinations, List<KitEntry> entries)
+    {
+        foreach (var d in destinations)
+        {
+            // F2. The installer's own two files are written whatever the manifest says, so a directory at
+            // either path fails every install of every kit - with no entry to blame it on.
+            if (Directory.Exists(d.Resolved))
+                return d.Entry is { } directoryEntry
+                    ? $"{manifestPath}: entry {directoryEntry} writes \"{d.Spelled}\", which is an existing directory in the repository."
+                    : $"kit install writes \"{d.Spelled}\", but it is a directory in the repository.";
+
+            // F1. WriteFile creates the parent, and Directory.CreateDirectory throws when any ancestor is a
+            // file. The mirror of the rule above, with the answer the other way round.
+            if (AncestorFile(repoRoot, d.Resolved) is { } ancestor)
+                return d.Entry is { } ancestorEntry
+                    ? $"{manifestPath}: entry {ancestorEntry} writes \"{d.Spelled}\", but \"{ancestor}\" is a file in the repository, so its parent directory cannot be created."
+                    : $"kit install writes \"{d.Spelled}\", but \"{ancestor}\" is a file in the repository, so its parent directory cannot be created.";
+
+            // F3. A read-only destination is an ordinary condition rather than a manifest fault, and is here
+            // because it crashes rather than reporting, and because this pass answers it for nothing.
+            //
+            // Only when this install would actually write it. A "create" entry whose destination already
+            // exists is kept untouched, and every shipped kit ships briefs/validator.md that way on purpose -
+            // so refusing a read-only one would refuse every install into a repository where a founder had
+            // protected their own brief, which is the opposite of what create mode is for.
+            if (File.Exists(d.Resolved) && File.GetAttributes(d.Resolved).HasFlag(FileAttributes.ReadOnly)
+                && Writes(d, entries, harnessDir, kitRoot))
+                return d.Entry is { } readOnlyEntry
+                    ? $"{manifestPath}: entry {readOnlyEntry} writes \"{d.Spelled}\", which is read-only in the repository."
+                    : $"kit install writes \"{d.Spelled}\", which is read-only in the repository.";
+        }
+        return null;
+    }
+
+    /// <summary>
+    /// Whether this install would put bytes into that path, which is a different question from whether the
+    /// path is named. A "create" entry keeps an existing file; <c>muthur.project.json</c> is written only
+    /// when absent; <c>.gitignore</c> only when it does not already ignore the worktrees directory.
+    /// </summary>
+    private static bool Writes(Destination d, List<KitEntry> entries, string harnessDir, string kitRoot)
+    {
+        if (d.Entry is { } index)
+        {
+            // The same question the write itself asks, through the same method: not "what mode is this" but
+            // "what would end up in the file, and is it already there". A kit re-installed unchanged writes
+            // nothing, so a founder who protected a current file is not refused.
+            var entry = entries[index];
+            var content = Expand(File.ReadAllText(Path.Combine(harnessDir, entry.From)), kitRoot);
+            if (Rendered(d.Resolved, content, entry.Mode) is not { } bytes) return false;
+            return !File.Exists(d.Resolved)
+                || File.ReadAllText(d.Resolved).ReplaceLineEndings("\n") != bytes.ReplaceLineEndings("\n");
+        }
+        if (!File.Exists(d.Resolved)) return true;
+        if (string.Equals(d.Spelled, ProjectContext.FileName, StringComparison.Ordinal)) return false;
+        var ignored = File.ReadAllText(d.Resolved);
+        return !ignored.Split('\n').Any(line => line.Trim() is ".worktrees/" or ".worktrees");
+    }
+
+    /// <summary>The first component between the repository root and this path that exists as a file, if any.</summary>
+    private static string? AncestorFile(string repoRoot, string resolved)
+    {
+        var parent = Path.GetDirectoryName(resolved);
+        var walked = new List<string>();
+        while (parent is { Length: > 0 } && IsInside(parent, repoRoot))
+        {
+            walked.Add(parent);
+            parent = Path.GetDirectoryName(parent);
+        }
+        walked.Reverse();   // outermost first, so the message names the component a reader would look at
+        foreach (var directory in walked)
+            if (File.Exists(directory))
+                return Path.GetRelativePath(repoRoot, directory).Replace('\\', '/');
+        return null;
+    }
+
     private static (Destination A, Destination B)? Collision(List<Destination> destinations)
     {
         for (var a = 0; a < destinations.Count; a++)
@@ -635,11 +727,20 @@ public static partial class KitCommands
     /// Applies one manifest entry. <c>create</c> exists because a brief stops being MUTHUR's the moment the
     /// founder edits it, and re-running the install must never take that edit away.
     /// </summary>
-    internal static string WriteKitFile(string path, string content, string? mode) => mode switch
+    internal static string WriteKitFile(string path, string content, string? mode) =>
+        Rendered(path, content, mode) is { } bytes ? WriteFile(path, bytes) : "kept";
+
+    /// <summary>
+    /// Exactly what this install would leave in <paramref name="path"/>, or null when it would not write at
+    /// all. One answer to "what does this produce", so the pre-flight's question — would this put bytes here —
+    /// and the write itself cannot drift apart. They did: F3 refused a read-only file whose content already
+    /// matched, because the pre-flight knew the mode and not the content.
+    /// </summary>
+    private static string? Rendered(string path, string content, string? mode) => mode switch
     {
-        "section" => WriteSection(path, content),
-        "create" => File.Exists(path) ? "kept" : WriteFile(path, content),
-        _ => WriteFile(path, content),
+        "section" => SectionDocument(path, content),
+        "create" => File.Exists(path) ? null : content.ReplaceLineEndings("\n"),
+        _ => content.ReplaceLineEndings("\n"),
     };
 
     private static string WriteFile(string path, string content)
@@ -653,19 +754,19 @@ public static partial class KitCommands
     }
 
     /// <summary>For files the repository also owns (AGENTS.md): maintain only a marked MUTHUR section inside them.</summary>
-    private static string WriteSection(string path, string content)
+    /// <summary>The whole document a section-mode entry would produce, existing content and all.</summary>
+    private static string SectionDocument(string path, string content)
     {
         const string begin = "<!-- BEGIN MUTHUR -->";
         const string end = "<!-- END MUTHUR -->";
         var section = $"{begin}\n{content.ReplaceLineEndings("\n").Trim()}\n{end}\n";
-        if (!File.Exists(path)) return WriteFile(path, section);
+        if (!File.Exists(path)) return section;
 
         var existing = File.ReadAllText(path).ReplaceLineEndings("\n");
         var start = existing.IndexOf(begin, StringComparison.Ordinal);
         var stop = existing.IndexOf(end, StringComparison.Ordinal);
-        var updated = start >= 0 && stop > start
+        return start >= 0 && stop > start
             ? existing[..start] + section + existing[(stop + end.Length)..].TrimStart('\n')
             : existing.TrimEnd('\n') + "\n\n" + section;
-        return WriteFile(path, updated);
     }
 }
