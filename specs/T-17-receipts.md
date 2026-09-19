@@ -493,3 +493,77 @@ stepped clock, which is the only honest way to test it.
 - A daily digest through `muthur out`, so the morning record arrives rather than being fetched.
 - `muthur doctor` could warn when one account carries every session — a subscription about to run out is
   visible in these numbers before it bites.
+
+## Amendment 4 — the selector was a script after all (2026-09-19)
+
+`conductor-validator` failed T-17 and the verdict is accepted. The acceptance this spec froze says:
+
+> The window selector is a **link, not a script**: `curl -s '…/receipts?hours=1'` and `?hours=168` are the same
+> two states the buttons navigate to, and the `btn-on` marker moves between them.
+
+`ReceiptsPanel.razor` renders:
+
+```razor
+<button class="btn @(Window == hours ? "btn-on" : "")" @onclick="() => Select(hours)">@label</button>
+```
+
+with `Select` calling `Navigation.NavigateTo`. The fetched HTML therefore holds three `<button>` elements and
+no `href` anywhere, so there is nothing an unattended validator can follow. The validator reported it as a
+spec/implementation mismatch and explicitly declined to substitute a browser click — which is exactly right,
+because this spec's own note tells them not to.
+
+**The implementation is the wrong half here, not the acceptance.** The component's own comment says so:
+
+```csharp
+/// <summary>The window, in hours. Held in the query string so the founder can link to one.</summary>
+```
+
+The window was always meant to live in the URL. Rendering the control as a script that pushes that URL, rather
+than as the link to it, gained nothing and cost the whole check. Anchors are also the better control:
+middle-click, open in a new tab, keyboard and copy-the-link all work on one, and none of them work on a
+`<button>`.
+
+### The fix
+
+1. **`ReceiptsPanel.razor`** renders each window as an anchor to the URL it already knows how to read:
+
+   ```razor
+   <a class="btn @(Window == hours ? "btn-on" : "")" href="/receipts?hours=@hours">@label</a>
+   ```
+
+   `@inject NavigationManager Navigation` and the `Select` method go with it. Nothing else changes: `Hours` is
+   already a `[Parameter]` fed from the query string, and `OnParametersSetAsync` already re-reads when it
+   moves.
+
+2. **`app.css`** — the `.btn` rule carries no `display` and no `text-decoration`, so an anchor wearing it
+   would render inline and underlined. Add `display: inline-block;` and `text-decoration: none;` to that rule,
+   where both are harmless to the real `<button>`s that share it. Per `CLAUDE.md` the class changes; no inline
+   style is introduced and no new class is invented.
+
+3. **`DashboardReceiptsTests`** — `Switching_the_window_to_seven_days_re_reads_and_changes_the_numbers`
+   asserts `class="btn btn-on"[^>]*>24h<`, which an anchor satisfies exactly as well as a button did. That is
+   the hole: nothing pinned the thing the acceptance actually asks for, so the mismatch survived a green
+   suite. Add assertions that each window control is an **anchor carrying the matching `href`** —
+   `/receipts?hours=24`, `?hours=168`, `?hours=720` — and that the window row contains no `<button>`.
+
+### One correction to the acceptance itself
+
+The frozen wording compares `?hours=1` with `?hours=168`. The windows offered are 24h, 7d and 30d, so
+`hours=1` matches none of them and the marker is merely *absent* — "the marker moves between them" is
+satisfied by an absence, which is a weak check that reads like a strong one. The comparison becomes
+**`?hours=24` against `?hours=168`**, where `btn-on` genuinely moves from the first control to the second.
+That is what the existing unit test already does, and the end-to-end check should match it.
+
+### Not re-litigated
+
+Everything else the validator exercised passed in detail: the four headline figures as separate values, the
+single currency figure, the `receipt-none` em dash, the tab on all four pages, the clamping, the CLI, the two
+real worker reports, and the state-time answer. None of it is reopened. The verdict stopped at the first
+reproducible acceptance failure and said so; this amendment closes that one thing.
+
+### Rebase note
+
+This branch was rebased onto `main` after T-13 landed. One conflict, in
+`tests/Muthur.Server.Tests/SystemTests.cs`, where T-41's shutdown tests and T-17's two receipts endpoint tests
+were added at the same place. Both sides kept; the receipts tests sit with the other `[Fact]` methods and the
+`DisposedChannel` fixture class stays last in the file.
