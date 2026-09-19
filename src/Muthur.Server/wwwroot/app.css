@@ -116,6 +116,13 @@ b { font-weight: 600; }
 .role-row { display: flex; align-items: center; gap: 8px; padding: 3px 4px; font: 11.5px var(--mono); }
 .role-row .role-holder { margin-left: auto; color: var(--faint); font-size: 10.5px; }
 
+/* ---------- receipts ---------- */
+.section-note { font: 11px var(--mono); color: var(--faint); padding: 0 4px 4px; }
+.receipt-task { color: var(--blue); }
+.receipt-title { flex: 1; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.receipt-cost { color: var(--text); font-weight: 600; }
+.receipt-none { color: var(--faint); }
+
 /* ---------- stream ---------- */
 .filters { display: flex; gap: 4px; }
 .filter { font: 700 9.5px var(--mono); letter-spacing: .12em; text-transform: uppercase; padding: 3px 8px; border-radius: 999px; border: 1px solid var(--line); background: transparent; color: var(--dim); cursor: pointer; }
@@ -144,6 +151,7 @@ b { font-weight: 600; }
 .btn { font: 700 10.5px var(--mono); letter-spacing: .12em; text-transform: uppercase; padding: 6px 12px; border-radius: 6px; border: 1px solid var(--line-strong); background: var(--panel-2); color: var(--text); cursor: pointer; }
 .btn:hover { border-color: var(--dim); }
 .btn-go { color: var(--accent); border-color: rgba(95, 211, 141, .45); background: var(--accent-bg); }
+.btn-on { color: var(--text); border-color: var(--accent); background: var(--accent-bg); }
 .btn-stop { color: var(--red); border-color: rgba(229, 96, 90, .45); background: var(--red-bg); }
 .btn-row { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 10px; }
 .request { border: 1px solid var(--line); border-left: 2px solid var(--amber); border-radius: 6px; background: var(--panel-2); padding: 12px; margin-bottom: 10px; }

@@ -1,0 +1,12 @@
+@page "/receipts"
+
+<PageTitle>MUTHUR · Receipts</PageTitle>
+
+<div class="page">
+    <ReceiptsPanel Hours="Hours" />
+</div>
+
+@code {
+    /// <summary>The window the panel's buttons navigate to, so it can be linked to and read back on a fresh load.</summary>
+    [SupplyParameterFromQuery] public int? Hours { get; set; }
+}

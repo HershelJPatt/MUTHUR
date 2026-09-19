@@ -1,0 +1,177 @@
+@using System.Globalization
+@inherits LivePanel
+@inject ReceiptsService Receipts
+@inject NavigationManager Navigation
+
+<section class="panel">
+    <div class="panel-head">
+        <span class="panel-title">Receipts</span>
+        <span class="panel-sub">since @_report.Since.ToLocalTime().ToString("ddd MMM d · HH:mm")</span>
+    </div>
+    <div class="panel-body">
+        <div class="btn-row">
+            @foreach (var (hours, label) in Windows)
+            {
+                <button class="btn @(Window == hours ? "btn-on" : "")" @onclick="() => Select(hours)">@label</button>
+            }
+        </div>
+        <div class="stats">
+            <span class="stat"><b>@_report.Sessions</b> sessions</span>
+            <span class="stat"><b>@_report.ConductorSessions</b> conductor</span>
+            <span class="stat"><b>@_report.WorkerRuns</b> worker runs</span>
+            <span class="stat"><b>@Duration(_report.WorkerSeconds)</b> worker time</span>
+        </div>
+
+        @if (Nothing)
+        {
+            <div class="empty">nothing spent in this window</div>
+        }
+
+        @if (_report.StateTime.Count > 0)
+        {
+            <div class="section-label">where the time went</div>
+            @foreach (var row in _report.StateTime)
+            {
+                <div class="role-row">
+                    <span class="pill">@row.State.ToWire()</span>
+                    <span class="receipt-title">@Duration(row.Seconds) across @row.Tasks @(row.Tasks == 1 ? "task" : "tasks")</span>
+                    <span class="role-holder">longest @Duration(row.Longest)@(row.LongestTask is { } task ? " · " + task : "")</span>
+                </div>
+            }
+        }
+
+        @if (_report.ByAccount.Count > 0)
+        {
+            <div class="section-label">by account</div>
+            @foreach (var group in _report.ByAccount)
+            {
+                <div class="role-row">
+                    <span class="tag">@(group.Tier is { Length: > 0 } tier ? tier : "untiered")</span>
+                    <span class="receipt-title">@group.Harness/@(group.Model.Length > 0 ? group.Model : "default")</span>
+                    <span class="role-holder">@(group.Account is { Length: > 0 } account ? account : "no account") · @group.Count @(group.Count == 1 ? "session" : "sessions")</span>
+                </div>
+            }
+        }
+
+        @if (_report.Tasks.Count > 0)
+        {
+            <div class="section-label">tasks</div>
+            @foreach (var task in _report.Tasks)
+            {
+                <div class="role-row">
+                    <a class="receipt-task" href="/tasks/@task.Task">@task.Task</a>
+                    <span class="receipt-title">@task.Title</span>
+                    @if (task.Landed)
+                    {
+                        <span class="tag tag-held">landed</span>
+                    }
+                    <span class="pill">@task.State.ToWire()</span>
+                    <span class="role-holder">@Spend(task)</span>
+                </div>
+            }
+        }
+
+        @if (_report.Accounts.Count > 0)
+        {
+            <div class="section-label">accounts</div>
+            @foreach (var account in _report.Accounts)
+            {
+                <div class="role-row">
+                    <span class="@(account.LimitedUntil is null ? "tag" : "tag tag-open")">@(account.LimitedUntil is null ? "clear" : "limited")</span>
+                    <span class="receipt-title">@account.Account</span>
+                    <span class="role-holder">@account.Times over quota@(account.LimitedUntil is { } until ? " · lifts " + Format.Until(until, _report.At) : "")</span>
+                </div>
+            }
+        }
+
+        @if (_report.Runs.Count > 0)
+        {
+            <div class="section-label">worker runs</div>
+            @* The founder settled this: cost is exact on the run that reported it, so it goes there and is never
+               totalled. What a total would silently drop is said out loud instead. *@
+            <div class="section-note">conductor validator sessions report no cost</div>
+            @foreach (var run in _report.Runs)
+            {
+                <div class="role-row">
+                    <span class="@(run.Success ? "tag tag-held" : "tag tag-open")">@(run.Success ? "ok" : "failed")</span>
+                    @if (run.Task is { Length: > 0 } id)
+                    {
+                        <a class="receipt-task" href="/tasks/@id">@id</a>
+                    }
+                    <span class="receipt-title">@run.Worker@(run.Unit is { Length: > 0 } unit ? " · " + unit : "")</span>
+                    <span class="role-holder">@run.Tier · @Duration(run.Seconds)</span>
+                    @if (run.CostUsd is { } cost)
+                    {
+                        <span class="receipt-cost">@Usd(cost)</span>
+                    }
+                    else
+                    {
+                        <span class="receipt-none">—</span>
+                    }
+                </div>
+            }
+        }
+    </div>
+</section>
+
+@code {
+    private static readonly (int Hours, string Label)[] Windows = [(24, "24h"), (168, "7d"), (720, "30d")];
+
+    /// <summary>Somewhere to render from before the first read answers; every list empty and every count zero.</summary>
+    private static readonly ReceiptsDto Unread = new(default, default, 0, 0, 0, 0, [], [], [], [], []);
+
+    private ReceiptsDto _report = Unread;
+    private int _loaded = -1;
+
+    /// <summary>The window, in hours. Held in the query string so the founder can link to one.</summary>
+    [Parameter] public int? Hours { get; set; }
+
+    private int Window => Hours ?? Windows[0].Hours;
+
+    // The window's edge moves with time alone, so re-read on the clock as well as on events.
+    protected override TimeSpan? ClockInterval => TimeSpan.FromSeconds(60);
+
+    protected override bool IsRelevant(Muthur.Core.Entities.LedgerEvent e) =>
+        e.Type.StartsWith("agent.", StringComparison.Ordinal)
+        || e.Type.StartsWith("conductor.", StringComparison.Ordinal)
+        || e.Type.StartsWith("worker.", StringComparison.Ordinal)
+        || e.Type.StartsWith("task.", StringComparison.Ordinal)
+        || e.Type.StartsWith("validation.", StringComparison.Ordinal)
+        || e.Type.StartsWith("account.", StringComparison.Ordinal);
+
+    // The same read the API and the CLI make; the panel never touches the database itself.
+    protected override async Task LoadAsync()
+    {
+        _loaded = Window;
+        _report = await Receipts.ReadAsync(Window);
+    }
+
+    /// <summary>A new window arrives as a parameter, and the first load has already read it.</summary>
+    protected override async Task OnParametersSetAsync()
+    {
+        if (_loaded != Window) await ReloadNowAsync();
+    }
+
+    // Through the URL rather than a field, so the window a founder is looking at is the one they can send.
+    private void Select(int hours) => Navigation.NavigateTo(Navigation.GetUriWithQueryParameter("hours", (int?)hours));
+
+    private bool Nothing =>
+        _report.ByAccount.Count == 0 && _report.Tasks.Count == 0 && _report.StateTime.Count == 0
+        && _report.Accounts.Count == 0 && _report.Runs.Count == 0;
+
+    private static string Spend(TaskReceiptDto task) =>
+        $"{task.ConductorSessions} staffed · {task.WorkerRuns} runs · {task.ValidationFailures} failed · " +
+        $"{Duration(task.ValidatingSeconds)} validating · {Duration(task.InProgressSeconds)} working";
+
+    /// <summary>"42s", "7m", "3.5h", "2.1d" — the board's vocabulary, with a fraction where an hour is too coarse.</summary>
+    private static string Duration(double seconds) => seconds switch
+    {
+        < 60 => ((int)seconds).ToString(CultureInfo.InvariantCulture) + "s",
+        < 3600 => ((int)(seconds / 60)).ToString(CultureInfo.InvariantCulture) + "m",
+        < 86400 => (seconds / 3600).ToString("0.#", CultureInfo.InvariantCulture) + "h",
+        _ => (seconds / 86400).ToString("0.#", CultureInfo.InvariantCulture) + "d",
+    };
+
+    /// <summary>What one harness reported for one run. Invariant, because the hub's culture is not the founder's.</summary>
+    private static string Usd(decimal cost) => "$" + cost.ToString("0.00", CultureInfo.InvariantCulture);
+}
