@@ -718,3 +718,99 @@ case prints `Unhandled exception` or `muthur!<BaseAddress>`, and that no case le
 - **Acceptance:** `dotnet build` clean (warnings are errors) and `dotnet test` green, with
   `KitPreflightTests`, `KitInstallTests`, `KitManifestTests`, `KitWriteModeTests` and `InstallTransactionTests`
   all passing unedited, and the lock test passing unedited.
+
+## Amendment 4 — the message names the wrong file for the third time (2026-09-19)
+
+Unit B was blocked before it could run a single case, and reported this from reading the merged code. It is
+right, and it is **Amendment 1's exact defect in the one path Amendment 1 did not reach** — the path Unit B's
+own "locked **source** file in the kit" row was aimed at. Verified by the orchestrator against
+`KitCommands.cs:87-89`:
+
+```csharp
+var from = Path.GetFullPath(Path.Combine(harnessDir, entry.From));
+var content = Expand(File.ReadAllText(from), kitDir);   // throws here
+var status = transaction.Apply(Path.Combine(repo, entry.To), content, entry.Mode);
+```
+
+`Writing` is set inside `Apply` and `Write`, and at the two installer-file reads Amendment 1 added — nowhere
+else. So when entry *n*'s **source** cannot be read, `Writing` still holds entry *n−1*'s **destination**, and
+the founder is told:
+
+> the install failed while writing `"b.md"`: IOException: The process cannot access the file
+> `'<kit>\scratch\c.md'` because it is being used by another process.
+
+`b.md` was written fine. The Goal says the error **names the file that failed**; this names a file that did
+not. The pre-flight does not rescue it: `Writes` reads a source only when the destination exists *and* is
+read-only, so an ordinary destination with a locked source reaches the loop exactly as intended.
+
+### Why the obvious fix is wrong, and what we do instead
+
+Setting `transaction.Writing = from` alone is not enough, and Unit B was right to stop rather than improvise
+it. Two things break:
+
+- the sentence says **"while writing"** about a file being **read**; and
+- `Path.GetRelativePath(repo, from)` renders a kit path as `..\..\..\kit\scratch\c.md`, because the kit is not
+  under the repository at all.
+
+So the concept is widened to what it always actually was — the path the install was last **touching**, read or
+written — and the rendering learns that not every path is inside the repository:
+
+- **`InstallTransaction.Writing` is renamed `Touching`**, same type, same `internal` setter, same semantics
+  otherwise. Its doc comment says: the path the install last read or wrote, so a failure names the file rather
+  than the command. Every existing assignment keeps its place; `Apply` and `Write` still set it on the way in.
+- **`Install` sets `transaction.Touching = from` immediately before `File.ReadAllText(from)`** in the entry
+  loop, for the same reason Amendment 1 set it before the two installer-file reads. The two Amendment 1
+  assignments are renamed and otherwise untouched.
+- **The clause becomes `while installing "<path>"`** in both `install_failed` and `install_not_undone`.
+  "installing" is true of a read and of a write; "writing" was only ever true of half of them. The codes, the
+  exit code, and every other word of both sentences are unchanged. When `Touching` is null the clause is
+  omitted, exactly as before.
+- **A path outside the repository is named in full**, because `..\..\..\kit\scratch\c.md` tells a founder less
+  than the path does:
+
+  ```csharp
+  /// <summary>
+  /// The path as the founder would recognise it: relative to the repository when it is inside one, and in
+  /// full when it is not. A kit source is not under the repository, and rendering it as a chain of "..\"
+  /// segments names it less clearly than not trying to.
+  /// </summary>
+  private static string Name(string repo, string path) =>
+      Path.GetRelativePath(repo, path) is var relative && relative.StartsWith("..", StringComparison.Ordinal)
+          ? path
+          : relative;
+  ```
+
+  `Failed` uses `Name(repo, path)` in place of `Path.GetRelativePath(repo, path)`. The rollback failure list in
+  `InstallTransaction.Rollback` is **not** changed: every path in it is one the transaction wrote, and those
+  are inside the repository by construction.
+
+### Acceptance, added
+
+- `InstallTransactionTests`: the `Writing` test is renamed for `Touching` and otherwise unchanged.
+- `KitInstallRollbackTests`: existing assertions change `while writing "c.md"` to `while installing "c.md"`.
+  **New test:** a kit **source** held open with `FileShare.None` for the whole invocation, asserting exit 1,
+  `install_failed`, that the message names the **source** path and **not** the previous entry's destination,
+  and `AsItWasFound()`. Assert the absence of `"b.md"` explicitly — a test that only checks the right name is
+  present would have passed against the defect, since the message quotes the source path in the exception text
+  already.
+- Unit B's "locked source file in the kit" row now has a defined expectation rather than an open question.
+
+### Recorded
+
+Three times now in one task: Amendment 1 for `.gitignore`, and this for the kit source. Each time the property
+was "`Writing` is set wherever the transaction is called", and each time the gap was a filesystem call in
+`Install` that does **not** go through the transaction. The renaming to `Touching` is the durable half of the
+fix: a reader asking "is `Touching` set here?" at each of `Install`'s own `File.*` calls gets the right answer,
+where "is this a write?" got the wrong one twice. Both were found by reading, not by a test — and both were
+found by an implementer reading the frozen text against the code before building, which is now the third
+entry in this spec's record of that working.
+
+### Unit D — name the file that actually failed
+
+- **Files:** `src/Muthur.Cli/Infrastructure/InstallTransaction.cs`, `src/Muthur.Cli/Commands/KitCommands.cs`,
+  `tests/Muthur.Cli.Tests/InstallTransactionTests.cs`, `tests/Muthur.Cli.Tests/KitInstallRollbackTests.cs`.
+- **Does:** everything in this amendment, and nothing else.
+- **Depends on:** Unit C (merged).
+- **Acceptance:** `dotnet build` clean, `dotnet test` green, `KitPreflightTests`, `KitInstallTests`,
+  `KitManifestTests` and `KitWriteModeTests` passing unedited, and the new locked-source test failing against
+  `d7afb69` and passing after.
