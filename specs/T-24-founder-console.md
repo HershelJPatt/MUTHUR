@@ -309,3 +309,59 @@ what it does, not for the console, so the next stacked-form page can use it.
 
 `AgentService.RegisterAsync` validates the harness against nothing. With a datalist rather than a select, the
 console no longer pretends otherwise — it suggests what exists and accepts what the API accepts.
+
+## Amendment 2 — two spec problems Unit B was right to stop for (2026-09-19)
+
+### 1. Unit A's `<select>` assertion enforced its own deviation, page-wide
+
+`DashboardConsoleTests.cs:56` asserted `DoesNotContain("<select")` over the **whole** fetched page. The Design
+gives Projects a land-mode select and Outbound a channel select, so that line blocked both Unit B and Unit C.
+
+The assertion's own comment says "a `<select>` **here**" — its intent was the harness and tier fields, which
+the four assertions above it already pin as `<input list>` + `<datalist>`. And Amendment 1 said *"Tier stays a
+`<select>`"*; Unit A made tier a datalist too, for a good reason I accepted, and then wrote a page-wide
+assertion enforcing that deviation against every later unit.
+
+**Unit B's fix is ratified**: scope it to the Agents section rather than delete it, with a comment saying why
+land mode is different. A guard that protects a decision should cover the decision, not the file.
+
+### 2. Nothing in the hub reads a brief file, so "the service's message" does not exist
+
+The Design said to *"read the brief file and call `Roles.DefineAsync(…)`"* and let a bad path *"fail with the
+service's message"*. There is no such service: `RoleService.DefineAsync` takes brief **text**, and the file
+read lives in the CLI (`RoleCommands.cs:26-32`). I wrote that paragraph as though a service existed because
+the CLI made it look like one did.
+
+Unit B's answer is ratified with one addition. What it built:
+
+- a private `ReadBriefAsync` resolving the path against each project's `RepoPath` in key order;
+- an `IsInside` guard copied from `TaskService.cs:326`. **That instinct was right and is the important part**
+  — this control reads the founder's disk from a browser tab, and a path free to climb out with `..` would
+  let that tab read anything on the machine. Nothing in the spec asked for it.
+
+**The addition: mirror the CLI's `brief_file_dirty` refusal.** `RoleCommands.cs:29` refuses a brief file with
+uncommitted changes, so the hub's stored brief always corresponds to something in git. Without it the console
+is the lax path to the same operation, and a founder would get a hub brief no committed file backs — which is
+exactly the drift T-20 exists to prevent. Two clients of one operation must not have different safety rules.
+
+That leaves the *file-reading* rule in two places, which is the shape I refused in T-59 ("one deny list, not
+two"). It is accepted here only because unifying it means a new service that reads the founder's disk, which
+is a real design decision and not a drain-time change. **Filed as a follow-up.**
+
+### 3. The inferred checkbox loses a deliberate override
+
+Unit B implemented *"updates as the key is typed"* literally, and reported the consequence: a founder who
+unticks the box and then goes back to fix a typo in the key silently gets it re-ticked. That is a defect —
+the control exists so the founder can see **and override** what was inferred, and an override that a later
+keystroke revokes is not one. **Take the latch**: once the founder touches the checkbox, inference stops for
+that entry.
+
+### Also ratified
+
+- `RequiredValidators` sent as an **empty list, never null**, when the box is cleared — null means "leave the
+  gate alone", so a cleared box would do nothing. There is a test for the distinction.
+- The test that regexes T-5's sentence out of a fetched `/projects` and asserts `/console` contains that exact
+  string, rather than retyping it. Two pages that must agree, proven to agree.
+- A test asserting the string `ingest` appears nowhere on `/console`, so nobody adds the field without
+  reading why it was cut.
+- Not rendering `RepoPath` on the Projects row: the console is a control surface, not a second description.
