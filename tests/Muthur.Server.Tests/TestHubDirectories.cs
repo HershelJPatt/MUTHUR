@@ -23,6 +23,16 @@ internal static class TestHubDirectories
     /// <summary>The directory every hub's <c>DataDir</c> is created under, named so a reader can go and look.</summary>
     private static string Root => Path.Combine(Path.GetTempPath(), "muthur-tests");
 
+    /// <summary>
+    /// Attempts before a delete counts as a failure, and how long to wait between them. This is the one place
+    /// in the suite that spends real time on purpose: a virus scanner holding a handle for a moment is an
+    /// external resource, and waiting on it is a budget, not synchronization with the system under test. The
+    /// rule that tests never sleep to synchronize is intact — nothing here waits for the hub to do anything.
+    /// </summary>
+    private const int DeleteAttempts = 3;
+
+    private static readonly TimeSpan[] DeleteBackoff = [TimeSpan.FromMilliseconds(50), TimeSpan.FromMilliseconds(100)];
+
     internal static void Release(string dataDir, bool expectsLoggedErrors = false)
     {
         // A restart test brings a second hub up over the same DataDir; whichever disposes second finds it
@@ -40,19 +50,27 @@ internal static class TestHubDirectories
     private static Outcome Attempt(string dataDir, bool expectsLoggedErrors)
     {
         if (!expectsLoggedErrors && Evidence(dataDir) is { } note) return new(Disposition.Kept, note);
-        try
+        var lastFailure = "";
+        for (var attempt = 0; attempt < DeleteAttempts; attempt++)
         {
-            Directory.Delete(dataDir, recursive: true);
-            return new(Disposition.Removed, "");
+            // Nothing is waited for on the happy path, which is every directory today: the backoff is only
+            // ever paid by a directory that has already lost the delete once.
+            if (attempt > 0) Thread.Sleep(DeleteBackoff[attempt - 1]);
+            try
+            {
+                Directory.Delete(dataDir, recursive: true);
+                return new(Disposition.Removed, "");
+            }
+            catch (IOException ex)
+            {
+                lastFailure = ex.Message;
+            }
+            catch (UnauthorizedAccessException ex)
+            {
+                lastFailure = ex.Message;
+            }
         }
-        catch (IOException ex)
-        {
-            return new(Disposition.Failed, ex.Message);
-        }
-        catch (UnauthorizedAccessException ex)
-        {
-            return new(Disposition.Failed, ex.Message);
-        }
+        return new(Disposition.Failed, lastFailure);
     }
 
     /// <summary>
@@ -121,11 +139,24 @@ internal static class TestHubDirectories
         }
     }
 
+    /// <summary>
+    /// The process exit code this run has earned. A directory the suite could not remove is not a clean run —
+    /// the same reasoning as "warnings are errors" — while a kept directory is evidence the retention rule
+    /// preserved on purpose and reddens nothing.
+    /// </summary>
+    internal static int ExitCode()
+    {
+        lock (Gate) return Outcomes.Values.Any(o => o.What is Disposition.Failed) ? 1 : 0;
+    }
+
     // A module initializer runs before any test in the assembly, so no test class has to opt in and none can
     // forget. The summary itself waits for process exit, when every hub has been disposed.
     [ModuleInitializer]
     internal static void ReportAtExit() => AppDomain.CurrentDomain.ProcessExit += (_, _) =>
     {
+        // The summary goes out first, so an operator reading a failed run already has the lines that explain
+        // it. Nothing sets a zero here: another component may have earned a failure code of its own.
         foreach (var line in Summary()) Console.Error.WriteLine(line);
+        if (ExitCode() is not 0) Environment.ExitCode = ExitCode();
     };
 }

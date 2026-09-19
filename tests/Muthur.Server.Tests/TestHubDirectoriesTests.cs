@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using Muthur.Contracts;
 
 namespace Muthur.Server.Tests;
@@ -137,6 +138,100 @@ public sealed class TestHubDirectoriesTests
         Assert.False(Directory.Exists(dir));
         // Removed directories are counted, not listed, so the earlier failure must no longer be named.
         Assert.DoesNotContain(TestHubDirectories.Summary(), line => line.Contains(dir, StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public void A_directory_held_open_for_the_whole_retry_budget_is_failed_and_reddens_the_run()
+    {
+        // ExitCode() answers for the whole run, so these tests pin the causal claim — this outcome reddens
+        // the run, that one leaves it alone — rather than a literal zero. Other classes are releasing
+        // directories in parallel, and the hand proof of the exit hook leaks one on purpose.
+        var before = TestHubDirectories.ExitCode();
+        var dir = NewHeldDir(out var held);
+        try
+        {
+            TestHubDirectories.Release(dir);
+
+            var reported = Assert.Single(TestHubDirectories.Summary(), line => line.Contains(dir, StringComparison.Ordinal));
+            Assert.StartsWith("  failed  ", reported, StringComparison.Ordinal);
+            Assert.NotEqual(0, TestHubDirectories.ExitCode());
+        }
+        finally
+        {
+            held.Dispose();
+        }
+
+        // Put the run back where it was: this suite must not redden itself proving that a real leak would.
+        TestHubDirectories.Release(dir);
+
+        Assert.False(Directory.Exists(dir));
+        Assert.Equal(before, TestHubDirectories.ExitCode());
+    }
+
+    [Fact]
+    public void A_handle_released_within_the_retry_budget_ends_removed()
+    {
+        // The case the retry exists for: a scanner lets go a moment after the first delete lost to it.
+        var before = TestHubDirectories.ExitCode();
+        var dir = NewHeldDir(out var held);
+        var swept = Path.Combine(dir, "swept.marker");
+        File.WriteAllText(swept, "");
+        using (held)
+        {
+            // A recursive delete that throws still removes every file it could, so the marker's disappearance
+            // is an observable "one attempt has been made and lost", and the handle goes on that condition
+            // rather than on a clock. The watcher gets a thread of its own because the thread pool is busy
+            // running the rest of the suite, and a release queued behind that work would miss the budget it
+            // is meant to land inside.
+            var watcher = new Thread(() =>
+            {
+                var deadline = DateTime.UtcNow + Eventually.Budget;
+                while (File.Exists(swept) && DateTime.UtcNow < deadline) Thread.Sleep(1);
+                held.Dispose();
+            }) { IsBackground = true };
+            watcher.Start();
+
+            var spent = Stopwatch.StartNew();
+            TestHubDirectories.Release(dir);
+            spent.Stop();
+
+            Assert.True(watcher.Join(Eventually.Budget), "the watcher never let go of the handle");
+            Assert.False(Directory.Exists(dir));
+            Assert.DoesNotContain(TestHubDirectories.Summary(), line => line.Contains(dir, StringComparison.Ordinal));
+            Assert.Equal(before, TestHubDirectories.ExitCode());
+
+            // Without a backoff paid, the handle was gone before the first attempt reached it and this test
+            // would be the happy path in disguise. The retry removed the directory only if it waited first.
+            Assert.True(spent.Elapsed >= TimeSpan.FromMilliseconds(40), $"removed in {spent.ElapsedMilliseconds}ms, so no attempt was ever retried");
+        }
+    }
+
+    [Fact]
+    public void Removing_and_keeping_directories_leaves_the_exit_code_alone()
+    {
+        // A kept directory is evidence the retention rule preserved on purpose, not a leak, so neither it nor
+        // a removed one reddens the run. Only Failed does, which the test above pins.
+        var before = TestHubDirectories.ExitCode();
+        var kept = NewDataDir(Information, Error);
+        var removed = NewDataDir(Information);
+
+        TestHubDirectories.Release(kept);
+        TestHubDirectories.Release(removed);
+
+        Assert.True(Directory.Exists(kept));
+        Assert.False(Directory.Exists(removed));
+        Assert.Equal(before, TestHubDirectories.ExitCode());
+
+        TestHubDirectories.Release(kept, expectsLoggedErrors: true);
+    }
+
+    /// <summary>A data directory no delete can empty, because <paramref name="held"/> excludes every sharer.</summary>
+    private static string NewHeldDir(out FileStream held)
+    {
+        var dir = Path.Combine(Path.GetTempPath(), "muthur-tests", Guid.NewGuid().ToString("n"));
+        Directory.CreateDirectory(dir);
+        held = new FileStream(Path.Combine(dir, "held.bin"), FileMode.CreateNew, FileAccess.Write, FileShare.None);
+        return dir;
     }
 
     /// <summary>A data directory holding the log lines given, as a disposed hub would have left it.</summary>
