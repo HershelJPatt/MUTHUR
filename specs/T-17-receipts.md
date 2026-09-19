@@ -389,7 +389,9 @@ cost field anywhere else in `ReceiptsDto`, and nothing sums `CostUsd`.
   2. A hub with nothing in it renders the empty state, not an exception.
   3. A hub with the Unit B fixture renders the task rows in spend order, the state-time rows, and the account
      groups; assert on the rendered markup the way `DashboardOperationsTests` does.
-  4. Switching the window to 7d re-reads and changes the numbers.
+  4. Switching the window to 7d re-reads and changes the numbers. **This is a unit test with a stepped
+     clock, not something to check by hand** — it is the one behaviour on this page that cannot be seen
+     without time passing, and it is why the end-to-end below deliberately does not ask for it.
   5. Every class the panel uses exists in `app.css` — assert by reading the file, as no test can catch a
      missing class at runtime.
   6. **Money reads as the founder asked.** The worker-run section renders one row per run, each naming its
@@ -419,11 +421,31 @@ $env:MUTHUR_HOME = "$PWD/artifacts/t17-home"; $env:MUTHUR_URL = "http://127.0.0.
 - Register two agents by hand on different harnesses, take a task through claim → implemented → fail →
   implemented → pass → land, then `muthur receipts --pretty`: the task appears with `validationFailures` 1,
   and `stateTime` shows time in both `validating` and `in_progress`.
-- Open `http://127.0.0.1:7455/receipts`: the Receipts tab is there, the task is in the list, and the window
-  buttons change the numbers.
+- **The page, fetched rather than browsed.** `curl -s http://127.0.0.1:7455/receipts` and check the markup.
+  **No browser is needed and none should be used** — Blazor Server prerenders this page, so the fetched HTML
+  already contains everything below, and an unattended validator that has no browser is not blocked:
+  - `href="/receipts"` is present (the tab), on this page and on `/`, `/operations` and `/projects`;
+  - the task is listed, with its state pill;
+  - the panel's four headline figures appear as separate `<b>` values — sessions and conductor sessions are
+    **two numbers, never one sum**;
+  - `conductor validator sessions report no cost` is present;
+  - a search for currency-formatted figures (`\$[0-9]+\.[0-9][0-9]`) finds **exactly one** — the run that
+    reported a cost. A second would be a total, which is the founder's decision in #13 violated;
+  - the run that reported nothing renders `<span class="receipt-none">—</span>`, not `$0.00`.
+- The window selector is a link, not a script: `curl -s 'http://127.0.0.1:7455/receipts?hours=1'` and
+  `?hours=168` are the same two states the buttons navigate to, and the `btn-on` marker moves between them.
+  Whether the *numbers* change with the window cannot be shown this way unless real hours have passed, so it
+  is not part of this check — Unit D acceptance 4 covers it with a stepped clock, which is the only honest
+  way to test it.
 - **The question the task exists to answer**, said out loud in the report: over the window, is total
   `validating` time larger than total `in_progress` time on this hub? Either answer is a result; the point is
   that it is now a number rather than an opinion.
+
+**A note to the validator, because this spec got it wrong once.** An earlier version of this section said
+"open the page and click the window buttons", and a conductor validator correctly returned **blocked**: it
+had no browser and the procedure said it needed one. That was my mistake, not the session's, and it is the
+third time in this repository that a spec has made itself un-validatable that way. Nothing here requires a
+GUI. If some future step seems to, that is a defect in the spec — say so rather than reaching for a browser.
 
 ## What the end-to-end actually showed
 
