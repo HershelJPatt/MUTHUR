@@ -813,4 +813,101 @@ entry in this spec's record of that working.
 - **Depends on:** Unit C (merged).
 - **Acceptance:** `dotnet build` clean, `dotnet test` green, `KitPreflightTests`, `KitInstallTests`,
   `KitManifestTests` and `KitWriteModeTests` passing unedited, and the new locked-source test failing against
-  `d7afb69` and passing after.
+  `d7afb69` and passing after. **Amendment 5 replaces the fixture that test uses — read it first.**
+
+## Amendment 5 — the file Amendment 4 named cannot reach the write phase; an include can (2026-09-19)
+
+Unit D reported `spec-problem` before building and was right. That is the fourth time on this task, and the
+third time in a row that the frozen text named a case it had not run.
+
+Amendment 4's new test holds a kit **entry source** open with `FileShare.None`, on the reasoning that *"`Writes`
+reads a source only when the destination exists and is read-only, so an ordinary destination with a locked
+source reaches the loop exactly as intended."* That is true of T-56's pre-flight and false of the manifest
+reader. **Rule 21's include-token check reads every entry source during validation**, for every entry, before a
+byte is written — `KitCommands.cs:591-593`:
+
+```csharp
+// Expand() reads whatever a {{core:...}} token names, so the token is checked here rather than
+// discovered halfway through the write loop.
+foreach (var name in IncludePattern().Matches(File.ReadAllText(source)).Select(m => m.Groups[1].Value))
+```
+
+Measured, against an AOT CLI installed from this branch's tip (`76ae3ac`), holding `<kit>\scratch\c.md` open for
+the whole invocation:
+
+```
+case            : entry   (locked: scratch\c.md)
+exit            : 2
+crashed         : False
+{"code":"invalid_manifest","message":"…\kit\scratch\kit.json could not be read: IOException: The process
+ cannot access the file '…\kit\scratch\c.md' because it is being used by another process.. This is a defect
+ in MUTHUR's manifest reader, not necessarily in your manifest — please report it."}
+as it found it              : True
+```
+
+The write phase is never entered, `Writing` is never set, `Failed` is never called. So the test as frozen fails
+against `d7afb69` and fails **identically** after the fix: it does not test the defect. Re-pointing it at exit 2
+and `invalid_manifest` would make it a test of rule 21 and prove nothing about this unit. (That message is wrong
+in three ways of its own; filed as **T-82**, and out of scope here — the Non-goals exclude `TryReadManifest`.)
+
+### The reachable case, measured
+
+Validation checks an include **target** with `File.Exists` only (`KitCommands.cs:594`). Its bytes are first read
+by `Expand` inside the entry loop (`KitCommands.cs:752-753`). So the same fixture with one indirection added —
+`c.md`'s body is `{{core:dummy.md}}`, and `<kit>\core\dummy.md` is the file held open:
+
+```
+case            : include   (locked: core\dummy.md)
+exit            : 1
+crashed         : False
+{"code":"install_failed","message":"…\repo: the install failed while writing \"b.md\": IOException: The
+ process cannot access the file '…\kit\core\dummy.md' because it is being used by another process.. The
+ repository was put back the way it was found; nothing was left behind, and kit install is safe to re-run."}
+--- repository afterwards ---
+  b.md
+  c.md
+b.md restored byte-for-byte : True
+as it found it              : True
+```
+
+That is Amendment 4's sentence, run rather than predicted: **`b.md` was written fine, and `b.md` is the file the
+founder is told about.** Units A and C are visibly doing their half — exit 1, no crash, repository as found —
+and the name is the half still wrong.
+
+### What changes, and what does not
+
+Every code change Amendment 4 specifies stands **exactly as written**: the `Writing` → `Touching` rename,
+`transaction.Touching = from` before `File.ReadAllText(from)`, the ` while installing "<path>"` clause, and
+`Name(repo, path)`. Only the fixture changes.
+
+After the fix this case reads:
+
+```
+the install failed while installing "<kit>\scratch\c.md": IOException: … '<kit>\core\dummy.md' …
+```
+
+The clause names the **entry being installed**, in full because `Name` renders a path outside the repository
+that way, and the exception text names the include. The clause does **not** name `dummy.md` and is not required
+to: `Expand` is a static helper holding no transaction, and threading one through it is a larger change than
+this task's, while the sentence as a whole already names both files. What the clause must not do is name a file
+that was written fine.
+
+### Acceptance, replacing Amendment 4's
+
+- `KitInstallRollbackTests`' new test uses the **include** fixture: an entry whose kit source is `{{core:<name>}}`
+  and whose include target is held open with `FileShare.None` for the whole invocation. Assert exit 1, code
+  `install_failed`, that the message names the entry's **source** path, that it does **not** contain `b.md`, and
+  `AsItWasFound()`. The absence assertion is the one that matters and is unchanged in spirit from Amendment 4.
+- It must fail against `76ae3ac` — where it reports `while writing "b.md"` — and pass after. That is measured
+  above, so an implementer that cannot run it has the before-output already.
+- Unit B's single "a locked **source** file in the kit" row becomes **two** rows: a locked **entry source**,
+  expecting exit 2 / `invalid_manifest` with an untouched repository (rule 21, not this task, and cross-referenced
+  to T-82); and a locked **include target**, expecting exit 1 / `install_failed` naming the entry source and not
+  the previous entry's destination.
+
+### Recorded
+
+Amendment 4 was derived by reading `Install`, and `Install` is not where the read it worried about is first
+performed. The reachable fixture differs from the named one by a single indirection, which no amount of reading
+`Install` would have surfaced — only running the command did. The spec's own closing note from T-8 keeps being
+right: state a mechanism you have not measured and it costs a round. This is the third round it has cost.
