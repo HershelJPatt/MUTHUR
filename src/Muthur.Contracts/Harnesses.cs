@@ -25,9 +25,14 @@ public sealed record WorkerRunReport(
 /// <param name="MaxSessions">What the configuration file asks for, whatever the founder has since said.</param>
 /// <param name="Ceiling">Sessions a pass will actually run: the founder's number, lowered while they sleep.</param>
 /// <param name="CeilingReason">One sentence saying where <paramref name="Ceiling"/> came from.</param>
+/// <param name="Orchestrators">
+/// Whether it may also start work from the backlog. The most expensive switch here, so it is readable without
+/// anyone having to go through the ledger to find out which way it was last thrown.
+/// </param>
 public sealed record ConductorStatusDto(
     bool Enabled, int Running, int MaxSessions, int SessionMinutes, int MaxAttempts, int IntervalSeconds,
-    int StallProbeMinutes, DateTimeOffset? LastPass, string? LastAction, int Ceiling, string CeilingReason);
+    int StallProbeMinutes, DateTimeOffset? LastPass, string? LastAction, int Ceiling, string CeilingReason,
+    bool Orchestrators);
 
 public sealed record ConductorSwitch(bool Enabled);
 

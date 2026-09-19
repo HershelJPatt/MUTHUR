@@ -160,7 +160,8 @@ public sealed class ConductorService(
             _lastPass,
             _lastAction,
             ceiling.Sessions,
-            ceiling.Reason);
+            ceiling.Reason,
+            await OrchestratorsEnabledAsync(ct));
     }
 
     /// <summary>The founder turns staffing on and off; the decision is in the ledger like any other.</summary>
@@ -692,6 +693,15 @@ public sealed class ConductorService(
         }, CancellationToken.None);
 
     /// <summary>
+    /// What a session of this pair's kind is called, singular and plural. The founder reads these at three in the
+    /// morning off a card, and the noun is what tells them which half of the conductor has stopped: being told a
+    /// validator could not start, for a task no validator has been asked to look at yet, sends them to the wrong
+    /// place entirely.
+    /// </summary>
+    private static (string One, string Many) Noun(string role) =>
+        role == OrchestratorRole ? ("an orchestrator", "orchestrators") : ("a validator", "validators");
+
+    /// <summary>
     /// One session produced nothing: count it, and when the pair has run out of attempts stall it half-open and tell
     /// the founder once, in the words that send them to the right place for this kind of nothing.
     /// </summary>
@@ -723,19 +733,25 @@ public sealed class ConductorService(
             // Stop rather than degrade, and say so once: the founder's only other signal is that nothing shipped.
             m.Record("conductor.stalled", assignment.TaskId,
                 new { role = assignment.RoleKey, error, ran = outcome != Unproductive.NeverStarted });
+            var (one, many) = Noun(assignment.RoleKey);
             MessageService.PostFromHub(m, Recipient.Founder, null,
                 (outcome switch
                 {
                     Unproductive.RanAndFailed =>
-                        $"The conductor started a validator for {assignment.TaskKey} ({assignment.RoleKey}) " +
+                        $"The conductor started {one} for {assignment.TaskKey} ({assignment.RoleKey}) " +
                         $"{stall.Failures} times and none of them finished: {error}",
+                    Unproductive.NoVerdict when assignment.RoleKey == OrchestratorRole =>
+                        $"The conductor started {stall.Failures} {many} for {assignment.TaskKey} ({assignment.RoleKey}) " +
+                        "and none of them claimed it. They ran and exited cleanly, so something is stopping them from " +
+                        "starting the task at all rather than failing at it. Look at the bus for what they said, then " +
+                        "re-spec the task, take it yourself, or raise Muthur:ConductorMaxAttempts.",
                     Unproductive.NoVerdict =>
-                        $"The conductor started {stall.Failures} validators for {assignment.TaskKey} ({assignment.RoleKey}) " +
+                        $"The conductor started {stall.Failures} {many} for {assignment.TaskKey} ({assignment.RoleKey}) " +
                         "and none of them reached a verdict. They ran and exited cleanly, so something is stopping them " +
                         "from validating at all rather than failing. Look at the bus for what they said, then re-spec " +
                         "the task, validate it yourself, or raise Muthur:ConductorMaxAttempts.",
                     _ =>
-                        $"The conductor could not start a validator for {assignment.TaskKey} ({assignment.RoleKey}) " +
+                        $"The conductor could not start {one} for {assignment.TaskKey} ({assignment.RoleKey}) " +
                         $"{stall.Failures} times and has stopped trying: {error}",
                 }) + Environment.NewLine +
                 $"Fix the cause and it retries by itself within {options.ConductorStallProbeMinutes} " +
