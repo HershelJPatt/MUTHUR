@@ -1,5 +1,6 @@
 @inherits LivePanel
 @inject AgentService Agents
+@inject TaskService Tasks
 @inject TimeProvider Clock
 
 <section class="panel">
@@ -26,6 +27,10 @@
                     <span class="agent-age">@Format.Age(a.LastHeartbeat, _now)</span>
                 </div>
                 <div class="agent-model">@a.Harness/@a.Model@(a.Account is not null ? " · " + a.Account : "")</div>
+                @if (_working.TryGetValue(a.Name, out var working))
+                {
+                    <div class="agent-task">@working.Id · @working.Title</div>
+                }
                 @if (!string.IsNullOrWhiteSpace(a.Summary))
                 {
                     <div class="agent-summary">@a.Summary</div>
@@ -54,6 +59,8 @@
 
 @code {
     private List<AgentDto> _agents = [];
+    // The one task each agent is actually working on. OpenTasks counts everything they hold, validation included.
+    private Dictionary<string, TaskDto> _working = new(StringComparer.Ordinal);
     private int _live;
     private DateTimeOffset _now;
 
@@ -71,6 +78,16 @@
         var agents = await Agents.ListAsync();
         _agents = agents.OrderBy(a => Rank(a.Status)).ThenBy(a => a.Name, StringComparer.Ordinal).ToList();
         _live = agents.Count(a => a.Status == AgentStatus.Live);
+
+        // Only InProgress: a task in validating is owned but handed away, not being worked on.
+        var open = await Tasks.ListAsync(new TaskQuery(OpenOnly: true, Limit: 2000));
+        _working = open
+            .Where(t => t.Owner is not null && t.State == TaskState.InProgress)
+            .GroupBy(t => t.Owner!, StringComparer.Ordinal)
+            .ToDictionary(
+                g => g.Key,
+                g => g.OrderByDescending(t => t.Priority).ThenBy(t => t.Id, StringComparer.Ordinal).First(),
+                StringComparer.Ordinal);
     }
 
     private static int Rank(AgentStatus status) => status switch
