@@ -130,7 +130,8 @@ under the CLI's 180.
 
 ## Verification
 
-Headless; no browser.
+Every command here runs with no browser, no GUI and no human — the sessions that validate this are started by
+a conductor. Nothing in this task can only be seen by eye, so it is not marked `attended`.
 
 ```
 dotnet build
