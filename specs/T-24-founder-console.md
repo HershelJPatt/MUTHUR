@@ -1,0 +1,251 @@
+# T-24 — A founder console on the dashboard: do the hub half, hand over the paste-line
+
+> Frozen spec. An implementer completes this without making design decisions.
+> If something here is wrong or missing, the implementer stops and reports; they do not improvise.
+
+## Goal
+
+A `/console` page where the founder does founder-only work by reading labels instead of remembering flags —
+register an agent, define a role, set a project's gate, add an outbound target, change a task's priority.
+Each control performs the **hub half** itself and, where a terminal is genuinely required, hands over the
+exact line to paste.
+
+## This task is marked `attended`, and why that was decided before a line was written
+
+The whole dashboard is interactive: `App.razor` renders `<Routes @rendermode="InteractiveServer" />` and
+`Program.cs:26` calls `AddInteractiveServerRenderMode()`. **Every button rides a SignalR circuit.** A fetched
+page shows the controls; nothing a conductor-started session can do will click *Register* and see an agent
+appear.
+
+Building the controls as plain HTML form POSTs instead would make them curl-drivable, and is rejected: it
+fights the architecture every other control in this dashboard already uses (`RequestsPanel`, `OutboundPanel`
+and `DoctorPanel` are all `@onclick`), and it would make this page the one that behaves differently for
+reasons no reader could infer.
+
+So `muthur task attended T-24` was set **before** building, with the measurement in its reason, rather than
+after a validator spends a session discovering it. T-14 and T-5 each cost exactly that before T-46 landed the
+rule.
+
+**What a machine still checks** is everything short of the click: that the page exists, that every control and
+its labels are in the fetched HTML, that no secret is ever rendered into it, and that the services behind the
+controls do what the controls claim. Those are unit-testable and are this spec's acceptance. The human
+confirms the clicking.
+
+## Context
+
+### The dashboard is the founder, not a second authority
+
+Panels call services directly with `Caller.Founder` — `RequestsPanel.razor:118`:
+
+```csharp
+private Task AnswerAsync(int id, string answer) =>
+    ActAsync(id, () => Requests.AnswerAsync(Caller.Founder, id, new AnswerRequest(answer)));
+```
+
+That is the pattern to follow exactly. The hub runs on the founder's machine; the dashboard is a second
+client of the same services, not a second authority. **Never add an endpoint to do what a service call does**,
+and never reach past a service into `MuthurDb`.
+
+### T-24's own sequencing advice has expired
+
+The task says to do this with T-6 and T-23 *"as one piece of work, or at minimum settle the layout before the
+first of them ships"*. **T-6 landed** (the agents rail, with `AgentsPanel` and `RolesPanel` in
+`<aside class="side side-left">` on `/` and `/needs-you`), and **T-23 is in validation** with another
+orchestrator. The layout question is therefore already answered by what shipped, and the remaining choice is
+where the console lives — settled below.
+
+### The `--validator` trap is real and must not reach the founder
+
+`KitCommands.RoleDefineCommand` adds `--validator` only when the key does not already end in `-validator`.
+So `muthur role define validator --brief-file …` silently creates a **non**-validator role unless the flag is
+passed. The task names this as *"a trap the CLI already works around and a founder should never meet"*.
+
+## Non-goals
+
+- **Conductor controls.** T-24 lists them, and they are cut with a reason: **T-23 is in validation right now**
+  and owns the conductor's presence on the dashboard. Adding controls to a panel that does not exist on
+  `main`, owned by another orchestrator mid-flight, is precisely the collision T-16 exists for. Filed as a
+  follow-up to be done once T-23 lands — one panel, one owner.
+- Starting a session. The hub cannot spawn a process into a window the founder is looking at; the paste-line
+  is the whole of the answer.
+- Any change to `AgentsPanel`, `RolesPanel`, `BoardPanel`, the rails, or `/`.
+- Any new API endpoint, any change to `Caller`, `RequireFounder`, or the auth model.
+- Editing a role's brief text in the browser. Briefs are files; `role define --brief-file` takes a path, and a
+  textarea that silently becomes the source of truth for a versioned document is a different task.
+
+## Design
+
+### The page
+
+New `src/Muthur.Server/Components/Pages/Console.razor`, `@page "/console"`, titled `MUTHUR · Console`. A tab
+in the nav beside the others, `href="/console"`, exactly as `/receipts` was added by T-17.
+
+One column of `<section class="panel">` blocks, one per control group, in this order: **Agents**, **Roles**,
+**Projects**, **Outbound**. Reuse `.panel`, `.panel-head`, `.panel-title`, `.panel-sub`, `.panel-body`,
+`.agent`, `.agent-head`, `.agent-name`, `.btn`, `.btn-go`, `.pill`, `.empty`, `.kv`. **Add no CSS** unless a
+control genuinely has no existing class, and if one does, add it to `app.css` — never an inline style.
+
+The page does **not** inherit `LivePanel`. These are forms, not feeds; a live re-render while the founder is
+typing would wipe the field, which is the mistake `RequestsPanel.razor:58` already documents avoiding.
+Re-read only after a successful action.
+
+### Every control has the same shape
+
+```
+<the inputs>  [ Do it ]
+  → on success: a confirmation line, and the paste-line where one applies
+  → on failure: the service's own message, in .error-text, and the inputs keep their values
+```
+
+Catch `MuthurException` and render `ex.Message` — the services already say the right thing, and a console
+that invents its own wording would drift from what the CLI says about the same refusal.
+
+### Agents — register, and hand over the paste-line
+
+Inputs: **name** (text), **harness** (select: `claude`, `codex`, `generic`), **model** (text),
+**tier** (select: `mastermind`, `implementer`, `utility`), **account** (text, optional).
+
+On **Register**, call `Agents.RegisterAsync(Caller.Founder, new RegisterAgentRequest(name, harness, model, tier, account))`.
+
+`RegisterAgentResponse` carries `(AgentDto Agent, string Token)`. On success render:
+
+```
+Registered corner (codex/gpt-6-astra, mastermind).
+
+    $env:MUTHUR_AGENT = 'corner'
+    $env:MUTHUR_TOKEN = '<the token>'
+    claude            # then: /muthur-orchestrate next
+```
+
+**The token is shown exactly once**, held in component state, and is gone the moment any other action runs or
+the page is left. It is never re-read, never stored, and never rendered again — the same contract the CLI
+keeps. Say so in a comment on the field, because the next reader's instinct will be to persist it for
+convenience.
+
+The paste-line's harness word is the harness that was registered — `claude` for claude, `codex` for codex —
+not a hardcoded `claude`.
+
+### Roles — define, with the trap handled
+
+Inputs: **key** (text), **brief file** (text, a path relative to the repository root), and a checkbox
+**gives validation verdicts**.
+
+The checkbox defaults to `true` when the key ends in `-validator` **or** equals `validator`, and updates as
+the key is typed. That is the trap, closed: a founder typing `validator` gets a validator role, which is what
+they meant, and the box is visible so they can see and override what was inferred.
+
+On **Define**, read the brief file and call
+`Roles.DefineAsync(Caller.Founder, new DefineRoleRequest(key, brief, isValidator))`. A path that does not
+resolve, or is outside the repository, fails with the service's message — do not invent a new code.
+
+No paste-line: defining a role needs no terminal.
+
+### Projects — set the gate
+
+A row per project from `Projects.ListAsync()`, each with its key, its current required validators as
+`pill-role` pills, its land mode, and controls to change them: a **validators** text input (comma-separated,
+empty means none) and a **land mode** select (`merge`, `pr`).
+
+On **Save**, call the same service `muthur project set` calls. When the result leaves `requiredValidators`
+empty, render the sentence T-5 landed — *"none required — implemented goes straight to validated"* — beside
+the row, so the console and `/projects` say the same thing about the same state.
+
+**Ingest sources are not editable here.** The task lists them; they are a comma-separated list of
+`scheme:location` strings whose failure mode is a silent non-ingesting source, and they deserve the same
+probe-before-save treatment `muthur doctor` gives them. Follow-up, noted below.
+
+### Outbound — add a target, write-only
+
+Inputs: **name**, **channel** (select, from the registered `IOutboundChannel` schemes), **address** (text).
+
+On **Add**, call the service `muthur out targets` calls. **The address is never rendered back** — the row
+shows the name, the channel, and nothing else, exactly as `out targets` already behaves. A comment on the
+markup says why, because "show the address so the founder can check it" is the obvious wrong idea.
+
+### Tasks — priority, cancel, reopen
+
+A compact control: **task id** (text), **priority** (number), and three buttons — **Set priority**,
+**Cancel**, **Reopen**. Cancel takes a reason (text, required by the service). Each calls the corresponding
+`TaskService` method with `Caller.Founder`.
+
+No list of tasks here: the board is the list, and duplicating it on the console is how two views of the same
+thing start disagreeing.
+
+## Units of work
+
+### Unit A — the page, the nav tab, and agent registration
+- **Files:** new `src/Muthur.Server/Components/Pages/Console.razor`;
+  `src/Muthur.Server/Components/Layout/MainLayout.razor` (the tab);
+  new `tests/Muthur.Server.Tests/DashboardConsoleTests.cs`.
+- **Does:** the page, the nav tab, and the Agents section including the paste-line and the show-once token.
+- **Depends on:** nothing.
+- **Acceptance:** `dotnet build` clean (warnings are errors), `dotnet test` green, and tests from `GET /console`
+  that the page renders with the Agents control and its labels; that `href="/console"` appears on `/`,
+  `/needs-you`, `/operations`, `/projects` and `/receipts`; and — driving `AgentService` directly, not the
+  page — that a registered agent's token appears in the response exactly once and that `AgentService.ListAsync`
+  never returns it.
+
+### Unit B — roles and projects
+- **Files:** `src/Muthur.Server/Components/Pages/Console.razor`;
+  new `tests/Muthur.Server.Tests/DashboardConsoleRolesTests.cs`.
+- **Does:** the Roles and Projects sections.
+- **Depends on:** Unit A having created the page. **Sequence after A**; do not build in parallel.
+- **Acceptance:** build clean, tests green, and tests that the sections render from `GET /console`; that a
+  role key of `validator` infers the validator flag (test the inference as a pure function, not through a
+  click); and that a project with no required validators renders T-5's sentence.
+
+### Unit C — outbound and tasks
+- **Files:** `src/Muthur.Server/Components/Pages/Console.razor`;
+  new `tests/Muthur.Server.Tests/DashboardConsoleOutboundTests.cs`.
+- **Does:** the Outbound and Tasks sections.
+- **Depends on:** Unit A. **Sequence after A**, may run alongside B only if the implementer is told which
+  sections of the file each owns — otherwise sequence after B.
+- **Acceptance:** build clean, tests green, and a test that an added target's **address never appears** in
+  `GET /console`, driven by adding a target through the service and then fetching the page.
+
+## Verification
+
+```
+dotnet build
+dotnet test
+```
+
+Both clean. Then the headless half, against a scratch hub with an installed CLI from this branch — never the
+live hub:
+
+```powershell
+$html = (Invoke-WebRequest "$env:MUTHUR_URL/console" -UseBasicParsing).Content
+$html -match 'Register'          # the agents control
+$html -match 'Define'            # roles
+$html -match 'Save'              # projects
+$html -match 'Add'               # outbound
+(Invoke-WebRequest "$env:MUTHUR_URL/" -UseBasicParsing).Content -match 'href="/console"'
+```
+
+Then, with a target added through the CLI (`muthur out targets put … --founder`), fetch `/console` again and
+confirm **the address does not appear anywhere in the HTML**. That is the one security-shaped check a machine
+can make here and it must be made.
+
+### The attended half
+
+**This task is marked `attended` and a human must confirm the clicking.** What to check, in a browser:
+
+1. Fill the Agents control and press **Register**. An agent appears in `muthur agent list`, and the paste-line
+   names the agent and harness just registered.
+2. Copy the paste-line into a terminal. The session starts and `muthur agent whoami` answers as that agent.
+3. Reload `/console`. **The token is gone** and nothing displays it again.
+4. Define a role with the key `validator`. `muthur role list` shows it with `isValidator: true`.
+5. Set a project's validators to empty and confirm `/projects` shows the ungated pill T-5 landed.
+6. Add an outbound target and confirm its address is not shown back anywhere.
+
+Every one of those is a founder action in the ledger, indistinguishable from the CLI having done it —
+`muthur log` after the session should read the same as if the commands had been typed.
+
+## Out of scope / follow-ups
+
+- **Conductor controls** — deferred while T-23 is in validation, see Non-goals. One panel, one owner.
+- **Ingest sources on the Projects row.** A source that does not ingest fails silently; the console should
+  probe before saving, the way `muthur doctor` does, and that is a task with its own verification rather than
+  a text box.
+- **Editing a brief in the browser.** Briefs are versioned files served by `role brief`; a textarea that
+  becomes their source of truth needs a decision about where the file then lives.
