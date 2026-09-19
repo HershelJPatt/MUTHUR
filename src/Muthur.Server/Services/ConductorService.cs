@@ -66,7 +66,8 @@ public sealed class ConductorService(
     TimeProvider clock,
     IValidatorSessionLauncher launcher,
     IOrchestratorSessionLauncher orchestrators,
-    LifecycleService lifecycle)
+    LifecycleService lifecycle,
+    ITaskLander lander)
 {
     private readonly SemaphoreSlim _pass = new(1, 1);
     private readonly HashSet<string> _running = [];
@@ -133,7 +134,10 @@ public sealed class ConductorService(
     /// information, so it both earns the founder another message and clears the cooldown outright.
     /// </para>
     /// </summary>
-    /// <param name="Head">The branch head this task was refused or bounced on, and the founder was told about.</param>
+    /// <param name="Head">
+    /// The branch's head, as git had it, when this task was refused or bounced and the founder was told. Read
+    /// from the repository rather than from the ledger, so that somebody committing a fix is what moves it.
+    /// </param>
     /// <param name="RefusedAt">
     /// When the environment last refused, which holds the half-open cooldown open for
     /// <c>ConductorStallProbeMinutes</c>. Null for a conflict: that returns the task to its owner and out of the
@@ -181,9 +185,19 @@ public sealed class ConductorService(
     /// <param name="HeadMoved">Whether that round's branch head differs from the round before it.</param>
     private sealed record CapState(int Failures, long RoundSeq, bool HeadMoved);
 
+    /// <summary>
+    /// A validated task with nobody left to land it, as the database knows it and before git has been asked
+    /// anything. <see cref="Project"/> travels with it because reading the branch's head happens outside the
+    /// ledger read, where a subprocess belongs.
+    /// </summary>
+    private sealed record Candidate(int TaskId, string TaskKey, string Title, string Owner, string Branch, Project Project);
+
     /// <summary>A validated task the hub will land, because the session that should have landed it has gone.</summary>
     /// <param name="Owner">Who it is still recorded against, for the ledger and for what the founder is told.</param>
-    /// <param name="Head">The commit this round was declared on: what <see cref="_landAnnounced"/> is keyed by.</param>
+    /// <param name="Head">
+    /// The branch's head as git has it, which is what <see cref="_landStalls"/> is keyed by. Empty when there is
+    /// no such branch — itself a fact worth keying on, since that is what refused the land.
+    /// </param>
     private sealed record Orphaned(int TaskId, string TaskKey, string Title, string Owner, string Branch, string Head);
 
     /// <summary>
@@ -705,10 +719,13 @@ public sealed class ConductorService(
     /// this task, the task is not orphaned.
     /// </para>
     /// </summary>
-    private Task<IReadOnlyList<Orphaned>> PlanOrphanedAsync(CancellationToken ct) =>
-        ledger.ReadAsync<IReadOnlyList<Orphaned>>(async (db, now) =>
+    private async Task<IReadOnlyList<Orphaned>> PlanOrphanedAsync(CancellationToken ct)
+    {
+        var now = clock.GetUtcNow();
+        var stale = now - TimeSpan.FromSeconds(options.AgentStaleSeconds);
+
+        var waiting = await ledger.ReadAsync<IReadOnlyList<Candidate>>(async (db, _) =>
         {
-            var stale = now - TimeSpan.FromSeconds(options.AgentStaleSeconds);
             // A project with no repository on record has nothing to merge into, and asking git about it only
             // produces a refusal to tell the founder about.
             var validated = await db.Tasks.Include(t => t.Project).Include(t => t.Owner)
@@ -717,11 +734,8 @@ public sealed class ConductorService(
                             t.Project != null && t.Project.RepoPath != "")
                 .OrderByDescending(t => t.Priority).ThenBy(t => t.Id)
                 .ToListAsync(ct);
-            if (validated.Count == 0) return [];
 
-            var heads = await HeadsAsync(db, [.. validated.Select(t => t.Id)], ct);
-
-            var orphaned = new List<Orphaned>();
+            var candidates = new List<Candidate>();
             foreach (var task in validated)
             {
                 var key = Wire.TaskId(task.Id);
@@ -730,34 +744,40 @@ public sealed class ConductorService(
                 lock (_running)
                     if (_running.Any(session => session.StartsWith(prefix, StringComparison.Ordinal))) continue;
 
-                var head = heads.GetValueOrDefault(task.Id) ?? "";
-                // Half-open on the head, exactly as a wedged pair is: an environment that refused this commit
-                // will refuse it again a minute later, and whatever was wrong - a dirty checkout, a branch
-                // somebody tidied - is put right outside the hub, so one probe a cooldown finds out by itself.
-                lock (_landStalls)
-                    if (_landStalls.GetValueOrDefault(task.Id) is { RefusedAt: { } refused } stall &&
-                        stall.Head == head &&
-                        refused + TimeSpan.FromMinutes(options.ConductorStallProbeMinutes) > now)
-                        continue;
-
-                orphaned.Add(new Orphaned(task.Id, key, task.Title, task.Owner!.Name, task.Branch ?? "", head));
+                candidates.Add(new Candidate(task.Id, key, task.Title, task.Owner!.Name, task.Branch ?? "", task.Project!));
             }
-            return orphaned;
+            return candidates;
         }, ct);
+        if (waiting.Count == 0) return [];
 
-    /// <summary>The commit each task's current round was declared on, out of its newest <c>task.implemented</c>.</summary>
-    private static async Task<Dictionary<int, string>> HeadsAsync(MuthurDb db, IReadOnlyList<int> taskIds, CancellationToken ct)
-    {
-        var rounds = await db.Events
-            .Where(e => e.Type == "task.implemented" && e.TaskId != null && taskIds.Contains(e.TaskId!.Value))
-            .GroupBy(e => e.TaskId!.Value)
-            .Select(g => new { TaskId = g.Key, Payload = g.OrderByDescending(e => e.Seq).First().PayloadJson })
-            .ToDictionaryAsync(x => x.TaskId, x => x.Payload, ct);
+        var orphaned = new List<Orphaned>();
+        foreach (var candidate in waiting)
+        {
+            // Git's answer this moment, never the head the last `task implemented` recorded. That value moves
+            // when somebody calls the CLI again, and the recovery this cooldown promises is somebody fixing the
+            // cause and committing — so keyed on the ledger's head, a genuine new commit earned neither an
+            // immediate retry nor a fresh notification, and even the timed probe recorded a commit that was no
+            // longer the branch's.
+            //
+            // A branch that is gone answers null, which is the same condition that produced most refusals in the
+            // first place: a branch still missing keeps its cooldown, and a restored one clears it. The one
+            // `rev-parse` this costs is per orphaned-validated task per pass, which in the steady state means
+            // only the ones already cooling down — the rest land and stop being orphaned.
+            var head = await lander.BranchHeadAsync(candidate.Project, candidate.Branch, ct) ?? "";
 
-        var heads = new Dictionary<int, string>();
-        foreach (var (taskId, payload) in rounds)
-            if (Head(payload) is { Length: > 0 } head) heads[taskId] = head;
-        return heads;
+            // Half-open on that head, exactly as a wedged pair is: an environment that refused this commit will
+            // refuse it again a minute later, and whatever was wrong is put right outside the hub, so one probe
+            // a cooldown finds out by itself.
+            lock (_landStalls)
+                if (_landStalls.GetValueOrDefault(candidate.TaskId) is { RefusedAt: { } refused } stall &&
+                    stall.Head == head &&
+                    refused + TimeSpan.FromMinutes(options.ConductorStallProbeMinutes) > now)
+                    continue;
+
+            orphaned.Add(new Orphaned(candidate.TaskId, candidate.TaskKey, candidate.Title, candidate.Owner,
+                candidate.Branch, head));
+        }
+        return orphaned;
     }
 
     /// <summary>
