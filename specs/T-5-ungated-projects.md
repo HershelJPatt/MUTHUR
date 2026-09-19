@@ -208,3 +208,62 @@ to `solo` before reading the page, so both projects were gated and no pill appea
 the check was not.
 
 `land` was not touched, as the founder settled.
+
+## State at handover (2026-09-19)
+
+**The work is complete and green. It is not blocked on anything an implementer can do.**
+
+Branch `task/T-5-ungated-projects`, merged up to `main` as of this note, pushed. Build clean;
+`dotnet test` 23 + 3708 + 40 + 234, all passing.
+
+### What is done
+
+Both units, built by `muthur worker run` (Unit A on claude, Unit B on codex) and integrated here:
+
+- `ProjectDto.Ungated` — a computed `bool`, true when `RequiredValidators` is empty — appears in every
+  project response (`project add`, `set`, `show`, `list`). `ProjectService` records `ungated` in the
+  `project.added` and `project.updated` ledger payloads.
+- `/projects` shows an amber `pill-ungated` and replaces the bare "none required" with
+  "none required — implemented goes straight to validated".
+- Tests: `ProjectGateTests` (4, hub side, asserting on the raw response body rather than the deserialized
+  DTO) and `DashboardProjectsTests` (2, rendering).
+
+`land` was **not** touched. The founder settled that in request #2: *"Do not refuse: keep land permissive
+everywhere and let the visibility changes carry the whole task."*
+
+### What is not done, and why it is not the work's fault
+
+`conductor-validator` returned **blocked**, twice, with the same reason both times:
+
+> browser tool returned No browser is available when opening scratch /projects. Build clean and all tests
+> passed; installed CLI, ledger and server-rendered project page behaved as specified. Cannot verify amber
+> pill visually.
+
+Everything checkable without a browser passes. The amber pill on a live `/projects` has never been seen by
+anybody — I could not see it either, and said so rather than implying coverage.
+
+### What was tried and did not work
+
+- **Asserting the pill through `GET /projects` in a test.** It does not work and will not: `BoardPanel` and
+  the projects page render inside `<Virtualize>`, which emits nothing during a prerender because it sizes
+  its window from a JS measurement the test harness never makes. `curl` of `/projects` on a scratch hub
+  returns neither the pill nor the task ids. Confirmed directly; do not spend time re-deriving it. The
+  markup is covered instead by rendering the component through `HtmlRenderer`.
+- **Marking the task attended** so it routes to a human validator. `muthur task attended` exists on `main`
+  (T-31, landed) but **not on the running hub**, which is still the `54c455d` build: `POST
+  /api/v1/tasks/T-5/attended` returns 404. Upgrading the live hub is a founder action — `install.ps1`
+  refuses to replace a running hub without `-RestartRunning`, deliberately — so I did not do it.
+
+### What I would do next
+
+1. Get the live hub reinstalled from current `main` (founder action). That alone makes `muthur task
+   attended` available.
+2. `muthur task attended T-5 --reason "the amber ungated pill has to be seen on /projects; Virtualize means
+   no test can assert it"`.
+3. Hand it to a browser-capable validator. The whole remaining verification is: on a scratch hub with one
+   project that has no validators and one that has a required validator, `/projects` shows the amber
+   `ungated` pill on the first and not the second, plus the consequence sentence.
+
+Do not re-implement anything to make the pill assertable in a test. That path was investigated and is
+closed by `<Virtualize>`; the cost would be redesigning how the dashboard renders, for a task about a
+two-word pill.
