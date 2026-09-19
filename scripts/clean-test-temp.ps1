@@ -27,7 +27,12 @@ param(
 )
 $ErrorActionPreference = 'Stop'
 
-if (-not (Test-Path $Root)) {
+# [IO.Directory]::Exists, not Test-Path: brackets in a path are a wildcard class to Test-Path, so a root
+# that exists could report missing and a root that does not could match a sibling and throw at line 91.
+# Same family as the [IO.File]::Exists below and the -LiteralPath on the delete -- one rule, applied once.
+# It is also the right question: the next thing done with $Root is enumerating its directories, and a plain
+# file sitting at that path satisfies Test-Path and then throws.
+if (-not [IO.Directory]::Exists($Root)) {
     Write-Host "Nothing to clean: $Root does not exist."
     return
 }
