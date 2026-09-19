@@ -65,7 +65,7 @@ public sealed class HubFactory : WebApplicationFactory<Program>
     protected override void Dispose(bool disposing)
     {
         base.Dispose(disposing);
-        try { Directory.Delete(DataDir, recursive: true); } catch (IOException) { } catch (UnauthorizedAccessException) { }
+        TestHubDirectories.Release(DataDir);
     }
 }
 
