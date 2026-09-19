@@ -3,7 +3,7 @@ using System.Diagnostics;
 namespace Muthur.Launch;
 
 /// <summary>One way to staff a tier: which harness, which model, on whose account.</summary>
-public sealed record HarnessCandidate(string Harness, string Model, string? Account);
+public sealed record HarnessCandidate(string Harness, string Model, string? Account, string? ReasoningEffort = null);
 
 /// <param name="Started">
 /// Whether a process was actually launched. False only for the cases that never reached one — a harness this build

@@ -11,11 +11,11 @@ public static class HarnessDefaults
           "tiers": {
             "mastermind": [
               { "harness": "claude", "model": "fable", "account": "claude-subscription" },
-              { "harness": "codex", "model": "", "account": "chatgpt-subscription" }
+              { "harness": "codex", "model": "gpt-6-astra", "reasoningEffort": "high", "account": "chatgpt-subscription" }
             ],
             "implementer": [
               { "harness": "claude", "model": "opus", "account": "claude-subscription" },
-              { "harness": "codex", "model": "", "account": "chatgpt-subscription" }
+              { "harness": "codex", "model": "gpt-6-astra", "reasoningEffort": "high", "account": "chatgpt-subscription" }
             ],
             "utility": [
               { "harness": "codex-oss", "model": "gpt-oss:20b", "account": "local" },
