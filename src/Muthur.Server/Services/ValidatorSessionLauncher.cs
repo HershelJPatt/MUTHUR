@@ -56,7 +56,8 @@ public sealed class ValidatorSessionLauncher(
                 GitCommonDirectory: null,
                 AllowedCommands: Allowed,
                 DeniedCommands: Denied,
-                ScratchDirectory: scratch),
+                ScratchDirectory: scratch,
+                ReasoningEffort: candidate.ReasoningEffort),
             candidate => IdentityFor(assignment, candidate, ct),
             TimeSpan.FromMinutes(options.ConductorSessionMinutes),
             candidate => MarkLimitedAsync(candidate.Account, ct),
@@ -148,7 +149,7 @@ public sealed class ValidatorSessionLauncher(
     {
         var tiers = await harnesses.TiersAsync(Tier, ct);
         return Prefer(tiers.SelectMany(t => t.Candidates).Where(c => !c.Limited)
-            .Select(c => new HarnessCandidate(c.Harness, c.Model, c.Account)).ToList(), avoid);
+            .Select(c => new HarnessCandidate(c.Harness, c.Model, c.Account, c.ReasoningEffort)).ToList(), avoid);
     }
 
     /// <summary>

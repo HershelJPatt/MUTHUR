@@ -31,7 +31,7 @@ public sealed class HarnessService(Ledger ledger, MuthurOptions options)
                 .Select(t => new TierDto(t.Tier, t.Candidates.Select(c =>
                 {
                     var until = c.Account is not null && limits.TryGetValue(c.Account, out var u) ? u : (DateTimeOffset?)null;
-                    return new HarnessCandidateDto(c.Harness, c.Model, c.Account, until is not null, until);
+                    return new HarnessCandidateDto(c.Harness, c.Model, c.Account, until is not null, until, c.ReasoningEffort);
                 }).ToList()))
                 .ToList();
         }, ct);
@@ -102,7 +102,8 @@ public sealed class HarnessService(Ledger ledger, MuthurOptions options)
                     var harness = c.GetProperty("harness").GetString() ?? "";
                     var model = c.TryGetProperty("model", out var mo) ? mo.GetString() ?? "" : "";
                     var account = c.TryGetProperty("account", out var ac) ? ac.GetString() : null;
-                    if (harness.Length > 0) candidates.Add(new HarnessCandidate(harness, model, account));
+                    var effort = c.TryGetProperty("reasoningEffort", out var re) ? re.GetString() : null;
+                    if (harness.Length > 0) candidates.Add(new HarnessCandidate(harness, model, account, effort is { Length: > 0 } ? effort : null));
                 }
                 tiers.Add(new CatalogTier(tier.Name.ToLowerInvariant(), candidates));
             }
