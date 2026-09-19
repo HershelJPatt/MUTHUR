@@ -77,7 +77,7 @@ public sealed class OrchestratorSessionLauncher(
         var name = IdentityName(assignment.TaskKey);
         // A tier entry may leave the model blank to mean "the harness's own default"; the ledger still needs a word.
         var model = candidate.Model is { Length: > 0 } ? candidate.Model : "default";
-        var registration = await agents.RegisterAsync(Caller.Founder,
+        var registration = await agents.RegisterConductorSessionAsync(
             new RegisterAgentRequest(name, candidate.Harness, model, Tier, candidate.Account), ct);
         return new AgentIdentity(name, registration.Token);
     }

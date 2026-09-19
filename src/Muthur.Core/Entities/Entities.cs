@@ -31,6 +31,14 @@ public sealed class Agent
     public string? Tier { get; set; }
     public string? Account { get; set; }
 
+    /// <summary>
+    /// The conductor staffed this session, rather than a person registering a standing agent. Set by the two
+    /// session launchers at registration and by nothing else — never inferred from the name, which would miss
+    /// the orchestrator family entirely, and never from heartbeat age. Sticky: a conductor-staffed session that
+    /// re-registers itself through the public API is still a session the conductor staffed.
+    /// </summary>
+    public bool ConductorStaffed { get; set; }
+
     public string ModelLabel => $"{Harness}/{Model}";
 }
 

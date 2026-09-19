@@ -1053,8 +1053,9 @@ public sealed class ConductorTests : IDisposable
         Assert.Equal("conductor-win-validator-t-1", identity.Name);
         Assert.NotEmpty(identity.Token);
 
-        var agents = await _hub.CreateClient().GetFromJsonAsync(Routes.Agents, MuthurJsonContext.Default.IReadOnlyListAgentDto);
-        var registered = Assert.Single(agents!, a => a.Name == "conductor-win-validator-t-1");
+        // A staffed session is off the default roster by construction, so this read has to ask for everything.
+        var roster = await _hub.CreateClient().GetFromJsonAsync(Routes.Agents + "?all=true", MuthurJsonContext.Default.AgentRosterDto);
+        var registered = Assert.Single(roster!.Agents, a => a.Name == "conductor-win-validator-t-1");
         Assert.Equal("codex", registered.Harness);
         Assert.Equal(recorded, registered.Model);
     }
@@ -1178,8 +1179,8 @@ public sealed class ConductorTests : IDisposable
         Assert.Equal($"conductor-{role}-t-2147483647", identity.Name);
         Assert.NotEmpty(identity.Token);
 
-        var agents = await _hub.CreateClient().GetFromJsonAsync(Routes.Agents, MuthurJsonContext.Default.IReadOnlyListAgentDto);
-        Assert.Single(agents!, a => a.Name == identity.Name);
+        var roster = await _hub.CreateClient().GetFromJsonAsync(Routes.Agents + "?all=true", MuthurJsonContext.Default.AgentRosterDto);
+        Assert.Single(roster!.Agents, a => a.Name == identity.Name);
     }
 
     [Fact]
@@ -1773,6 +1774,29 @@ public sealed class ConductorTests : IDisposable
         var staffed = Assert.Single(await EventsAsync(), e => e.Type == "conductor.staffing");
         Assert.Equal(id, staffed.TaskId);
         Assert.Equal("#orchestrator", RoleOf(staffed));
+    }
+
+    [Fact]
+    public async Task An_orchestrator_session_is_off_the_roster_although_its_name_says_nothing_about_the_conductor()
+    {
+        // What marks a staffed row is the code that staffed it, not the name. This family carries no "conductor-"
+        // prefix at all, so anything keyed on the name would leave the expensive half of the staffing on the rail
+        // and count none of it. The near-duplicate of the validator test is the point.
+        var launcher = ActivatorUtilities.CreateInstance<OrchestratorSessionLauncher>(_hub.Services);
+
+        var identity = await launcher.IdentityFor(new OrchestratorAssignment(1, "T-1", "Ship the export", "demo"),
+            new Muthur.Launch.HarnessCandidate("codex", "opus", "chatgpt-subscription"), default);
+
+        Assert.Equal("orchestrator-t-1", identity.Name);
+        Assert.DoesNotContain("conductor", identity.Name, StringComparison.Ordinal);
+
+        var client = _hub.CreateClient();
+        var standing = await client.GetFromJsonAsync(Routes.Agents, MuthurJsonContext.Default.AgentRosterDto);
+        Assert.DoesNotContain(standing!.Agents, a => a.Name == identity.Name);
+        Assert.Equal(1, standing.ConductorHidden);
+
+        var all = await client.GetFromJsonAsync(Routes.Agents + "?all=true", MuthurJsonContext.Default.AgentRosterDto);
+        Assert.True(Assert.Single(all!.Agents, a => a.Name == identity.Name).ConductorStaffed);
     }
 
     [Fact]

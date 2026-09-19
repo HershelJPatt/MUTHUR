@@ -64,8 +64,13 @@ public static class AgentCommands
         whoami.SetAction(async (parse, ct) => Output.Emit(parse, await HubClient.For(parse).GetAsync(Routes.AgentMe, ct)));
         agent.Subcommands.Add(whoami);
 
-        var list = new Command("list", "List all agents with status, roles and open task counts.");
-        list.SetAction(async (parse, ct) => Output.Emit(parse, await HubClient.For(parse).GetAsync(Routes.Agents, ct)));
+        var listAll = new Option<bool>("--all") { Description = "Include the sessions the conductor staffed." };
+        var list = new Command("list", "List standing agents with status, roles and open task counts.") { listAll };
+        list.SetAction(async (parse, ct) => Output.Emit(parse, await HubClient.For(parse).GetAsync(
+            Routes.Agents + AgentListQuery(parse.GetValue(listAll)), ct)));
         agent.Subcommands.Add(list);
     }
+
+    /// <summary>The query behind `agent list`. One optional filter, so the leading '?' belongs to it.</summary>
+    internal static string AgentListQuery(bool all) => all ? "?all=true" : "";
 }

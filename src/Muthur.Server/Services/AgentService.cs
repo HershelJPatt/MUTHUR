@@ -16,7 +16,18 @@ public sealed partial class AgentService(Ledger ledger, LeasePolicy leases, Time
     [GeneratedRegex("^[a-z0-9][a-z0-9._-]{0,79}$")]
     private static partial Regex NamePattern();
 
-    public async Task<RegisterAgentResponse> RegisterAsync(Caller caller, RegisterAgentRequest request, CancellationToken ct = default)
+    public Task<RegisterAgentResponse> RegisterAsync(Caller caller, RegisterAgentRequest request, CancellationToken ct = default) =>
+        RegisterCoreAsync(caller, request, conductorStaffed: false, ct);
+
+    /// <summary>
+    /// Registration for a session the conductor is staffing. Separate from <see cref="RegisterAsync"/> rather
+    /// than a flag on it so that the HTTP endpoint has no way to reach it: what marks a row is the code that
+    /// staffed the session, not anything a caller can send.
+    /// </summary>
+    internal Task<RegisterAgentResponse> RegisterConductorSessionAsync(RegisterAgentRequest request, CancellationToken ct = default) =>
+        RegisterCoreAsync(Caller.Founder, request, conductorStaffed: true, ct);
+
+    private async Task<RegisterAgentResponse> RegisterCoreAsync(Caller caller, RegisterAgentRequest request, bool conductorStaffed, CancellationToken ct)
     {
         var name = (request.Name ?? "").Trim().ToLowerInvariant();
         if (!NamePattern().IsMatch(name) || name is "founder" or "muthur" or "anonymous")
@@ -38,9 +49,13 @@ public sealed partial class AgentService(Ledger ledger, LeasePolicy leases, Time
             agent.Tier = request.Tier?.Trim().ToLowerInvariant();
             agent.Account = request.Account?.Trim();
             agent.LastHeartbeat = m.Now;
+            // Sticky, never cleared. A conductor-staffed session that registers again through `muthur agent register`
+            // — which the orchestrate procedure tells it to do if its token is gone — is still a staffed session.
+            if (conductorStaffed) agent.ConductorStaffed = true;
             if (existing is null) m.Db.Agents.Add(agent);
 
-            m.Record(existing is null ? "agent.registered" : "agent.reregistered", payload: new { agent = name, agent.Harness, agent.Model, agent.Tier, agent.Account });
+            m.Record(existing is null ? "agent.registered" : "agent.reregistered",
+                payload: new { agent = name, agent.Harness, agent.Model, agent.Tier, agent.Account, agent.ConductorStaffed });
             return agent;
         }, ct);
 
@@ -123,6 +138,19 @@ public sealed partial class AgentService(Ledger ledger, LeasePolicy leases, Time
                 .Select(a => a.ToDto(leases, now, roles.GetValueOrDefault(a.Id) ?? [], open.GetValueOrDefault(a.Id)))
                 .ToList();
         }, ct);
+
+    /// <summary>
+    /// The roster as a reader wants it: standing agents only, with a count of the conductor-staffed sessions
+    /// left out, or everything when <paramref name="all"/> is true. Nothing is deleted or reclassified — this
+    /// is a view over the same rows <see cref="ListAsync"/> returns.
+    /// </summary>
+    public async Task<AgentRosterDto> RosterAsync(bool all, CancellationToken ct = default)
+    {
+        var agents = await ListAsync(ct);
+        if (all) return new AgentRosterDto(agents, 0);
+        var standing = agents.Where(a => !a.ConductorStaffed).ToList();
+        return new AgentRosterDto(standing, agents.Count - standing.Count);
+    }
 
     public async Task<AgentDto> GetAsync(Guid agentId, CancellationToken ct = default) =>
         (await ListAsync(ct)).SingleOrDefault(a => a.Id == agentId) ?? throw Fail.NotFound("Agent", agentId.ToString());
