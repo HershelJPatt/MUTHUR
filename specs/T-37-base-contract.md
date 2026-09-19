@@ -369,3 +369,49 @@ genuinely does have unintegrated commits still gets the check that clause was wr
 
 Reword the resumed bullet so the moved-files check sits inside the "you do have commits of your own" branch
 rather than reading as an independent test.
+
+## Proof (2026-09-18)
+
+```
+dotnet build   0 warnings, 0 errors
+dotnet test    Launch 23 + Cli 40 + Core 3692 + Server 196 = 3951, all passing
+git diff --stat main...HEAD -- src/ tests/   empty
+```
+
+Tests are run to prove a documentation change touched no code. The evidence that matters is different in
+kind, and it is the point of this record.
+
+### Five rounds, five defects, none of them found by reading
+
+| Round | Found by | Defect |
+|---|---|---|
+| 1 | the implementer, reviewing its own diff | "stop and report" named no status; the agent card asserted the base *was* the task branch, below the include, so it was the document's last word |
+| 2 | the same implementer | the "name the base branch" fix landed in the less-read file; the agent card's frontmatter — what the harness shows at delegation — still omitted it |
+| 3 | `conductor-validator`, by **installing the kit and driving it against real git** | a stale ancestor already contains an older spec, so the presence check passes, recovery is skipped, and the implementer builds from a superseded spec. Looks correct to the verdict |
+| 4 | the next implementer, by **building a counterexample** | identity passes on a dirty tree: stage an old spec, HEAD unmoved, check green. And `git show` secures the spec while every other file is read from disk — so an implementer edits a stale file and its diff *silently reverts* the base's change |
+| 5 | the same implementer, **by obeying the step rather than probing it** | the moved-files clause blocked on routine integration — the common resumed case — and a check that cries wolf on the normal case is one people learn to skip |
+
+Every version looked right. Reading would have caught none of them. Round 5 is the one I would keep if I
+kept one: it arrived *after* I ended the adversarial rounds, from ordinary use, which says attack and use
+find different things and that stopping at "no one can break it" is stopping early.
+
+### The step as it now stands
+
+Own worktree → base is a branch → `HEAD` == base → recover if not (own-commits test first, moved-files check
+only inside that branch) → spec via `git show <base>:<spec path>` → clean tree before starting.
+
+The last run exercised exactly the case Amendment 4 exists for — the base had moved because the
+orchestrator integrated the implementer's own commits — and the reordered step routed it correctly and
+silently, never reaching the clause that had misfired. That is negative evidence, and it is the right kind.
+
+### What is not closed, and why
+
+Three limits live here rather than in the contract, because no contract written for an implementer can
+reach them: an **incorrectly named base** (every check is consistency with whatever branch was handed over;
+mitigated as far as it can be by `orchestrate.md`'s "the branch you committed the frozen spec to and no
+other"), a **detached HEAD** at the base commit, and a **local base ref behind its remote** — airtight while
+one `.git` is shared, and an exact reproduction of the stale-spec failure the day orchestration crosses
+clones.
+
+A reader of `kit/core/implementer.md` alone will not know those three are known. That is a real property of
+where the record lives, and this section is the record.
