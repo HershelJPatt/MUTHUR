@@ -415,3 +415,46 @@ clones.
 
 A reader of `kit/core/implementer.md` alone will not know those three are known. That is a real property of
 where the record lives, and this section is the record.
+
+## Amendment 5 — git cannot tell your commits from inherited ones (2026-09-18)
+
+`conductor-validator` failed T-37 at `8c40a36`, with the stale-spec, dirty-tree and resumed/integrated cases
+all confirmed working:
+
+> Fresh divergent worker with zero own commits is still misclassified as resumed because `base..HEAD`
+> includes inherited unrelated landed commits. If those differences miss its unit, the contract permits
+> continuing on the wrong lineage.
+
+This is correct and it invalidates the test the whole recovery branch turns on. `git log --oneline
+<base>..HEAD` was standing in for "do you have commits of your own". **It does not measure that.** A worktree
+cut from a different lineage — which is the defect this task exists for — arrives carrying commits that are
+in `base..HEAD` and belong to *nobody in this round*: they are landed work from `main` that the task branch
+does not have. Three implementers this session reported exactly that shape, one with seventeen such commits.
+
+So a fresh worker on a divergent base sees a non-empty list, concludes it is being resumed, declines to
+reset, checks whether the base moved anything in its unit, finds it did not, and proceeds — on the wrong
+lineage, having followed the contract correctly at every step.
+
+Amendment 4 made this worse rather than better: ordering the own-commits test first was right for the
+integration case, and it put the full weight of the branch on a test that cannot carry it.
+
+### The fix: ask the worker, not git
+
+A worker always knows one thing git cannot infer — **whether it has committed anything in this round.** On a
+first round the answer is no, whatever `base..HEAD` contains. Key the branch off that:
+
+- **If you have not committed anything yet in this round**, and the tree is clean, `git reset --hard <base>`,
+  whatever the shape of the history. Nothing of yours can be lost, because you have made nothing. Report
+  whether it was a fast-forward or a divergent reset — both happen, and the divergent case is the one this
+  task was filed for.
+- **If you have committed in this round**, you are being resumed: do not reset, merge or rebase, and follow
+  the resumed path exactly as it stands (re-read the spec from the base, check what the base moved).
+
+Remove `git log --oneline <base>..HEAD` as the branch test. It may stay as *reporting* — saying what the
+reset discarded is useful — but it must not decide.
+
+This is the fifth defect found in this step and the third caused by reaching for a git command to answer a
+question git was not being asked. The earlier two were presence-instead-of-identity and
+commits-instead-of-working-tree; this is history-instead-of-authorship. The pattern is worth the next
+author's attention: each time, the command answered a nearby question convincingly enough that the
+substitution went unnoticed until someone ran it on a real repository.
