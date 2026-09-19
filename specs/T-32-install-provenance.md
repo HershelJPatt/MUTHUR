@@ -130,7 +130,18 @@ Published from a non-git directory C:\somewhere.
 ```
 
 Use `Write-Host`. One sentence, ending in a period, naming the ref, the short commit, and the worktree path
-only when the source is a linked worktree. `-Ref` prints the same line for the pinned commit.
+only when the source is a linked worktree.
+
+**`-Ref` prints the ref and commit only, with no `in worktree` clause**, even though its temporary detached
+worktree technically is one. That path is deleted seconds after the publish, and the clause exists — in the
+founder's words — because *"published from \<ref\> in \<worktree\> is the sentence that makes an install
+reproducible by someone else"*. Pointing a reader at a directory that no longer exists does the opposite of
+that, and the ref and commit alone are already enough to reproduce the publish with `-Ref`.
+
+This was Unit A's implementer's judgement, raised explicitly rather than taken. I accepted it **and then
+failed to write it here**, so the frozen spec and the build disagreed, and `conductor-validator` correctly
+failed T-32 against the document: the spec is the contract, and a deviation agreed in a message does not
+exist. The fault was the spec's, not the build's, and not the validator's.
 
 `$repo` stays the script's own parent directory. `$source` is what gets published: `$repo`, or the
 temporary worktree under `-Ref`.
@@ -230,7 +241,7 @@ The two units share no file and neither depends on the other.
     succeeds, and `git worktree list` afterwards shows no leftover worktree.
   - `-Ref does-not-exist`: throws, and leaves no worktree.
   - Run from a linked worktree under `.claude/worktrees/` or `.worktrees/`: the line includes
-    `in worktree <path>`.
+    `in worktree <path>`. A `-Ref` run does **not** include it — see the design note above.
   - Paste the actual output of each into the report. A line that is merely believed to print is not
     evidence.
 
