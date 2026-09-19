@@ -257,6 +257,115 @@ public sealed class KitManifestTests : IDisposable
     }
 
     /// <summary>
+    /// Rule 19. A "to" ending in a separator satisfies rules 1-18 whole — non-empty, unrooted, inside the
+    /// repository, no component too long, nothing forbidden in any component — and then WriteFile creates the
+    /// directory and asks File.WriteAllText to write to a path with no file on the end of it. The separators
+    /// are asked of the platform: a backslash is a separator on Windows and a legal file name character
+    /// elsewhere, and a rule that said otherwise would refuse a manifest that works.
+    /// </summary>
+    [Fact]
+    public async Task A_destination_that_names_a_directory_is_refused_before_anything_is_created()
+    {
+        var separators = new[] { Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar }.Distinct();
+
+        foreach (var separator in separators)
+            foreach (var directory in new[] { "docs", "a/b", "briefs" })
+            {
+                var to = directory + separator;
+                await Rejects(
+                    $$"""{"files":[{"from":"source.md","to":"{{to.Replace("\\", "\\\\")}}"}]}""",
+                    $": entry 0 writes \"{to}\", which names a directory, not a file.");
+            }
+    }
+
+    /// <summary>
+    /// Rule 20, and the first rule that reads the manifest as a whole. Each entry below is valid on its own;
+    /// the fault is the pair, so the write loop used to meet it with the earlier entry already on disk.
+    /// </summary>
+    [Theory]
+    // The reported shape: a file, then the directory holding it.
+    [InlineData("""{"files":[{"from":"source.md","to":"docs/x.md"},{"from":"source.md","to":"docs"}]}""",
+        ": entry 0 writes \"docs/x.md\" and entry 1 writes \"docs\"; one cannot be both a file and a directory.")]
+    // The same pair the other way round, which died in a different exception for the same reason.
+    [InlineData("""{"files":[{"from":"source.md","to":"docs"},{"from":"source.md","to":"docs/x.md"}]}""",
+        ": entry 0 writes \"docs\" and entry 1 writes \"docs/x.md\"; one cannot be both a file and a directory.")]
+    // A file, then a file underneath it: the ancestor need not be an entry's whole directory.
+    [InlineData("""{"files":[{"from":"source.md","to":"docs/x.md"},{"from":"source.md","to":"docs/x.md/y.md"}]}""",
+        ": entry 0 writes \"docs/x.md\" and entry 1 writes \"docs/x.md/y.md\"; one cannot be both a file and a directory.")]
+    // The colliding pair is not always the first two, and the message names the two that collide.
+    [InlineData("""{"files":[{"from":"source.md","to":"a.md"},{"from":"source.md","to":"docs/x.md"},{"from":"source.md","to":"docs"}]}""",
+        ": entry 1 writes \"docs/x.md\" and entry 2 writes \"docs\"; one cannot be both a file and a directory.")]
+    // Spelling is not the test: the comparison is of resolved paths, not of what the manifest wrote.
+    [InlineData("""{"files":[{"from":"source.md","to":"docs/x.md"},{"from":"source.md","to":"./docs"}]}""",
+        ": entry 0 writes \"docs/x.md\" and entry 1 writes \"./docs\"; one cannot be both a file and a directory.")]
+    public Task Two_entries_that_need_one_path_to_be_both_a_file_and_a_directory_are_refused(string manifest, string expected) =>
+        Rejects(manifest, expected);
+
+    /// <summary>
+    /// The other half of rule 20: two entries naming the same path are not a collision. That is last-one-wins,
+    /// which the manifest format has always allowed, and refusing it would be a new rule nobody asked for.
+    /// </summary>
+    [Fact]
+    public async Task Two_entries_writing_the_same_path_are_the_last_one_winning_not_a_collision()
+    {
+        File.WriteAllText(Path.Combine(HarnessDir, "second.md"), "the second one");
+        File.WriteAllText(ManifestPath, """
+            {"files":[
+              {"from":"source.md","to":"docs/x.md"},
+              {"from":"second.md","to":"docs/x.md"}
+            ]}
+            """);
+
+        Assert.Equal(ExitCodes.Ok, await Invoke("kit", "install", "--harness", Harness, "--repo", Repository));
+        Assert.Equal("the second one", File.ReadAllText(Path.Combine(Repository, "docs", "x.md")));
+    }
+
+    /// <summary>
+    /// Rule 21. A lone surrogate is a legal JSON escape that System.Text.Json parses and then refuses to hand
+    /// back, so it threw one statement after the ValueKind check had said "string" — the thing that exists to
+    /// turn a bad manifest into a sentence was itself the thing that crashed.
+    /// </summary>
+    [Theory]
+    [InlineData("""{"files":[{"from":"source.md","to":"docs/x\ud800.md"}]}""", "to")]
+    [InlineData("""{"files":[{"from":"source.md","to":"docs/x\udc00.md"}]}""", "to")]
+    [InlineData("""{"files":[{"from":"so\ud800urce.md","to":"docs/x.md"}]}""", "from")]
+    [InlineData("""{"files":[{"from":"so\udc00urce.md","to":"docs/x.md"}]}""", "from")]
+    [InlineData("""{"files":[{"from":"source.md","to":"docs/x.md","mode":"\ud800"}]}""", "mode")]
+    [InlineData("""{"files":[{"from":"source.md","to":"docs/x.md","mode":"\udc00"}]}""", "mode")]
+    public async Task A_string_the_reader_parses_but_will_not_hand_back_is_refused_rather_than_thrown(string manifest, string field)
+    {
+        var (exit, code, message) = await Rejected(manifest);
+
+        Assert.Equal(ExitCodes.RuleViolation, exit);
+        Assert.Equal("invalid_manifest", code);
+        Assert.StartsWith($"{ManifestPath}: entry 0 has a \"{field}\" that is not readable text: ", message, StringComparison.Ordinal);
+        Assert.Empty(Directory.GetFileSystemEntries(Repository));
+        Assert.Empty(Directory.GetFileSystemEntries(Outside));
+    }
+
+    /// <summary>
+    /// The last-resort guard. Three rounds of enumeration each found one more family, so the whole body of
+    /// TryReadManifest is wrapped: it names the exception type and says the reader is at fault, rather than
+    /// shortening a rule's message or telling the founder their JSON is bad. Reached here by handing the
+    /// validator a repository path the platform cannot resolve, which no manifest can do and `Install` never
+    /// does — a shape that reaches this guard through a manifest is a missing rule, not a pass.
+    /// </summary>
+    [Fact]
+    public void An_exception_no_rule_names_still_leaves_a_sentence_and_the_type_that_caused_it()
+    {
+        File.WriteAllText(ManifestPath, """{"files":[{"from":"source.md","to":"docs/x.md"}]}""");
+
+        Assert.False(KitCommands.TryReadManifest(ManifestPath, HarnessDir, Kit, "\0", out var entries, out var problem));
+
+        Assert.Empty(entries);
+        Assert.StartsWith($"{ManifestPath} could not be read: ArgumentException: ", problem, StringComparison.Ordinal);
+        Assert.EndsWith(
+            "This is a defect in MUTHUR's manifest reader, not necessarily in your manifest — please report it.",
+            problem,
+            StringComparison.Ordinal);
+    }
+
+    /// <summary>
     /// The defect behind the whole task: entries were written as the loop walked them, so a manifest whose
     /// ninth entry was wrong had already written eight. Validation is a separate pass for exactly this.
     /// </summary>

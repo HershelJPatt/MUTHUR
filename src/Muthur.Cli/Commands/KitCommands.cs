@@ -141,7 +141,33 @@ public static partial class KitCommands
     /// The manifest's entries, or the error to return. Everything a bad manifest can do is decided here, before
     /// a single file is written: an entry that fails leaves the repository untouched rather than half-installed.
     /// </summary>
+    /// <remarks>
+    /// The last-resort guard lives here, outside every rule, because three rounds of enumeration each found one
+    /// more family and the Goal's sentence — no unhandled exception, no address stack — is a claim a list of
+    /// rules cannot keep. It is not the widening the rules themselves refuse: it never shortens a specific
+    /// message into a generic one, it names the exception type and says the reader is at fault, and it bounds
+    /// the message rather than the filesystem. A shape that reaches it is a missing rule, to be filed.
+    /// </remarks>
     internal static bool TryReadManifest(
+        string manifestPath, string harnessDir, string kitDir, string repo,
+        out List<KitEntry> entries, out string problem)
+    {
+        entries = [];
+        try
+        {
+            return ReadManifest(manifestPath, harnessDir, kitDir, repo, out entries, out problem);
+        }
+        catch (Exception ex)
+        {
+            entries = [];
+            problem = $"{manifestPath} could not be read: {ex.GetType().Name}: {ex.Message}. This is a defect in "
+                + "MUTHUR's manifest reader, not necessarily in your manifest — please report it.";
+            return false;
+        }
+    }
+
+    /// <summary>The rules themselves, in the order this task's spec numbers them.</summary>
+    private static bool ReadManifest(
         string manifestPath, string harnessDir, string kitDir, string repo,
         out List<KitEntry> entries, out string problem)
     {
@@ -192,23 +218,50 @@ public static partial class KitCommands
             var repoRoot = Path.GetFullPath(repo);
             var index = 0;
             var validated = new List<KitEntry>();
+            var destinations = new List<string>();
             foreach (var file in files.EnumerateArray())
             {
-                if (!TryReadEntry(manifestPath, harnessDir, kitRoot, repoRoot, file, index++, out var entry, out problem))
+                if (!TryReadEntry(manifestPath, harnessDir, kitRoot, repoRoot, file, index++, out var entry, out var destination, out problem))
                     return false;
                 validated.Add(entry);
+                destinations.Add(destination);
             }
+
+            if (Collision(destinations) is { } collision)
+            {
+                var (a, b) = collision;
+                problem = $"{manifestPath}: entry {a} writes \"{validated[a].To}\" and entry {b} writes "
+                    + $"\"{validated[b].To}\"; one cannot be both a file and a directory.";
+                return false;
+            }
+
             entries = validated;
         }
         return true;
     }
 
+    /// <summary>
+    /// Rule 20, and the first rule here that reads the manifest as a whole: each entry below is valid on its
+    /// own, and it is the pair that cannot be honoured. Two entries naming the same path are not a collision —
+    /// that is last-one-wins, which the format has always allowed — so only file-versus-directory counts.
+    /// </summary>
+    private static (int A, int B)? Collision(List<string> destinations)
+    {
+        for (var a = 0; a < destinations.Count; a++)
+            for (var b = a + 1; b < destinations.Count; b++)
+                if (IsInside(destinations[a], destinations[b]) || IsInside(destinations[b], destinations[a]))
+                    return (a, b);
+        return null;
+    }
+
     /// <summary>One entry of <c>files</c>, checked field by field so the message can name the field that is wrong.</summary>
+    /// <param name="destination">The resolved <c>to</c>, which rule 20 needs to compare entries against each other.</param>
     private static bool TryReadEntry(
         string manifestPath, string harnessDir, string kitRoot, string repoRoot,
-        JsonElement file, int index, out KitEntry entry, out string problem)
+        JsonElement file, int index, out KitEntry entry, out string destination, out string problem)
     {
         entry = default;
+        destination = "";
         problem = "";
 
         if (file.ValueKind is not JsonValueKind.Object)
@@ -237,8 +290,16 @@ public static partial class KitCommands
             return false;
         }
 
-        var from = fromField.GetString()!;
-        var to = toField.GetString()!;
+        if (!TryReadText(fromField, out var from, out var unreadable))
+        {
+            problem = $"{manifestPath}: entry {index} has a \"from\" that is not readable text: {unreadable}";
+            return false;
+        }
+        if (!TryReadText(toField, out var to, out unreadable))
+        {
+            problem = $"{manifestPath}: entry {index} has a \"to\" that is not readable text: {unreadable}";
+            return false;
+        }
 
         // Named before the containment rules reach it: Path.Combine(repo, "") is the repository itself, and
         // being told an empty string is outside the repository helps nobody.
@@ -256,7 +317,11 @@ public static partial class KitCommands
                 problem = $"{manifestPath}: entry {index} ({to}) has a \"mode\" that is {Kind(modeField)}, not a string.";
                 return false;
             }
-            mode = modeField.GetString()!;
+            if (!TryReadText(modeField, out mode, out unreadable))
+            {
+                problem = $"{manifestPath}: entry {index} has a \"mode\" that is not readable text: {unreadable}";
+                return false;
+            }
         }
 
         var validator = false;
@@ -304,7 +369,7 @@ public static partial class KitCommands
 
         // The same for the destination, plus the rooted case: Path.Combine(repo, to) is just 'to' when 'to' is
         // absolute, which is how a manifest can write to C:\Windows while --repo says otherwise.
-        if (!TryResolve(repoRoot, to, out var destination, out refusal))
+        if (!TryResolve(repoRoot, to, out destination, out refusal))
         {
             problem = $"{manifestPath}: entry {index} has a \"to\" that is not a usable path: {refusal}";
             return false;
@@ -318,6 +383,15 @@ public static partial class KitCommands
         {
             problem = $"{manifestPath}: entry {index} writes \"{to}\", which contains \\u{(int)forbidden:x4}, "
                 + "a character this platform does not allow in a file name.";
+            return false;
+        }
+
+        // Rule 19. A "to" ending in a separator has an empty last component, so it names the directory above it
+        // and not a file in it. WriteFile creates that directory and then hands File.WriteAllText a path with
+        // nothing on the end of it, which threw after the directory existed: half an install for no entry at all.
+        if (to.EndsWith(Path.DirectorySeparatorChar) || to.EndsWith(Path.AltDirectorySeparatorChar))
+        {
+            problem = $"{manifestPath}: entry {index} writes \"{to}\", which names a directory, not a file.";
             return false;
         }
 
@@ -336,6 +410,28 @@ public static partial class KitCommands
 
     /// <summary>The kind as the founder wrote it in the file: <c>number</c>, <c>string</c>, <c>null</c>.</summary>
     private static string Kind(JsonElement element) => element.ValueKind.ToString().ToLowerInvariant();
+
+    /// <summary>
+    /// Rule 21. Saying an element is a string is not the same as being able to read it: a lone surrogate escape
+    /// is legal JSON that <c>System.Text.Json</c> parses and then refuses to materialise, so the check that was
+    /// meant to turn a bad manifest into a sentence threw one statement after passing. The catch is around the
+    /// call alone — the kind has already been established, so nothing else here can raise it.
+    /// </summary>
+    private static bool TryReadText(JsonElement element, out string text, out string refusal)
+    {
+        try
+        {
+            text = element.GetString()!;
+        }
+        catch (InvalidOperationException ex)
+        {
+            text = "";
+            refusal = ex.Message;
+            return false;
+        }
+        refusal = "";
+        return true;
+    }
 
     /// <summary>Containment by full path, which a string test on the manifest's own spelling cannot give.</summary>
     private static bool IsInside(string path, string root) =>
