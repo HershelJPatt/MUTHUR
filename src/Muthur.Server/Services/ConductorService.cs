@@ -67,6 +67,36 @@ public sealed class ConductorService(
     private readonly HashSet<string> _running = [];
 
     /// <summary>
+    /// The lifetime of every session this hub has started, cancelled as the host stops.
+    /// <para>
+    /// Sessions used to be launched with <c>CancellationToken.None</c>, which detached the child from the hub's
+    /// lifetime on purpose. <see cref="_running"/> is in memory, so the next hub began with an empty set and
+    /// staffed a task whose orchestrator was still alive: two sessions on one task, two specs, two branches — and
+    /// a survivor that nothing can account for, because it is in no ceiling, no status line and no stall counter.
+    /// <c>ProcessRunner</c> already kills the whole process tree when its token cancels; this is that token.
+    /// </para>
+    /// <para>
+    /// Killing loses less than adopting would. The dead session's claim lapses, <c>LeaseSweeper</c> returns the
+    /// task to the backlog with its branch and spec intact, and the next session continues from there. The work
+    /// survives in the branch; only the process does not. Which is also why <see cref="_running"/> is still not
+    /// persisted: with the children dead, an empty set after a restart is the truth.
+    /// </para>
+    /// </summary>
+    private readonly CancellationTokenSource _sessions = new();
+
+    /// <summary>
+    /// The detached session tasks, so a stop can wait for the kills rather than race the host's exit. Pruned as
+    /// sessions are started, so it stays the size of what is actually running.
+    /// </summary>
+    private readonly List<Task> _sessionTasks = [];
+
+    /// <summary>
+    /// How long a stop waits for the children to die. A hang detector, not a grace period — they are killed, not
+    /// asked — and a stop that never returns is worse than a child that lingers a moment.
+    /// </summary>
+    private static readonly TimeSpan StopBudget = TimeSpan.FromSeconds(10);
+
+    /// <summary>
     /// The role part of an orchestrator's <see cref="_running"/> and <see cref="_stalls"/> key. Both maps are keyed
     /// "T-n/role" and <see cref="PlanAsync"/> charges every running session to the role it names, so the two key
     /// spaces must not be able to meet. <c>RoleKey</c>'s pattern is <c>^[a-z0-9][a-z0-9-]{0,37}$</c>: a key can
@@ -152,6 +182,55 @@ public sealed class ConductorService(
 
     /// <summary>Sessions the conductor believes it has running, by "T-n/role".</summary>
     public int RunningCount { get { lock (_running) return _running.Count; } }
+
+    /// <summary>Remember a detached session so a stop can wait for it, dropping the ones that have already ended.</summary>
+    private void Track(Task session)
+    {
+        lock (_running)
+        {
+            _sessionTasks.RemoveAll(t => t.IsCompleted);
+            _sessionTasks.Add(session);
+        }
+    }
+
+    /// <summary>
+    /// End every session this hub started, and say so once. Called as the host stops and before it exits, because a
+    /// child that outlives the hub belongs to nobody: the next hub starts with an empty <see cref="_running"/> and
+    /// staffs its task all over again.
+    /// <para>
+    /// Idempotent, and silent when there was nothing to end — a founder should read
+    /// <c>conductor.sessions_terminated</c> as "work was cut off here", not as a line every shutdown prints.
+    /// </para>
+    /// </summary>
+    public async Task StopSessionsAsync(CancellationToken ct = default)
+    {
+        if (_sessions.IsCancellationRequested) return;
+
+        Task[] running;
+        int count;
+        lock (_running)
+        {
+            count = _running.Count;
+            running = [.. _sessionTasks.Where(t => !t.IsCompleted)];
+        }
+
+        await _sessions.CancelAsync();
+
+        // The sessions observe the cancellation on a pool thread and kill their process trees there, so wait for
+        // them instead of racing the host's exit — otherwise the event below records an intention, not an outcome.
+        if (running.Length > 0)
+        {
+            try { await Task.WhenAll(running).WaitAsync(StopBudget, CancellationToken.None); }
+            catch (TimeoutException) { }
+        }
+
+        if (count == 0) return;
+        await ledger.MutateAsync(Caller.Founder, m =>
+        {
+            m.Record("conductor.sessions_terminated", payload: new { count });
+            return Task.CompletedTask;
+        }, ct);
+    }
 
     public async Task<ConductorStatusDto> StatusAsync(CancellationToken ct = default)
     {
@@ -568,6 +647,9 @@ public sealed class ConductorService(
     /// <summary>One pass: start what the plan asks for, up to the session budget. Returns how many it started.</summary>
     public async Task<int> RunPassAsync(CancellationToken ct = default)
     {
+        // A pass that races the stop would launch a child with nobody left to cancel it — the orphan this whole
+        // mechanism exists to prevent, created by the mechanism's own shutdown.
+        if (_sessions.IsCancellationRequested) return 0;
         if (!await EnabledAsync(ct)) return 0;
         if (!await _pass.WaitAsync(0, ct)) return 0;   // a slow pass must never overlap the next tick
         try
@@ -597,7 +679,7 @@ public sealed class ConductorService(
                 }, ct);
 
                 _lastAction = $"staffed {assignment.TaskKey} for {assignment.RoleKey}";
-                _ = RunSessionAsync(assignment, key);
+                Track(RunSessionAsync(assignment, key));
                 started++;
             }
 
@@ -620,7 +702,7 @@ public sealed class ConductorService(
                 }, ct);
 
                 _lastAction = $"staffed an orchestrator for {assignment.TaskKey}";
-                _ = RunOrchestratorSessionAsync(assignment, key);
+                Track(RunOrchestratorSessionAsync(assignment, key));
                 started++;
             }
             return started;
@@ -633,8 +715,13 @@ public sealed class ConductorService(
         try
         {
             Exception? failure = null;
-            try { await launcher.StartAsync(assignment, CancellationToken.None); }
+            try { await launcher.StartAsync(assignment, _sessions.Token); }
             catch (Exception thrown) { failure = thrown; }
+
+            // The hub is stopping and killed this session with its process tree. Nothing about that is the pair's
+            // doing, and charging it would leave every session in flight one strike worse off for a restart —
+            // three restarts would stall work that was never given the chance to fail.
+            if (_sessions.IsCancellationRequested) return;
 
             // A session that ran and hung is not a session that never started, and the founder must not be sent
             // looking for a missing CLI when the real fault is sessions outliving their timeout.
@@ -696,8 +783,12 @@ public sealed class ConductorService(
         try
         {
             Exception? failure = null;
-            try { await orchestrators.StartAsync(assignment, CancellationToken.None); }
+            try { await orchestrators.StartAsync(assignment, _sessions.Token); }
             catch (Exception thrown) { failure = thrown; }
+
+            // The hub stopped it; see RunSessionAsync. The claim lapses, the sweeper returns the task to the
+            // backlog with its branch, and the next hub staffs it once — which is the whole point of killing it.
+            if (_sessions.IsCancellationRequested) return;
 
             if (failure is { } ex)
             {
@@ -877,18 +968,29 @@ public sealed class ConductorWorker(IServiceProvider services, MuthurOptions opt
 {
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
     {
-        while (!stoppingToken.IsCancellationRequested)
+        try
         {
-            try
+            while (!stoppingToken.IsCancellationRequested)
             {
-                var started = await services.GetRequiredService<ConductorService>().RunPassAsync(stoppingToken);
-                if (started > 0) logger.LogInformation("Conductor started {Count} session(s).", started);
+                try
+                {
+                    var started = await services.GetRequiredService<ConductorService>().RunPassAsync(stoppingToken);
+                    if (started > 0) logger.LogInformation("Conductor started {Count} session(s).", started);
+                }
+                catch (Exception ex) when (ex is not OperationCanceledException)
+                {
+                    logger.LogError(ex, "Conductor pass failed.");
+                }
+                await Task.Delay(TimeSpan.FromSeconds(options.EffectiveConductorIntervalSeconds), clock, stoppingToken);
             }
-            catch (Exception ex) when (ex is not OperationCanceledException)
-            {
-                logger.LogError(ex, "Conductor pass failed.");
-            }
-            await Task.Delay(TimeSpan.FromSeconds(options.EffectiveConductorIntervalSeconds), clock, stoppingToken);
+        }
+        finally
+        {
+            // Here rather than anywhere later: the host waits on this method, so a session killed from inside it
+            // dies before the process exits. Left to run, it would be a child no hub can account for and a task the
+            // next hub staffs a second time.
+            try { await services.GetRequiredService<ConductorService>().StopSessionsAsync(); }
+            catch (Exception ex) { logger.LogError(ex, "Conductor sessions could not be stopped cleanly."); }
         }
     }
 }

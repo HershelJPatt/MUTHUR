@@ -2339,6 +2339,130 @@ public sealed class ConductorTests : IDisposable
         Assert.DoesNotContain(await EventsAsync(), e => e.Type is "conductor.no_verdict" or "conductor.stalled");
     }
 
+    // ---- a session must not outlive the hub that started it ------------------------------------------------------
+
+    /// <summary>
+    /// A validator session held open, the way a real harness holds one open for its whole timeout. The fake blocks
+    /// on the session's own cancellation token, so stopping the hub ends it exactly as killing the process tree does.
+    /// </summary>
+    private async Task<string> HeldValidatorSessionAsync()
+    {
+        await SetUpAsync("win-validator");
+        await DefineAsync("win-validator");
+        _hub.Validators.Block = true;
+        var id = await TaskInValidationAsync();
+
+        Assert.Equal(1, await Conductor.RunPassAsync());
+        Assert.Equal(1, Conductor.RunningCount);
+        return id;
+    }
+
+    [Fact]
+    public async Task Sessions_die_with_the_hub_that_started_them()
+    {
+        // The defect validation failed this task on, reproduced on the installed product: a hub staffs a session,
+        // `down` then `up`, and the new hub staffs the same task again while the first child is still alive. The
+        // child was launched with a token nobody ever cancelled, and _running lives in memory - so the next hub
+        // began with an empty set and every reason to believe nothing was running.
+        await HeldValidatorSessionAsync();
+
+        await Conductor.StopSessionsAsync();
+
+        // Nothing left running, and the ledger says work was cut off rather than leaving a founder to infer it.
+        Assert.Equal(0, Conductor.RunningCount);
+        var terminated = Assert.Single(await EventsAsync(), e => e.Type == "conductor.sessions_terminated");
+        Assert.Equal(1, terminated.Payload.GetProperty("count").GetInt32());
+    }
+
+    [Fact]
+    public async Task An_orchestrator_does_not_outlive_the_hub_that_started_it()
+    {
+        // The exact shape the validator hit: orchestrator-t-9 staffed by one hub and again by the next, both
+        // children alive, both told to claim T-9. Two orchestrators on one task is two specs and two branches.
+        var author = await OrchestratingAsync();
+        _hub.Orchestrators.Block = true;
+        await author.AddTaskAsync("Only one of these, ever");
+        Assert.Equal(1, await Conductor.RunPassAsync());
+        Assert.Equal(1, Conductor.RunningCount);
+
+        await Conductor.StopSessionsAsync();
+
+        Assert.Equal(0, Conductor.RunningCount);
+        Assert.Single(await EventsAsync(), e => e.Type == "conductor.sessions_terminated");
+        Assert.Single(_hub.Orchestrators.Started);
+    }
+
+    [Fact]
+    public async Task After_the_sessions_are_stopped_the_task_is_planned_exactly_once_again()
+    {
+        // The other half of the reproduction. With the child dead, an empty running set is *true*, so the next hub
+        // plans the task once - not once more on top of a session that is still going.
+        var id = await HeldValidatorSessionAsync();
+
+        await Conductor.StopSessionsAsync();
+
+        Assert.Equal(0, Conductor.RunningCount);
+        Assert.Equal(id, Assert.Single(await Conductor.PlanAsync()).TaskKey);
+        Assert.Single(await EventsAsync(), e => e.Type == "conductor.staffing");
+    }
+
+    [Fact]
+    public async Task A_killed_session_is_not_charged_to_the_pair_that_did_nothing_wrong()
+    {
+        // Cancellation is the hub stopping, not the pair failing. Charged as a launch failure it would leave every
+        // session in flight one strike worse off for a restart, and three restarts would stall work that was never
+        // given the chance to fail - a hub that punishes you for turning it off and on again.
+        _hub.Settings["Muthur:ConductorMaxAttempts"] = "2";
+        await HeldValidatorSessionAsync();
+
+        await Conductor.StopSessionsAsync();
+
+        var events = await EventsAsync();
+        Assert.DoesNotContain(events, e => e.Type is "conductor.failed" or "conductor.session_failed"
+            or "conductor.no_verdict" or "conductor.stalled");
+        Assert.Empty(await FounderMessagesAsync());
+    }
+
+    [Fact]
+    public async Task Once_the_hub_is_stopping_no_further_session_is_started()
+    {
+        // A pass racing the stop would launch a child with nobody left to cancel it: the orphan this mechanism
+        // exists to prevent, created by the mechanism's own shutdown.
+        await SetUpAsync("win-validator");
+        await DefineAsync("win-validator");
+        await TaskInValidationAsync();
+
+        await Conductor.StopSessionsAsync();
+
+        Assert.Equal(0, await Conductor.RunPassAsync());
+        Assert.Empty(_hub.Validators.Started);
+    }
+
+    [Fact]
+    public async Task A_session_that_finishes_normally_records_nothing_about_being_stopped()
+    {
+        await SetUpAsync("win-validator");
+        await DefineAsync("win-validator");
+        await TaskInValidationAsync();
+        Assert.Equal(1, await Conductor.RunPassAsync());
+        await SettledAsync();
+
+        Assert.DoesNotContain(await EventsAsync(), e => e.Type == "conductor.sessions_terminated");
+    }
+
+    [Fact]
+    public async Task A_stop_with_nothing_running_says_nothing_and_a_second_stop_says_nothing_twice()
+    {
+        // The event means "work was cut off here". A line printed by every clean shutdown would mean nothing.
+        await SetUpAsync("win-validator");
+        await DefineAsync("win-validator");
+
+        await Conductor.StopSessionsAsync();
+        await Conductor.StopSessionsAsync();
+
+        Assert.DoesNotContain(await EventsAsync(), e => e.Type == "conductor.sessions_terminated");
+    }
+
     [Theory]
     [InlineData("git push*")]
     [InlineData("git merge*")]
