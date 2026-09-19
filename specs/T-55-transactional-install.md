@@ -911,3 +911,63 @@ Amendment 4 was derived by reading `Install`, and `Install` is not where the rea
 performed. The reachable fixture differs from the named one by a single indirection, which no amount of reading
 `Install` would have surfaced — only running the command did. The spec's own closing note from T-8 keeps being
 right: state a mechanism you have not measured and it costs a round. This is the third round it has cost.
+
+## Resumption verification — 2026-09-19 (Codex)
+
+The resumed branch was ahead of the ledger: Units A and C were integrated at `c0697b3`.
+The orchestrator preserved that work, integrated main (`72e24c4`), delegated Unit D,
+reviewed its four-file diff (`1e990c8`), and integrated it at `d7d1699`.
+
+Unit D measured the include-lock regression red before the fix: its absence assertion failed because
+the message blamed `b.md`. It passed after the fix, naming the entry source in the installing clause.
+
+### Reproducible Unit B verification
+
+The complete Windows AOT matrix is `scripts/verify-t55.ps1`, written by the delegated implementer and
+executed by the orchestrator. It isolates MUTHUR_HOME/MUTHUR_URL, captures raw stdout/stderr,
+compares recursive paths and SHA256/length for every file, restores ACLs and handles in finally,
+and deletes its own checked scratch directory. Evidence goes under artifacts/.
+
+Publish the task branch with `scripts/install.ps1 -Destination ./artifacts/t55-final` and baseline with
+`scripts/install.ps1 -Destination ./artifacts/t55-baseline -Ref a18831f`, using scratch MUTHUR_HOME
+and MUTHUR_URL as required by CLAUDE.md. Then run:
+
+```powershell
+pwsh -NoProfile ./scripts/verify-t55.ps1 -Cli ./artifacts/t55-final/muthur.exe -BaseCli ./artifacts/t55-baseline/muthur.exe
+```
+
+Measured against installed AOT `d7d1699` and freshly published baseline `a18831f`:
+
+| Case | Exit / code | Repository after failure |
+|---|---|---|
+| Locked first, middle, last destination (3 rows) | 1 / install_failed | Identical paths and bytes |
+| Read-only destination | 2 / invalid_manifest | Identical |
+| Locked .gitignore | 1 / install_failed | Identical |
+| Read-only .gitignore | 2 / invalid_manifest | Identical |
+| Directory at .gitignore or project path (2 rows) | 2 / invalid_manifest | Identical |
+| Earlier create + section writes, owned CRLF content | 1 / install_failed | Identical |
+| Already installed repository | 1 / install_failed | Identical |
+| Three newly created directory levels | 1 / install_failed | Identical; all three levels removed |
+| Locked entry source (T-82) | 2 / invalid_manifest | Identical |
+| Locked include target | 1 / install_failed | Identical; entry source named, no b.md blame |
+| Project seed write denied by ACL | 1 / install_failed | Identical |
+| Rollback deletion denied by ACL | 1 / install_not_undone | Precisely docs/a.md retained and named |
+| Shipped claude, codex, generic (3 rows) | 0 / success | Identical to baseline |
+
+All 18 rows passed. No raw stderr contained `Unhandled exception` or `muthur!`. All 15 failure rows
+reinstalled successfully after removing the fixture condition; the deliberately incomplete rollback
+first had its explicitly reported fixture residue removed. Shipped-kit comparisons used identical
+kit inputs and a fixed project key, compared every byte including the generated project file,
+and compared result JSON after normalizing only the repository path.
+
+Two permission fixtures make the difficult rows deterministic, with no timing races:
+
+- Seed failure: put entries in existing docs/, pre-seed .gitignore with .worktrees/, and deny CreateFiles
+  on the repository root only. Preflight succeeds; project creation fails after entries were installed.
+- Incomplete rollback: deny deletion of files created in existing docs/, then hold final c.md exclusively
+  open. Earlier docs/a.md is created, rollback cannot delete it, and install_not_undone names it. Other
+  paths return byte-for-byte. Restore ACLs before deleting the known fixture residue and retrying.
+
+Test environment: if overriding TEMP/TMP, use a dedicated directory **outside every Git repository**.
+The FileProvenanceTests outside-repository fixture intentionally requires this; putting TEMP inside a
+worktree makes the fixture itself belong to that repository.
