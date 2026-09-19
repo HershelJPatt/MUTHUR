@@ -85,6 +85,7 @@ public static partial class KitCommands
                 foreach (var entry in entries)
                 {
                     var from = Path.GetFullPath(Path.Combine(harnessDir, entry.From));
+                    transaction.Touching = from;
                     var content = Expand(File.ReadAllText(from), kitDir);
                     var status = transaction.Apply(Path.Combine(repo, entry.To), content, entry.Mode);
                     if (entry.To.StartsWith(BriefDirectory, StringComparison.Ordinal) && entry.To.EndsWith(".md", StringComparison.Ordinal))
@@ -100,8 +101,8 @@ public static partial class KitCommands
                 // to a file the repository owns and may have written with CRLF.
                 var ignore = Path.Combine(repo, IgnoreFile);
                 // Named before the read, not just before the write: a .gitignore another process holds throws
-                // here, and Writing would otherwise still be the last entry — a file that was written fine.
-                transaction.Writing = ignore;
+                // here, and Touching would otherwise still be the last entry — a file that was written fine.
+                transaction.Touching = ignore;
                 var ignored = File.Exists(ignore) ? File.ReadAllText(ignore) : "";
                 if (!ignored.Split('\n').Any(line => line.Trim() is ".worktrees/" or ".worktrees"))
                 {
@@ -113,7 +114,7 @@ public static partial class KitCommands
                 }
 
                 var projectFile = Path.Combine(repo, ProjectContext.FileName);
-                transaction.Writing = projectFile;
+                transaction.Touching = projectFile;
                 if (!File.Exists(projectFile))
                 {
                     var k = (projectKey ?? new DirectoryInfo(repo).Name).Trim().ToLowerInvariant();
@@ -170,10 +171,10 @@ public static partial class KitCommands
     /// </remarks>
     private static int Failed(string repo, InstallTransaction transaction, Exception ex)
     {
-        var writing = transaction.Writing is { } path
-            ? $" while writing \"{Path.GetRelativePath(repo, path)}\""
+        var touching = transaction.Touching is { } path
+            ? $" while installing \"{Name(repo, path)}\""
             : "";
-        var failed = $"{repo}: the install failed{writing}: {ex.GetType().Name}: {ex.Message}.";
+        var failed = $"{repo}: the install failed{touching}: {ex.GetType().Name}: {ex.Message}.";
 
         var stranded = transaction.Rollback();
         return stranded.Count == 0
@@ -183,6 +184,16 @@ public static partial class KitCommands
                 + $"part-installed: {string.Join(", ", stranded)} could not be restored. Look at those paths "
                 + "before re-running.");
     }
+
+    /// <summary>
+    /// The path as the founder would recognise it: relative to the repository when it is inside one, and in
+    /// full when it is not. A kit source is not under the repository, and rendering it as a chain of "..\"
+    /// segments names it less clearly than not trying to.
+    /// </summary>
+    private static string Name(string repo, string path) =>
+        Path.GetRelativePath(repo, path) is var relative && relative.StartsWith("..", StringComparison.Ordinal)
+            ? path
+            : relative;
 
     /// <summary>
     /// The manifest's entries, or the error to return. Everything a bad manifest can do is decided here, before
