@@ -19,9 +19,23 @@
     // The age moves on its own, so refresh occasionally even when nothing is written.
     protected override TimeSpan? ClockInterval => TimeSpan.FromSeconds(30);
 
-    protected override bool IsRelevant(Muthur.Core.Entities.LedgerEvent e) =>
-        e.Type.StartsWith("request.", StringComparison.Ordinal) || e.Type.StartsWith("message.", StringComparison.Ordinal)
-        || e.Type.StartsWith("outbound.", StringComparison.Ordinal);
+    protected override bool IsRelevant(Muthur.Core.Entities.LedgerEvent e) => Watches(e.Type);
+
+    /// <summary>
+    /// Whether an event can move the number in the top bar. A plain function of the type, and tested as one:
+    /// the difference between telling the founder now and telling them on the next clock tick lives behind a
+    /// SignalR circuit no test can reach, and narrowing it again would otherwise be silent.
+    /// <para>
+    /// <c>task.</c> is broad on purpose: the flag moves on <c>task.attended</c> and <c>task.attended_cleared</c>,
+    /// and a task enters and leaves 'validating' on <c>task.</c> and <c>validation.</c> events, so anything
+    /// narrower leaves the badge late on a count it carries. <c>LivePanel</c> coalesces to one reload per
+    /// <c>RefreshInterval</c>, so a busy hub cannot make the extra breadth cost anything.
+    /// </para>
+    /// </summary>
+    internal static bool Watches(string type) =>
+        type.StartsWith("request.", StringComparison.Ordinal) || type.StartsWith("message.", StringComparison.Ordinal)
+        || type.StartsWith("outbound.", StringComparison.Ordinal) || type.StartsWith("task.", StringComparison.Ordinal)
+        || type.StartsWith("validation.", StringComparison.Ordinal);
 
     // The same read the Needs you page renders, so the two can never disagree.
     protected override async Task LoadAsync()

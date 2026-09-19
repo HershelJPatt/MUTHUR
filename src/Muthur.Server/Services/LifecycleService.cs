@@ -115,6 +115,51 @@ public sealed class LifecycleService(Ledger ledger, LeasePolicy leases, ITaskLan
         }, ct);
 
     /// <summary>
+    /// Tasks in 'validating' that a human has said need them, longest-waiting first within a priority. Nothing
+    /// advances one of these: the conductor skips an attended task on purpose, so unless somebody is told, it
+    /// waits until somebody happens to read the board.
+    /// </summary>
+    /// <remarks>
+    /// Uncapped, deliberately: this set is bounded by the work in flight and nothing an agent does can inflate
+    /// it, so the list is also the count and the badge and the page cannot disagree.
+    /// </remarks>
+    public Task<IReadOnlyList<TaskDto>> AttendedAsync(CancellationToken ct = default) =>
+        ledger.ReadAsync<IReadOnlyList<TaskDto>>(async (db, _) =>
+        {
+            var tasks = await db.Tasks.Include(t => t.Project).Include(t => t.Owner)
+                .Where(t => t.State == TaskState.Validating && t.AttendedReason != null)
+                .OrderBy(t => t.Id).ToListAsync(ct);
+            var validations = await Validations.ForTasksAsync(db, tasks.Select(t => t.Id).ToList(), ct);
+            // Priority first, as every other queue someone picks work off does; the numeric id breaks the last
+            // tie by being the order the rows arrived in, which a stable sort keeps without parsing "T-n" back.
+            return tasks.Select(t => t.ToDto(validations.GetValueOrDefault(t.Id)))
+                .OrderByDescending(t => t.Priority)
+                .ThenBy(WaitingSince)
+                .ToList();
+        }, ct);
+
+    /// <summary>
+    /// When this task started waiting on a person: when its validation round opened. A task that re-enters
+    /// 'validating' starts a new round and a new clock, which is right — the wait being reported is the wait
+    /// for the verdict that is outstanding now, not the age of the task.
+    /// </summary>
+    /// <remarks>
+    /// Falls back to <see cref="TaskDto.UpdatedAt"/> when no verdict is pending. The state machine says a task
+    /// in 'validating' always has one, so the fallback is unreachable — but it is here rather than a
+    /// <c>Min()</c> that would throw, because this runs inside a dashboard panel and an empty sequence would
+    /// take the page down rather than show a row with a wrong age on it.
+    /// </remarks>
+    public static DateTimeOffset WaitingSince(TaskDto task) =>
+        task.Validations.Where(IsPending).Select(v => v.WaitingSince).DefaultIfEmpty(task.UpdatedAt).Min();
+
+    /// <summary>
+    /// A verdict nobody has given yet. Compared against the wire word the read itself writes, so renaming it
+    /// cannot leave this looking for a word nothing produces.
+    /// </summary>
+    internal static bool IsPending(ValidationDto validation) =>
+        string.Equals(validation.Verdict, Verdict.Pending.ToWire(), StringComparison.Ordinal);
+
+    /// <summary>
     /// Takes one (task, role) pair so no second validator spends a session on it. The claim is a lease: it lapses
     /// if the validator stops showing signs of life, and the sweep hands the pair back.
     /// </summary>
