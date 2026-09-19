@@ -111,12 +111,26 @@ Open with `new FileStream(path, FileMode.Append, FileAccess.Write, FileShare.Rea
 writing a byte. **Do not delete the file afterwards** — the hub is writing to it, and T-14 learned that a
 probe which deletes what it created can discard what a concurrent writer appended.
 
+**This check ignores `DoctorContext.Probe` and always runs.** `Probe` gates network calls — a `gh` invocation,
+an HTTP request to Discord — because those are slow, cost someone's quota, and should not fire on the
+dashboard's timer. Opening a local file for append and closing it is none of those things, and the panel
+calls `RunAsync(probe: false)`, so gating it would mean the one check that says whether the hub can keep a
+record is the one check the dashboard never runs. Deliberate, not an oversight.
+
 The path is `Path.Combine(options.DataDir, MuthurEnvironment.LogFile)`, and it may appear in the detail:
 a log path is not a credential, unlike an outbound target's address.
 
 Register it in `Infrastructure/Startup.cs` beside the other `IDoctorCheck`s. `DoctorService` orders by a
 fixed category list; add `"logging"` to that list, after `"secret"` and before `"ingest"` — a hub that
 cannot write its own log should be read before anything that depends on reading it.
+
+### One consequence to expect
+
+This is the first doctor check that emits a line on **every** hub, including one with no projects, no roles
+and no targets. Two existing tests assert an empty report — `DoctorTests`' empty-report test and
+`DashboardOperationsTests`' panel empty state. Both must be updated, not loosened: keep what they were
+actually for (an unauthenticated read, the injected clock's `At`, the panel's empty-state markup) and reach
+the empty state by removing the registered checks rather than by asserting there are none.
 
 ## Units of work
 
