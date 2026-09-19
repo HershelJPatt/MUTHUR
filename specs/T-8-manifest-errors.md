@@ -390,3 +390,92 @@ Every one must produce exit 2 or a clean exit 0 — never a crash. Any that cras
 honest finding reported rather than fixed. **Do not paper over one by widening rule 16's catch to
 `Exception`**: a catch that broad would also swallow a bug in the validator itself, and the point of this
 task is that a founder gets a sentence naming what is wrong, not that nothing is ever printed.
+
+## Amendment 3 — the sweep found a fourth, and it got a rule (2026-09-19)
+
+Amendment 2's sweep was the point of the exercise, and it earned its place: a `to` containing a control
+character other than NUL — `\u0001`, `\u001f` — still crashed after rules 16 and 17 were in. `Path.GetFullPath`
+accepts it; Win32 refuses it in a name, so it died in `Directory.CreateDirectory` **after creating
+`repo\docs\`**, breaking "nothing is written when validation fails" as well.
+
+The implementer did not widen rule 16's catch to make it go away. It got:
+
+**Rule 18 — a character the platform will not put in a file name.** Stated by the platform's own
+`Path.GetInvalidFileNameChars()` through a cached `SearchValues<char>`, tested per path component because the
+separators on that list are legitimate *between* components:
+
+```
+"<manifestPath>: entry <n> writes \"<to>\", which contains \uXXXX, a character this platform does not allow in a file name."
+```
+
+Same class as rule 17 — a component no filesystem will accept — said by characters instead of by length.
+
+**Rule 18 applies to `to` only.** A `from` the platform cannot name is a file that cannot exist, so rule 13
+already refuses it with a better sentence and no crash. Confirmed rather than assumed.
+
+### Decisions taken on the sweep's findings
+
+- **`x.md:stream` now exits 2, where it used to exit 0.** It wrote an empty `x.md` and hid the content in an
+  alternate data stream — the path the result reported was not the thing that existed. `:` is on the
+  platform's own forbidden list and no exception is carved out of that answer to preserve a behaviour nobody
+  asked for. A behaviour change on a previously-passing string, recorded deliberately.
+- **`CON`, `PRN`, `AUX`, `COM1`, `LPT1` install as real files** inside the repository on this machine — 12
+  bytes, the source content, not redirected to a device. Clean exit 0, inside the repo, so left alone.
+- **`docs/x.md.` and `docs/x.md ` install**, with Windows normalising the trailing dot or space away, so the
+  file on disk is `x.md` while the result reports `docs/x.md.`. Clean, contained, and the same shape of
+  mismatch as the ADS case one layer lower. Not fixed here; filed.
+
+### Rule 17's boundary, measured
+
+Component lengths 200 / 254 / 255 / 256, at a 13-character repository path and at a 117-character one — the
+latter putting the total well past `MAX_PATH`:
+
+```
+repo-path= 13   200/254/255 -> exit 0    256 -> exit 2
+repo-path=117   200/254/255 -> exit 0    256 -> exit 2
+```
+
+No crash on either side at either depth. The validator's reading holds: per-component, not total, and 255 is
+the cut.
+
+## Proof of Amendments 2 and 3 (2026-09-19)
+
+```
+dotnet build   →  0 Warning(s), 0 Error(s)
+dotnet test
+  Muthur.Launch.Tests    23/23
+  Muthur.Core.Tests      3708/3708
+  Muthur.Cli.Tests       93/93      (65 before T-8, 88 after Unit A)
+  Muthur.Server.Tests    280/280
+```
+
+The validator's three reproductions plus the new shapes and the boundary, re-run by the orchestrator against
+a CLI installed from this branch:
+
+```
+to-nul         exit=2 clean repo=0  entry 0 has a "to" that is not a usable path: Null character in path.
+from-nul       exit=2 clean repo=0  entry 0 has a "from" that is not a usable path: Null character in path.
+to-256         exit=2 clean repo=0  entry 0 writes "bbb…", whose path component … is 256 characters
+to-ctrl-01     exit=2 clean repo=0  entry 0 writes "docs/x\u0001.md", which contains \u0001, …
+alt-stream     exit=2 clean repo=0  entry 0 writes "x.md:stream", which contains :, …
+to-255-ok      exit=0 clean repo=4  installed
+valid          exit=0 clean repo=4  installed
+
+sentinel directory beside every repo: 0 entries
+```
+
+The implementer's own sweep covered 25 strings, every one exit 2 or a clean exit 0, and re-ran all eighteen
+rows of the earlier Proof table plus the three shipped kits. Nothing crashed.
+
+**A note on this orchestrator's first run of the above:** every row came back exit 2, including the two that
+should have installed. That was my harness, not the product — `Set-Content` had not created the fixture, so
+everything hit rule 13 ("reads \"good.md\", which does not exist"). Worth recording because a table where
+*everything* fails is the shape a bad harness makes, and reading it as a result would have sent a correct
+branch back to an implementer.
+
+## Out of scope / follow-ups (added)
+
+- **The path we report is not always the path we wrote.** `docs/x.md.` and `docs/x.md ` install as `x.md`
+  because Windows normalises the trailing character, while the result JSON echoes what the manifest said.
+  Harmless today and contained, but a result that names a file which does not exist under that name is worth
+  its own task.
