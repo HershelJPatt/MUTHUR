@@ -2127,6 +2127,204 @@ public sealed class ConductorTests : IDisposable
         Assert.Contains("retries by itself within", told.Body, StringComparison.Ordinal);   // the half-open probe, on this message too
     }
 
+    // ---- work that has been begun before is not work nobody has started ----------------------------------------
+
+    /// <summary>
+    /// A task somebody claimed and specced and then went quiet on. It is left in progress with a live claim:
+    /// <see cref="SweptAsync"/> is what lapses it, so a test with two of these can lapse both together.
+    /// </summary>
+    private async Task<string> AbandonedAsync(HttpClient owner, string title, int priority = 0)
+    {
+        var task = await owner.AddTaskAsync(title, priority: priority);
+        (await owner.ClaimAsync(task.Id)).EnsureSuccessStatusCode();
+        (await owner.PostActionAsync(task.Id, "spec", new SetSpecRequest(_repo.WriteSpec(task.Id)))).EnsureSuccessStatusCode();
+        return task.Id;
+    }
+
+    /// <summary>
+    /// Long enough for every claim to lapse, and then the sweep the hub runs every thirty seconds of its own
+    /// accord. This is the only way abandoned work ever reaches the backlog, so it is how these tests get there.
+    /// </summary>
+    private async Task<int> SweptAsync()
+    {
+        _hub.Clock.Advance(TimeSpan.FromMinutes(31));
+        return await _hub.Services.GetRequiredService<TaskService>().SweepExpiredClaimsAsync();
+    }
+
+    private static string PromptFor(OrchestratorAssignment assignment) =>
+        OrchestratorSessionLauncher.Prompt(assignment, new Muthur.Launch.HarnessCandidate("codex", "gpt", "acct"));
+
+    [Fact]
+    public async Task A_task_swept_back_to_the_backlog_is_staffed_as_a_resumption_and_told_whose()
+    {
+        // The whole of this task. `corner` claimed T-1, wrote its spec and died; thirty seconds after the claim
+        // lapsed the sweep returned it to the backlog, keeping the spec and clearing the owner. It is now
+        // indistinguishable from work nobody has begun - and the session staffed for it was being told to start
+        // from nothing, which is how one frozen spec becomes two.
+        await OrchestratingAsync();
+        var corner = await _hub.RegisterAgentAsync("corner");
+        var id = await AbandonedAsync(corner, "Ship the export");
+        Assert.Equal(1, await SweptAsync());
+
+        var swept = (await _hub.CreateClient().GetTaskAsync(id)).Task;
+        Assert.Equal(TaskState.Backlog, swept.State);
+        Assert.Equal($"specs/{id}.md", swept.SpecPath);
+        Assert.Null(swept.Owner);   // so the name in the prompt below can only have come from the ledger
+
+        var planned = Assert.Single(await Conductor.PlanOrchestratorsAsync());
+        Assert.True(planned.Resuming);
+        Assert.Equal("corner", planned.PreviousOwner);
+
+        Assert.Equal(1, await Conductor.RunPassAsync());
+        await SettledAsync();
+
+        var prompt = PromptFor(Assert.Single(_hub.Orchestrators.Started));
+        Assert.Contains($"""You are taking over {id} ("Ship the export") from `corner`, whose session stopped.""",
+            prompt, StringComparison.Ordinal);
+        Assert.Contains("resumption, not a fresh start", prompt, StringComparison.Ordinal);
+        Assert.Contains($"    muthur log --task {id}", prompt, StringComparison.Ordinal);
+        Assert.DoesNotContain("take it from claim to landing", prompt, StringComparison.Ordinal);
+
+        // Only the opening changed. A takeover that quietly dropped a rule would be worse than no takeover at all.
+        Assert.Contains($"    muthur task claim {id}", prompt, StringComparison.Ordinal);
+        Assert.Contains("Exit code 3 on the claim means another session", prompt, StringComparison.Ordinal);
+        Assert.Contains("Never push, never merge into the default branch.", prompt, StringComparison.Ordinal);
+        Assert.Contains("You own this task and no other.", prompt, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task A_task_nobody_has_ever_begun_is_still_told_to_begin_it()
+    {
+        // The other half, and the one that must not regress: most backlog tasks really are untouched, and telling
+        // a session to continue work that does not exist sends it looking for a branch nobody wrote.
+        var author = await OrchestratingAsync();
+        var id = (await author.AddTaskAsync("Nobody has begun this")).Id;
+
+        var planned = Assert.Single(await Conductor.PlanOrchestratorsAsync());
+        Assert.False(planned.Resuming);
+        Assert.Null(planned.PreviousOwner);
+
+        var prompt = PromptFor(planned);
+        Assert.Contains($"""Claim {id} ("Nobody has begun this") and take it from claim to landing""", prompt, StringComparison.Ordinal);
+        Assert.DoesNotContain("taking over", prompt, StringComparison.Ordinal);
+        Assert.DoesNotContain("muthur log --task", prompt, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task A_branch_with_no_spec_on_record_is_a_resumption_too_and_says_so_without_a_name()
+    {
+        // A spec and a branch are two independent pieces of evidence that a session has had this task, and the
+        // plan needs either. `task implemented` requires a spec, so a branch without one takes a hand-edited
+        // database to produce - which is exactly the state a second condition is for. Nothing here was ever
+        // claimed, so the ledger has no holder to name, and a resumption nobody can attribute is still a
+        // resumption: it must never fall back to being told to start from nothing.
+        var author = await OrchestratingAsync();
+        var id = (await author.AddTaskAsync("Half built, no spec on record")).Id;
+        await using (var db = await _hub.Services.GetRequiredService<IDbContextFactory<MuthurDb>>().CreateDbContextAsync())
+        {
+            (await db.Tasks.SingleAsync()).Branch = $"task/{id}-work";
+            await db.SaveChangesAsync();
+        }
+
+        var planned = Assert.Single(await Conductor.PlanOrchestratorsAsync());
+        Assert.True(planned.Resuming);
+        Assert.Null(planned.PreviousOwner);
+
+        var prompt = PromptFor(planned);
+        Assert.Contains($"""You are taking over {id} ("Half built, no spec on record") from an earlier session that stopped.""",
+            prompt, StringComparison.Ordinal);
+        Assert.Contains($"    muthur log --task {id}", prompt, StringComparison.Ordinal);
+        Assert.DoesNotContain("from ``", prompt, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task A_task_the_founder_released_by_hand_still_names_the_session_that_had_it()
+    {
+        // The 04:39 incident: the founder released `corner`'s tasks themselves rather than waiting for the sweep.
+        // `task.released` records the caller, and the caller is the founder, so a plan that read the newest
+        // release would tell the next session it was taking over from the founder - who never had it.
+        await OrchestratingAsync();
+        var corner = await _hub.RegisterAgentAsync("corner");
+        var id = await AbandonedAsync(corner, "Handed over by hand");
+        (await _hub.Founder().PostActionAsync(id, "release", new ReleaseTaskRequest("handing over"))).EnsureSuccessStatusCode();
+
+        var planned = Assert.Single(await Conductor.PlanOrchestratorsAsync());
+
+        Assert.True(planned.Resuming);
+        Assert.Equal("corner", planned.PreviousOwner);
+    }
+
+    [Fact]
+    public async Task Work_already_begun_is_planned_before_work_nobody_has_touched()
+    {
+        // Half-built work is closer to done than work not begun, and leaving it while a session starts something
+        // new is how a board fills up with things nobody is carrying. The group wins over priority deliberately:
+        // the urgent untouched task below still waits for the abandoned one, which is the whole of the rule.
+        _hub.Settings["Muthur:ConductorMaxSessions"] = "5";
+        var author = await OrchestratingAsync();
+        var corner = await _hub.RegisterAgentAsync("corner");
+        var urgent = (await author.AddTaskAsync("Urgent and untouched", priority: 9)).Id;
+        var begun = await AbandonedAsync(corner, "Half done, and not urgent", priority: 1);
+        var ordinary = (await author.AddTaskAsync("Ordinary and untouched", priority: 5)).Id;
+        Assert.Equal(1, await SweptAsync());
+
+        var planned = await Conductor.PlanOrchestratorsAsync();
+
+        Assert.Equal([begun, urgent, ordinary], planned.Select(a => a.TaskKey));
+        Assert.Equal([true, false, false], planned.Select(a => a.Resuming));
+    }
+
+    [Fact]
+    public async Task Three_resumed_sessions_that_claim_nothing_stall_exactly_as_three_fresh_ones_do()
+    {
+        // Resuming changes what a session is told and nothing else. It is charged on the same counter, stalls on
+        // the same cap, and leaves the task in the backlog when it claims nothing - so a task that eats a session
+        // every interval all night is stopped whether the sessions were starting it or continuing it.
+        _hub.Settings["Muthur:ConductorMaxAttempts"] = "2";
+        await OrchestratingAsync();
+        var corner = await _hub.RegisterAgentAsync("corner");
+        var id = await AbandonedAsync(corner, "Nobody picks it up again");
+        Assert.Equal(1, await SweptAsync());
+
+        for (var pass = 0; pass < 4; pass++)
+        {
+            await Conductor.RunPassAsync();
+            await SettledAsync();
+        }
+
+        Assert.Equal(2, _hub.Orchestrators.Started.Count);
+        Assert.All(_hub.Orchestrators.Started, a => Assert.True(a.Resuming, "a swept task is a resumption on every attempt"));
+        var events = await _hub.EventsWhenAsync(e => e.Count(x => x.Type == "conductor.no_verdict") == 2,
+            "two resuming sessions that claimed nothing were never recorded");
+        Assert.All(events.Where(e => e.Type == "conductor.no_verdict"), e =>
+        {
+            Assert.Equal(id, e.TaskId);
+            Assert.Equal("#orchestrator", RoleOf(e));
+        });
+        Assert.Single(events, e => e.Type == "conductor.stalled");
+    }
+
+    [Fact]
+    public async Task A_resuming_session_that_claims_its_task_is_not_staffed_again()
+    {
+        // What success looks like: it claimed, so the task left the backlog, so no second session is ever staged
+        // onto work somebody is now doing - the collision this half of the conductor exists to avoid.
+        var author = await OrchestratingAsync();
+        var corner = await _hub.RegisterAgentAsync("corner");
+        var id = await AbandonedAsync(corner, "Picked up again");
+        Assert.Equal(1, await SweptAsync());
+        _hub.Orchestrators.Claim = async a => (await author.ClaimAsync(a.TaskKey)).EnsureSuccessStatusCode();
+
+        Assert.Equal(1, await Conductor.RunPassAsync());
+        await SettledAsync();
+
+        Assert.True(Assert.Single(_hub.Orchestrators.Started).Resuming);
+        Assert.Equal(TaskState.InProgress, (await author.GetTaskAsync(id)).Task.State);
+        Assert.Empty(await Conductor.PlanOrchestratorsAsync());
+        Assert.Equal(0, await Conductor.RunPassAsync());
+        Assert.DoesNotContain(await EventsAsync(), e => e.Type is "conductor.no_verdict" or "conductor.stalled");
+    }
+
     [Theory]
     [InlineData("git push*")]
     [InlineData("git merge*")]

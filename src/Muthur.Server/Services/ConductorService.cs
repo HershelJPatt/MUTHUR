@@ -26,7 +26,14 @@ public interface IValidatorSessionLauncher
 /// standing between two sessions and one task: the claim is the hub's, and the loser of that race exits.
 /// </para>
 /// </summary>
-public sealed record OrchestratorAssignment(int TaskId, string TaskKey, string TaskTitle, string Project);
+/// <param name="Resuming">
+/// Whether this task has been worked on before. The backlog holds two kinds of task that look identical: work
+/// nobody has begun, and work whose session went quiet and was swept back here with its spec and its branch
+/// intact. A session told to start the second kind from nothing designs a task that is already designed.
+/// </param>
+/// <param name="PreviousOwner">Who last held it, out of the ledger, since the sweep cleared the column. Null if nothing says.</param>
+public sealed record OrchestratorAssignment(
+    int TaskId, string TaskKey, string TaskTitle, string Project, bool Resuming = false, string? PreviousOwner = null);
 
 /// <summary>Starts one orchestrator session. Faked in tests; the real one launches a harness through <c>AgentLauncher</c>.</summary>
 public interface IOrchestratorSessionLauncher
@@ -342,12 +349,15 @@ public sealed class ConductorService(
         return state;
     }
 
-    private static string? Head(string payloadJson)
+    private static string? Head(string payloadJson) => Text(payloadJson, "head");
+
+    /// <summary>One string out of an event payload. A payload that is not what was hoped for says nothing rather than throwing.</summary>
+    private static string? Text(string payloadJson, string property)
     {
         try
         {
             using var document = JsonDocument.Parse(payloadJson);
-            return document.RootElement.TryGetProperty("head", out var value) && value.ValueKind == JsonValueKind.String
+            return document.RootElement.TryGetProperty(property, out var value) && value.ValueKind == JsonValueKind.String
                 ? value.GetString()
                 : null;
         }
@@ -463,12 +473,51 @@ public sealed class ConductorService(
     private static string OrchestratorKey(string taskKey) => $"{taskKey}/{OrchestratorRole}";
 
     /// <summary>
+    /// Whether this task has been worked on before. <c>task spec</c> requires an owner and a branch is recorded
+    /// only by <c>task implemented</c>, so either one means some session has already had this task — and the sweep
+    /// that returned it to the backlog kept both while clearing the owner.
+    /// </summary>
+    private static bool CarriesWork(WorkTask task) =>
+        task.SpecPath is { Length: > 0 } || task.Branch is { Length: > 0 };
+
+    /// <summary>
+    /// Who last held each of these tasks, read out of the ledger because the column is gone: the sweep that
+    /// returned the task to the backlog cleared its owner. <c>task.claimed</c> names the agent that took it and
+    /// <c>task.claim_expired</c> names the agent it lapsed from, so the newer of the two is whoever had it last.
+    /// <c>task.released</c> is deliberately not one of them: it names the caller, and the caller is usually the
+    /// founder releasing somebody else's task, which would put the wrong name in front of the next session.
+    /// </summary>
+    private static async Task<Dictionary<int, string>> PreviousOwnersAsync(MuthurDb db, IReadOnlyList<int> taskIds, CancellationToken ct)
+    {
+        if (taskIds.Count == 0) return [];
+
+        var held = await db.Events
+            .Where(e => (e.Type == "task.claimed" || e.Type == "task.claim_expired") &&
+                        e.TaskId != null && taskIds.Contains(e.TaskId!.Value))
+            .GroupBy(e => e.TaskId!.Value)
+            .Select(g => new { TaskId = g.Key, Payload = g.OrderByDescending(e => e.Seq).First().PayloadJson })
+            .ToDictionaryAsync(x => x.TaskId, x => x.Payload, ct);
+
+        var owners = new Dictionary<int, string>();
+        foreach (var (taskId, payload) in held)
+            if (Text(payload, "agent") is { Length: > 0 } agent) owners[taskId] = agent;
+        return owners;
+    }
+
+    /// <summary>
     /// What the conductor would start work on right now, most urgent first. Separated from starting anything for
     /// the same reason <see cref="PlanAsync"/> is: the decision has to be testable without spending a session.
     /// <para>
     /// Backlog only, and that one word carries most of the safety. A task somebody has claimed is
     /// <see cref="TaskState.InProgress"/>, a task waiting on the founder is <see cref="TaskState.Blocked"/>, and a
     /// task under validation is somebody else's pass — none of them is work nobody has started.
+    /// </para>
+    /// <para>
+    /// What the backlog is not is only work nobody has begun. A task whose owner goes quiet is returned here by
+    /// <c>TaskService.SweepExpiredClaimsAsync</c> within half a minute, keeping its spec, its branch and its
+    /// priority and losing only its owner — so "never started" and "half built and abandoned" arrive looking
+    /// exactly alike. What is already attached to the task is the difference, and a session that is not told
+    /// specs the work a second time and builds over a branch it never read.
     /// </para>
     /// </summary>
     public async Task<IReadOnlyList<OrchestratorAssignment>> PlanOrchestratorsAsync(CancellationToken ct = default)
@@ -485,21 +534,33 @@ public sealed class ConductorService(
                 .Where(t => t.State == TaskState.Backlog && t.Project != null && t.Project.RepoPath != "")
                 .OrderByDescending(t => t.Priority).ThenBy(t => t.Id)
                 .ToListAsync(ct);
+            if (tasks.Count == 0) return [];
+
+            // Work already begun before work nobody has touched, each half in the order the query returned. A task
+            // that is specced and branched is closer to done than one that is not, and leaving it while a session
+            // starts something new is how a board fills up with things nobody is carrying.
+            var begun = tasks.Where(CarriesWork).ToList();
+            var untouched = tasks.Where(t => !CarriesWork(t)).ToList();
+            var owners = await PreviousOwnersAsync(db, [.. begun.Select(t => t.Id)], ct);
 
             var plan = new List<OrchestratorAssignment>();
-            foreach (var task in tasks)
+            foreach (var task in begun) Consider(task, resuming: true);
+            foreach (var task in untouched) Consider(task, resuming: false);
+            return plan;
+
+            void Consider(WorkTask task, bool resuming)
             {
                 var key = OrchestratorKey(Wire.TaskId(task.Id));
                 lock (_running)
-                    if (_running.Contains(key)) continue;
+                    if (_running.Contains(key)) return;
                 lock (_stalls)
                     if (_stalls.GetValueOrDefault(key) is { StalledAt: { } stalled } &&
                         stalled + TimeSpan.FromMinutes(options.ConductorStallProbeMinutes) > now)
-                        continue;
+                        return;
 
-                plan.Add(new OrchestratorAssignment(task.Id, Wire.TaskId(task.Id), task.Title, task.Project?.Key ?? ""));
+                plan.Add(new OrchestratorAssignment(task.Id, Wire.TaskId(task.Id), task.Title, task.Project?.Key ?? "",
+                    resuming, resuming ? owners.GetValueOrDefault(task.Id) : null));
             }
-            return plan;
         }, ct);
     }
 
