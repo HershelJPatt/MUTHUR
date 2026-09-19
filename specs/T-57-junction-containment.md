@@ -460,3 +460,49 @@ The second specialist wrote `KitCommands.cs` and `KitContainmentTests.cs` before
 compile them. They are preserved at `.work/T-57-draft/` and they have **never been built or run**. Read them if
 they help; treat every line as unverified. The acceptance list and the Verification section are unchanged and
 are what this unit is judged by — a draft that happens to compile is not a substitute for the table.
+
+## Amendment 3 — existing path rules precede destination resolution; unlink fixtures explicitly (2026-09-19)
+
+The resumed Unit A built the specified implementation successfully, then ran the untouched regression suite.
+That measurement disproved two instructions above. This amendment supersedes those instructions, without
+changing the containment policy or the `RealPath` algorithm.
+
+### 1. Destination resolution follows the existing spelling checks
+
+Putting the new destination check immediately after rule 14 lets filesystem resolution consume invalid
+Windows names before the rules that already explain them. The observed regressions include `   /x.md`,
+`....../x.md`, `.. ./x.md`, `.../x.md`, ` /x.md`, a destination of only spaces, and `docs/x:.md`.
+They receive an unresolvable-location or apparent escape message instead of their established spelling error.
+The requirement that the untouched `KitManifestTests.cs` remain green takes precedence over that placement.
+
+Binding placement: keep rule 14 and all existing destination spelling checks in their existing order.
+Run the new destination `RealPath` / null / containment checks **immediately after `UncreatableParent`
+and before `Directory.Exists(destination)`**. Set `resolvedDestination` there. This is still before any
+write, before token expansion, and before collision and unwritable checks. A syntactically valid escaping
+destination still receives the exact rule 22 escape message, including when its target is a directory.
+
+The source check stays immediately after rule 12 and before rule 13. The two separate destination locals,
+resolved collision paths, resolved root passed to `Unwritable`, and all four rule 22 messages are unchanged.
+Do not edit or weaken `KitManifestTests.cs` to accommodate the bad original placement.
+
+### 2. Fixture cleanup removes links before trees
+
+The delegated test run encountered `UnauthorizedAccessException` at a junction chain during recursive
+repository deletion. The original assertion that recursive deletion alone suffices is therefore not a valid
+cleanup contract for this environment. The orchestrator's installed-CLI reproduction has successfully removed
+the same outward/inward/chain fixture by explicitly deleting each junction before recursive scratch cleanup.
+
+Track every successfully created link and remove each link itself with non-recursive `Directory.Delete`
+before deleting repository or kit trees. Reverse creation order is deterministic and removes aliases before
+their targets. Verify the outside directory and the kit's outside source still exist, with unchanged source
+content, after unlinking and before deleting the scratch tree. Preserve the assertions that no file escaped
+and that every scratch directory, including shipped-kit repositories, was removed. Assertion failures must
+be reported after cleanup so they do not strand their own attack fixture. If fixture construction fails,
+clean the links and directories already created before rethrowing the construction failure.
+
+### 3. Verification remains the same
+
+Build and the complete test suite must pass, with every old CLI test retained. Add the Amendment 2 regression
+that names `--repo` through a link with a file blocking a destination's parent; assert the existing F1 message
+and unchanged blocker bytes. Then run the installed CLI acceptance table and all shipped kits. A faithful
+implementation of superseded instructions that fails these checks is evidence for this amendment, not a pass.
