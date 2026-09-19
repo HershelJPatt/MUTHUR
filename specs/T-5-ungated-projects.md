@@ -406,3 +406,22 @@ before being written here.
 
 Three wrong instructions in one Verification section, across three owners, is worth noticing on its own. Each
 was correct-sounding prose about a check nobody had performed.
+
+## Proof of Amendment 2 (2026-09-19)
+
+The Verification section above, **run verbatim** against an installed CLI from this branch on a scratch hub
+(port 7498) before being re-submitted — which is the whole point of the amendment:
+
+```
+add solo   -> ungated: True
+set solo   -> ungated: False
+add gated  -> ungated: False
+add nogate -> ungated: True
+
+[regex]::Matches($html,'pill-ungated').Count  = 1
+$html -match 'goes straight to validated'     = True
+```
+
+Every line of the section passes as published. Scratch hub stopped afterwards; the live hub untouched.
+
+The suite is unchanged from Amendment 1's proof (4,066 tests, 0 failed) — this round edited the spec only.
