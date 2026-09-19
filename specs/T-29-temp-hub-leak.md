@@ -492,3 +492,34 @@ two-outcome version and should have changed with the shape.
 
 `held` is a new number an operator reads beside `kept`, and on a shared root during a busy hour it will not be
 zero. That is correct: every one is a directory another process still owns.
+
+## Proof of Amendments 4 and 5 (2026-09-19)
+
+Integrated branch, verified by the orchestrator, `TEMP`/`TMP` on a fresh scratch root:
+
+```
+dotnet build   →  0 Warning(s), 0 Error(s)
+dotnet test -v n
+  Muthur.Launch.Tests    23/23      Test Run Successful.
+  Muthur.Core.Tests      3708/3708  Test Run Successful.
+  Muthur.Cli.Tests       55/55      Test Run Successful.
+  Muthur.Server.Tests    243/243    Test Run Successful.
+
+muthur-tests: 190 removed, 0 kept (logged an error), 0 could not be removed.
+```
+
+Leftovers: `muthur-tests` **0**, `muthur-cli-tests` **0**. 243 is the validated 240 plus Unit C's three
+`Release` tests.
+
+The validator's own reproduction, run verbatim against the integrated branch:
+
+```
+<root>: examined 4, deleted 3, kept 0, held 1, skipped (too recent) 0, gone 0, failed 0.
+  held    <root>\b-locked  (The process cannot access the file '<root>\b-locked\muthur.log' because it is being used by another process.)
+child exit code: 0
+SURVIVORS: b-locked
+```
+
+Against the verdict's "exit 1, no summary at all, `c-clean` and `d-clean` never examined": the run now
+completes, prints its counts, names the one directory it could not take, deletes the other three, and leaves
+the held one standing.
