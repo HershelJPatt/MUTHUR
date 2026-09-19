@@ -1,3 +1,4 @@
+using System.Buffers;
 using System.CommandLine;
 using System.Text;
 using System.Text.Json;
@@ -313,6 +314,12 @@ public static partial class KitCommands
             problem = $"{manifestPath}: entry {index} writes \"{to}\", which is outside the repository.";
             return false;
         }
+        if (UnusableCharacter(to) is { } forbidden)
+        {
+            problem = $"{manifestPath}: entry {index} writes \"{to}\", which contains \\u{(int)forbidden:x4}, "
+                + "a character this platform does not allow in a file name.";
+            return false;
+        }
 
         // Expand() reads whatever a {{core:...}} token names, so the token is checked here rather than
         // discovered halfway through the write loop.
@@ -368,6 +375,26 @@ public static partial class KitCommands
     /// <summary>The tail of rule 17's message: the component is by definition too long to print whole.</summary>
     private static string Overlong(string component) =>
         $"whose path component \"{component[..40]}…\" is {component.Length} characters; the limit is {MaxPathComponent}.";
+
+    /// <summary>Which characters a name may not hold is the platform's business, not this validator's.</summary>
+    private static readonly SearchValues<char> NotInAFileName = SearchValues.Create(Path.GetInvalidFileNameChars());
+
+    /// <summary>
+    /// Rule 18. Windows refuses a control character in a file name where <c>Path.GetFullPath</c> accepts it, so
+    /// a "to" carrying one used to pass validation whole and die in the write phase — having already created
+    /// the directory above it. Separators are on the platform's list and are legitimate between components,
+    /// which is why each component is tested rather than the string; a NUL is rule 16's, one step earlier.
+    /// Only "to" needs this: a "from" the platform cannot name is a file that cannot exist, and rule 13 says so.
+    /// </summary>
+    private static char? UnusableCharacter(string value)
+    {
+        foreach (var part in value.Split(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar))
+        {
+            var at = part.AsSpan().IndexOfAny(NotInAFileName);
+            if (at >= 0) return part[at];
+        }
+        return null;
+    }
 
     private static string Expand(string template, string kitDir) =>
         IncludePattern().Replace(template, match => File.ReadAllText(Path.Combine(kitDir, "core", match.Groups[1].Value)).Trim());

@@ -234,6 +234,29 @@ public sealed class KitManifestTests : IDisposable
     }
 
     /// <summary>
+    /// Rule 18, found by sweeping rather than by the three shapes that were reported: Path.GetFullPath takes a
+    /// control character quite happily and Win32 does not, so `"to": "docs/x\u0001.md"` passed validation whole
+    /// and threw in File.WriteAllText — having already created `docs/`. Which characters a name may not hold is
+    /// asked of the platform, so a platform that allows all of them has nothing here to fail.
+    /// </summary>
+    [Fact]
+    public async Task Every_character_the_platform_forbids_in_a_file_name_is_refused_before_the_write()
+    {
+        // The separators on that list are legitimate between components, and a NUL never reaches this rule:
+        // Path.GetFullPath refuses it one step earlier, as rule 16.
+        var forbidden = Path.GetInvalidFileNameChars()
+            .Where(ch => ch is not '\0' && ch != Path.DirectorySeparatorChar && ch != Path.AltDirectorySeparatorChar);
+
+        foreach (var ch in forbidden)
+        {
+            var escape = $"\\u{(int)ch:x4}";
+            await Rejects(
+                $$"""{"files":[{"from":"source.md","to":"docs/x{{escape}}.md"}]}""",
+                $": entry 0 writes \"docs/x{ch}.md\", which contains {escape}, a character this platform does not allow in a file name.");
+        }
+    }
+
+    /// <summary>
     /// The defect behind the whole task: entries were written as the loop walked them, so a manifest whose
     /// ninth entry was wrong had already written eight. Validation is a separate pass for exactly this.
     /// </summary>
