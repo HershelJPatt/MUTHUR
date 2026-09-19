@@ -280,3 +280,87 @@ mention it. Unit C placed it after the one whose *subject* is the command — th
 its three bullets — and before *"A worker that cannot do what it was asked returns `success: false`"*. That
 is right, and for a reason worth keeping: the paragraph that follows spells out what a real refusal looks
 like, which gives *"not a refusal"* its referent.
+
+## Amendment 2 — a precedent I cited that says the opposite (2026-09-19)
+
+Design 3 told the implementer to omit a null `parent` from the event payload *"matching how `TaskService`
+handles optional payload fields"*. **`TaskService` does the opposite in the place a reader looks first**:
+`task.added` records `parent = request.Parent` unconditionally (`TaskService.cs:45`), writing `parent: null`
+for every top-level task. The pattern that actually matches the instruction is `AttendAsync`
+(`TaskService.cs:172-173`), which branches into two `Record` calls with different payload shapes.
+
+The implementer followed the instruction rather than the citation, and said so. Recorded because someone
+checking this spec against `TaskService` would otherwise conclude the instruction had already been violated
+and "fix" it.
+
+**And the omission is load-bearing, not tidiness.** `Mutation.Record` serializes with
+`new JsonSerializerOptions(JsonSerializerDefaults.Web)`, which does **not** set `DefaultIgnoreCondition`. So a
+member present on the object is written even when null; only absence keeps it out. If anyone later adds
+`WhenWritingNull` to those options globally, the test here keeps passing for a different reason and
+`task.added` silently changes shape.
+
+### Ratified from the build
+
+- **`WorkerRunReport.Parent` needed `= null`.** Design 3 said "last parameter, so existing positional
+  construction is undisturbed" — but a last positional parameter without a default is still required, and
+  three existing constructions pass ten arguments from files outside Unit B's list. The default is the only
+  way to honour "undisturbed". `AddTaskRequest` sets the precedent.
+- `RunOptions` gained a defaulted `Parent` member, implied by the option.
+- `HarnessService` hoists `worker` and `seconds` into locals so the two payload shapes do not duplicate them.
+  The six pre-existing members keep their names and order, confirmed by the payload dumps below.
+
+## Proof (2026-09-19)
+
+```
+dotnet build   →  0 Warning(s), 0 Error(s)
+dotnet test
+  Muthur.Launch.Tests    23/23
+  Muthur.Core.Tests      3736/3736
+  Muthur.Cli.Tests       175/175     (84 before this task)
+  Muthur.Server.Tests    368/368
+```
+
+The two payloads, dumped from the real SQLite ledger rather than paraphrased. A run an orchestrator started
+itself — **no `parent` key at all**:
+
+```json
+{"tier":"mastermind","worker":"claude/opus","account":"…","branch":"worker/t-1-all-9f1c2e","unit":null,"seconds":300,"costUsd":1.10}
+```
+
+A run staffed from that run's plan:
+
+```json
+{"tier":"implementer","worker":"codex/gpt","account":"…","branch":"task/T-1-work","unit":"unit-a","seconds":90,"costUsd":0.42,"parent":"worker/t-1-all-9f1c2e"}
+```
+
+Both halves were shown to be load-bearing by breaking them: writing `parent` unconditionally fails the test
+naming the unplanned run, and reading the wrong key in `ReceiptsService` fails the receipts assertion.
+
+The install proof, run by the orchestrator against a CLI built from this branch:
+
+```
+'When the subtree is bigger than you'   3 files
+      claude/.claude/agents/muthur-specialist.md
+      codex/.muthur/procedures/specialist.md
+      generic/.muthur/procedures/specialist.md
+
+'--parent <the specialist's branch>'    3 files
+      claude/.claude/skills/muthur-orchestrate/SKILL.md
+      codex/.muthur/procedures/orchestrate.md
+      generic/.muthur/procedures/orchestrate.md
+
+'procedures/specialist.md'              2 files
+      codex/AGENTS.md
+      generic/MUTHUR.md
+
+unexpanded {{core: tokens: none
+
+--parent <parent>   The worker run whose plan this unit came from. Recorded so a two-level fan-out is
+                    readable in the ledger.
+```
+
+The specialist contract now reaches **every vendor**, which was the point: the tier existed but its procedure
+was readable only by one harness's subagent mechanism, which is the leak the founder disqualified option A
+for.
+
+No browser was used.
