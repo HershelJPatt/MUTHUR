@@ -425,6 +425,41 @@ $env:MUTHUR_HOME = "$PWD/artifacts/t17-home"; $env:MUTHUR_URL = "http://127.0.0.
   `validating` time larger than total `in_progress` time on this hub? Either answer is a result; the point is
   that it is now a number rather than an opinion.
 
+## What the end-to-end actually showed
+
+Run on an installed build (`artifacts/t17`, published from `06634ff`) against a scratch home on port 7465.
+The live hub was never contacted. Fixture: a real git repo, one validator role, two agents on different
+harnesses and accounts with one of them registered twice, a task driven add → claim → spec → implemented →
+fail → implemented → pass → land, and two worker runs posted to `/api/v1/workers/runs`, one reporting a cost
+and one not.
+
+`muthur receipts --hours 1` on the empty hub: zeros throughout, `since` exactly one hour before `at`.
+
+`muthur receipts` with the fixture in place:
+
+```
+sessions          3          byAccount: claude/opus sub-a ×2, codex/default sub-b ×1
+conductorSessions 0          (reported beside sessions, not added to it)
+workerRuns        2          workerSeconds 311
+tasks[0]          T-1 done, validationFailures 1, landed true
+stateTime         in_progress 0.393s · validating 5.059s · backlog 0.192s
+runs              claude/opus  Unit B  97s   (no cost)      newest first
+                  codex/default Unit A 214s  costUsd 0.42
+```
+
+**The question the task exists to answer, answered on real data:** validating time was **5.059s against
+0.393s** in progress — thirteen times longer, on a task whose "work" was a single commit. One task is not a
+claim about the organization, but the number is now a number.
+
+The page at `/receipts`: the tab is present, the panel's four headline figures are **3 · 0 · 2 · 5m** (sessions
+and conductor sessions side by side, never summed), `$0.42` appears **exactly once** in the whole document,
+the run that reported nothing renders `<span class="receipt-none">—</span>`, and the line "conductor validator
+sessions report no cost" is there. No total, anywhere.
+
+One step the end-to-end could not exercise: the window selector changing the numbers. Everything in the
+fixture happened within a minute, so 1h and 168h show the same thing. Unit D's acceptance 4 covers it with a
+stepped clock, which is the only honest way to test it.
+
 ## Out of scope / follow-ups
 
 - **A conductor session that knows its own harness and its own length.** `ValidatorSessionLauncher` holds
