@@ -173,8 +173,23 @@ this task exists because a silently wrong answer cost forty minutes. So:
 public static bool IsDirty(string path);
 ```
 
-`IsDirty` is true when *either* `status --porcelain --untracked-files=no -- <file>` is non-empty **or**
-`ls-files --error-unmatch -- <file>` fails. The refusal message covers both cases without naming which:
+`IsDirty` first asks `rev-parse --is-inside-work-tree`. If that is not `true`, the file is not in a
+repository and `IsDirty` is **false** — nothing further is probed. Inside a work tree, `IsDirty` is true
+when *either* `status --porcelain --untracked-files=no -- <file>` is non-empty **or**
+`ls-files --error-unmatch -- <file>` fails.
+
+The membership gate is load-bearing and was added after Unit B's implementer found the conflict: taken
+literally, "`ls-files --error-unmatch` failing means dirty" refuses **every** brief outside a repository,
+because that command fails there too — contradicting both the paragraph above ("any git failure means 'not
+in a repository'… `IsDirty` returns false") and this unit's own acceptance criterion. Gating on membership
+first is the only reading that satisfies all three.
+
+**Inside a work tree, `IsDirty` fails closed**, and that is a deliberate narrowing of the "provenance is
+evidence, not a gate" rule stated above. A transient git failure — an `index.lock` left by another process,
+say — now reads as dirty and refuses. Once we know the file is in a repository, "git could not tell me
+whether this matches a commit" and "this does not match a commit" deserve the same answer, because the
+failure this task exists to prevent is installing a brief whose provenance is unknown. Outside a work tree
+the original rule stands unchanged: no gate, no line. The refusal message covers both cases without naming which:
 `"<file> has no committed version, so the brief you install will match no commit. Commit it, or pass the
 text you mean."` Keep `--untracked-files=no` on the status call — it is what stops `bin/` and `obj/` failing
 every run, and the `ls-files` probe is what closes the gap it leaves.
@@ -185,7 +200,10 @@ read as a glob and silently match the wrong thing — the same class of quiet wr
 In `role define`:
 
 - If `IsDirty(file)` → refuse before sending anything:
-  `Output.Error("brief_file_dirty", "<file> has uncommitted changes, so the brief you install will match no commit. Commit it, or pass the text you mean.", ExitCodes.RuleViolation)`.
+  `Output.Error("brief_file_dirty", "<file> has no committed version, so the brief you install will match no commit. Commit it, or pass the text you mean.", ExitCodes.RuleViolation)`.
+  (This bullet carried the older "has uncommitted changes" wording after the untracked amendment changed it
+  above; the implementer used the amended wording and flagged the stale line rather than letting a validator
+  read it as the contract.)
 - Otherwise send as today, and when `Describe` returns a value, write one line to **stderr** (never stdout,
   which is the JSON an agent parses):
   `Read <file> at <ref> (<commit>).`
