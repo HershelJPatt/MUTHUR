@@ -274,3 +274,52 @@ look more complete and the software no safer.
   both, and compared the trees file by file: 11 of 12 files identical per harness, the twelfth being
   `muthur.project.json`, whose generated key is the temp directory's name. That is the difference between
   "still works" and "unchanged".
+
+## Proof (2026-09-19)
+
+```
+dotnet build   →  0 Warning(s), 0 Error(s)
+dotnet test
+  Muthur.Launch.Tests    23/23
+  Muthur.Core.Tests      3708/3708
+  Muthur.Cli.Tests       88/88      (65 before this task)
+  Muthur.Server.Tests    280/280
+```
+
+The Context table's own reproduction, re-run by the orchestrator against an installed AOT CLI from this
+branch. `repo=` counts every entry under the target repository afterwards, directories included:
+
+```
+invalid-json       exit=2 clean  repo=0      to-empty           exit=2 clean  repo=0
+files-missing      exit=2 clean  repo=0      mode-wrong-type    exit=2 clean  repo=0
+files-not-array    exit=2 clean  repo=0      validator-wrong    exit=2 clean  repo=0
+entry-not-object   exit=2 clean  repo=0      from-missing       exit=2 clean  repo=0
+from-wrong-type    exit=2 clean  repo=0      bad-include        exit=2 clean  repo=0
+to-missing         exit=2 clean  repo=0      from-traversal     exit=2 clean  repo=0
+second-entry-bad   exit=2 clean  repo=0      to-traversal       exit=2 clean  repo=0
+valid              exit=0 clean  repo=4      to-absolute        exit=2 clean  repo=0
+
+sentinel directory beside every repo: 0 entries
+```
+
+`clean` means neither `Unhandled exception` nor `muthur!<BaseAddress>` appeared. Sixteen cases, fifteen
+refusals and one success, and **nothing was written by any refusal** — including `second-entry-bad`, which
+under the old binary wrote its first entry, `.gitignore` and `muthur.project.json` before crashing.
+
+The two that used to exit 0 now exit 2, and the sentinel directory that sat beside every repository for the
+whole run is empty: a manifest can no longer choose where its files land.
+
+The real kits, with `MUTHUR_KIT` unset so the CLI uses its own bundled `kit/`:
+
+```
+claude   exit=0 files=12
+codex    exit=0 files=12
+generic  exit=0 files=12
+unexpanded {{core: tokens: 0
+```
+
+The implementer additionally published the pre-change commit as a second binary and compared the installed
+trees file by file: 11 of 12 identical per harness, the twelfth being `muthur.project.json`, whose generated
+key is the temp directory's name. Nothing about the shipped kits changed.
+
+No browser was used.
