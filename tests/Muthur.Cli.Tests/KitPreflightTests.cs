@@ -44,12 +44,12 @@ public sealed class KitPreflightTests : IDisposable
         return repo;
     }
 
-    private static async Task<int> Install(string repo)
+    private static async Task<int> Install(string repo, string harness = "claude")
     {
         var root = new RootCommand("test");
         Globals.AddTo(root);
         KitCommands.AddTo(root);
-        var parse = root.Parse(["kit", "install", "--harness", "claude", "--repo", repo]);
+        var parse = root.Parse(["kit", "install", "--harness", harness, "--repo", repo]);
         Assert.Empty(parse.Errors);
         return await parse.InvokeAsync();
     }
@@ -120,5 +120,56 @@ public sealed class KitPreflightTests : IDisposable
 
         Assert.True(File.Exists(Path.Combine(repo, ".gitignore")));
         Assert.True(File.Exists(Path.Combine(repo, "muthur.project.json")));
+    }
+
+    /// <summary>
+    /// The validator's repro, and a promise this spec made and then broke: a "create" entry whose destination
+    /// already exists is kept untouched, so a read-only one is never written and must not be refused. Every
+    /// shipped kit ships briefs/validator.md that way on purpose, so refusing it refused every install into a
+    /// repository where a founder had protected their own brief.
+    /// </summary>
+    [Theory]
+    [InlineData("claude")]
+    [InlineData("codex")]
+    [InlineData("generic")]
+    public async Task A_read_only_file_this_install_would_keep_rather_than_write_is_not_refused(string harness)
+    {
+        var repo = NewRepository();
+        var brief = Path.Combine(repo, "briefs", "validator.md");
+        Directory.CreateDirectory(Path.GetDirectoryName(brief)!);
+        const string Founders = "# validator\nThe founder's own words.\n";
+        File.WriteAllText(brief, Founders);
+        File.SetAttributes(brief, FileAttributes.ReadOnly);
+
+        Assert.Equal(ExitCodes.Ok, await Install(repo, harness));
+
+        Assert.Equal(Founders, File.ReadAllText(brief));   // kept, byte for byte
+    }
+
+    /// <summary>
+    /// The other half, so the narrowing did not simply switch F3 off: a read-only destination this install
+    /// *would* write is still refused. .gitignore without the worktrees line is one the install must append to.
+    /// </summary>
+    [Fact]
+    public async Task A_read_only_file_this_install_would_write_is_still_refused()
+    {
+        var repo = NewRepository();
+        var ignore = Path.Combine(repo, ".gitignore");
+        File.WriteAllText(ignore, "# nothing ignored yet\n");
+        File.SetAttributes(ignore, FileAttributes.ReadOnly);
+
+        Assert.Equal(ExitCodes.RuleViolation, await Install(repo));
+    }
+
+    /// <summary>And one it would leave alone because it already says what the install would add.</summary>
+    [Fact]
+    public async Task A_read_only_gitignore_that_already_ignores_the_worktrees_is_not_refused()
+    {
+        var repo = NewRepository();
+        var ignore = Path.Combine(repo, ".gitignore");
+        File.WriteAllText(ignore, "bin/\n.worktrees/\n");
+        File.SetAttributes(ignore, FileAttributes.ReadOnly);
+
+        Assert.Equal(ExitCodes.Ok, await Install(repo));
     }
 }

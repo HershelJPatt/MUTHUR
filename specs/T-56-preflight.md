@@ -84,9 +84,18 @@ kit.json: entry 1 writes "x.md", which is read-only in the repository.
 
 A read-only file is a real condition rather than a manifest error, and T-8's out-of-scope list covers "a
 locked file, a full disk". It is included because it *crashes* rather than reporting, and because the pass
-that answers F1 and F2 answers it for free. A directory in `create` mode whose destination already exists is
-untouched by this: `WriteKitFile` returns "kept" without writing, so a read-only file it is not going to
-write is not refused.
+that answers F1 and F2 answers it for free.
+
+**Only where this install would actually put bytes**, which is a different question from whether the path is
+named. `Writes(destination, entries)` decides it:
+
+- a manifest entry in `create` mode whose destination exists is kept — `WriteKitFile` returns "kept" without
+  writing — so it is not refused;
+- `muthur.project.json` is written only when absent, so an existing one is never refused;
+- `.gitignore` is written only when it does not already ignore `.worktrees/`, so one that does is not refused.
+
+Every shipped kit ships `briefs/validator.md` in `create` mode on purpose, so refusing a read-only one would
+refuse every install into a repository where a founder had protected their own brief.
 
 ### Order
 
@@ -149,3 +158,33 @@ build with `StackTraceSupport=false` is the address dump a founder sees. Exit 2 
 arguments were the wrong way round, so the walk terminated immediately, `walked` stayed empty and F1 never
 fired. The two F1 rows failed with exit 1 while F2 and F3 passed, which is what pointed at it: a check that
 never runs and a check that finds nothing look identical until one family fails alone.
+
+## Amendment after the first validation round (2026-09-19, top-right)
+
+`conductor-validator-t-56` confirmed the three crash fixtures now "refuse cleanly with zero writes" and failed
+the task on a promise this spec made and my code then broke:
+
+> all shipped kits reject read-only briefs/validator.md even though its mode=create must keep it and succeed
+> … Clearing only ReadOnly makes the install succeed with status kept and original bytes intact.
+
+The Design section said in as many words that a `create` entry whose destination exists is "untouched by
+this … so a read-only file it is not going to write is not refused". `Unwritable` then asked
+`File.GetAttributes` of every destination regardless of mode. The sentence was right and the code did not
+implement it — the worst of the two ways to be wrong, because the spec reads as though it had been
+considered.
+
+The consequence is not small: `briefs/validator.md` is `create` in all three shipped kits, so a founder who
+made their own brief read-only could not install any kit at all.
+
+**F3 now asks `Writes()` first** — see the amended Design — so it refuses a read-only path this install would
+write and leaves alone one it would keep. Three tests were added and one of them is deliberately the other
+half, because narrowing a check is the easy way to make a validator's complaint go away while switching the
+check off:
+
+- `A_read_only_file_this_install_would_keep_rather_than_write_is_not_refused`, over all three harnesses, with
+  the brief's bytes asserted unchanged afterwards — the validator's repro.
+- `A_read_only_file_this_install_would_write_is_still_refused` — `.gitignore` lacking the worktrees line.
+- `A_read_only_gitignore_that_already_ignores_the_worktrees_is_not_refused` — the same file, already saying
+  what the install would add.
+
+`dotnet build`: clean, 0 warnings. `dotnet test`: 3736 Core, 28 Launch, 199 Cli, 450 Server — all green.

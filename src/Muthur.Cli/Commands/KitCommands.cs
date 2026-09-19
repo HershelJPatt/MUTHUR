@@ -247,7 +247,7 @@ public static partial class KitCommands
             // address dump rather than a sentence. Checked before anything is written, not caught after: a
             // try/catch round the write loop turns the crash into a sentence and leaves the half-installed
             // repository, which is the worse half.
-            if (Unwritable(manifestPath, repoRoot, destinations) is { } blocked)
+            if (Unwritable(manifestPath, repoRoot, destinations, validated) is { } blocked)
             {
                 problem = blocked;
                 return false;
@@ -275,7 +275,7 @@ public static partial class KitCommands
     /// answer, in the order a founder would meet them: something in the way of a path, then a path that is a
     /// directory, then one that will not be overwritten.
     /// </summary>
-    private static string? Unwritable(string manifestPath, string repoRoot, List<Destination> destinations)
+    private static string? Unwritable(string manifestPath, string repoRoot, List<Destination> destinations, List<KitEntry> entries)
     {
         foreach (var d in destinations)
         {
@@ -295,12 +295,32 @@ public static partial class KitCommands
 
             // F3. A read-only destination is an ordinary condition rather than a manifest fault, and is here
             // because it crashes rather than reporting, and because this pass answers it for nothing.
-            if (File.Exists(d.Resolved) && File.GetAttributes(d.Resolved).HasFlag(FileAttributes.ReadOnly))
+            //
+            // Only when this install would actually write it. A "create" entry whose destination already
+            // exists is kept untouched, and every shipped kit ships briefs/validator.md that way on purpose -
+            // so refusing a read-only one would refuse every install into a repository where a founder had
+            // protected their own brief, which is the opposite of what create mode is for.
+            if (Writes(d, entries) && File.Exists(d.Resolved) && File.GetAttributes(d.Resolved).HasFlag(FileAttributes.ReadOnly))
                 return d.Entry is { } readOnlyEntry
                     ? $"{manifestPath}: entry {readOnlyEntry} writes \"{d.Spelled}\", which is read-only in the repository."
                     : $"kit install writes \"{d.Spelled}\", which is read-only in the repository.";
         }
         return null;
+    }
+
+    /// <summary>
+    /// Whether this install would put bytes into that path, which is a different question from whether the
+    /// path is named. A "create" entry keeps an existing file; <c>muthur.project.json</c> is written only
+    /// when absent; <c>.gitignore</c> only when it does not already ignore the worktrees directory.
+    /// </summary>
+    private static bool Writes(Destination d, List<KitEntry> entries)
+    {
+        if (d.Entry is { } index)
+            return entries[index].Mode != "create" || !File.Exists(d.Resolved);
+        if (!File.Exists(d.Resolved)) return true;
+        if (string.Equals(d.Spelled, ProjectContext.FileName, StringComparison.Ordinal)) return false;
+        var ignored = File.ReadAllText(d.Resolved);
+        return !ignored.Split('\n').Any(line => line.Trim() is ".worktrees/" or ".worktrees");
     }
 
     /// <summary>The first component between the repository root and this path that exists as a file, if any.</summary>
