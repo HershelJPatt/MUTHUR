@@ -4,18 +4,25 @@ using Muthur.Cli.Commands;
 using Muthur.Cli.Infrastructure;
 using Muthur.Contracts;
 
-// MUTHUR_KIT is process-wide and two classes here now point it at different kits, so the assembly runs its
-// collections one at a time. Without this, a manifest test could swap the kit out from under KitInstallTests
-// mid-install, or read the repository's kit where it expects its own scratch one.
-[assembly: CollectionBehavior(DisableTestParallelization = true)]
-
 namespace Muthur.Cli.Tests;
+
+/// <summary>
+/// The classes that point MUTHUR_KIT somewhere. The variable is process-global, so a test that swapped the
+/// kit out mid-install for another class would be a race nobody could reproduce; xUnit runs one collection
+/// at a time, which is the smallest thing that stops it.
+/// </summary>
+[CollectionDefinition(KitEnvironment.Name, DisableParallelization = true)]
+public sealed class KitEnvironment
+{
+    public const string Name = "kit-environment";
+}
 
 /// <summary>
 /// A malformed `kit.json` used to reach the write loop and throw there: the AOT build has no stack trace
 /// support, so the founder got an address dump, and whatever the loop had already written stayed written.
 /// These drive `kit install` over deliberately broken manifests and read back the error it prints.
 /// </summary>
+[Collection(KitEnvironment.Name)]
 public sealed class KitManifestTests : IDisposable
 {
     private const string Harness = "broken";
@@ -129,6 +136,8 @@ public sealed class KitManifestTests : IDisposable
     // Rule 9: no "to", and a "to" that is not a string.
     [InlineData("""{"files":[{"from":"source.md"}]}""", ": entry 0 has no \"to\".")]
     [InlineData("""{"files":[{"from":"source.md","to":[]}]}""", ": entry 0 has a \"to\" that is array, not a string.")]
+    // Rule 9b: an empty "to" is its own mistake, not a containment failure.
+    [InlineData("""{"files":[{"from":"source.md","to":""}]}""", ": entry 0 has an empty \"to\".")]
     // Rule 10: "mode" is present and not a string.
     [InlineData("""{"files":[{"from":"source.md","to":"docs/x.md","mode":7}]}""", ": entry 0 (docs/x.md) has a \"mode\" that is number, not a string.")]
     // Rule 11: "validator" is present and not a boolean.

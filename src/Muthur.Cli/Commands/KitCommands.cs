@@ -239,6 +239,14 @@ public static partial class KitCommands
         var from = fromField.GetString()!;
         var to = toField.GetString()!;
 
+        // Named before the containment rules reach it: Path.Combine(repo, "") is the repository itself, and
+        // being told an empty string is outside the repository helps nobody.
+        if (to.Length == 0)
+        {
+            problem = $"{manifestPath}: entry {index} has an empty \"to\".";
+            return false;
+        }
+
         var mode = "replace";
         if (file.TryGetProperty("mode", out var modeField))
         {
