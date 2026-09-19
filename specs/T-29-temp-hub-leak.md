@@ -242,3 +242,38 @@ A validator can exercise this without a browser: it is all command line.
   the build. The orchestrator runs it once as part of landing.
 - **`FileLoggerProvider` has no `IAsyncDisposable`** and flushes on every line (`AutoFlush = true`). Fine for a
   hub; worth revisiting if logging volume ever matters.
+
+## Amendment 1 — Unit A's acceptance sentence was wrong, and the leak was already closed by Unit A alone (2026-09-19)
+
+Two corrections, both raised by the Unit A implementer, both accepted.
+
+**1. "Both new tests fail if either production change is reverted" cannot be true, and should not be.**
+
+Reverting the logger change fails both tests, because every hub writes `muthur.log`. Reverting the backup
+change fails only `A_disposed_hub_releases_the_backup_it_wrote`, because the log-only test never writes a
+backup and so has nothing to detect. That is what a targeted regression test is supposed to do. The sentence is
+replaced by:
+
+> Each production change has at least one test that fails when it alone is reverted, and no test is broadened
+> to make a tidier sentence true.
+
+Verified that way: reverting `Startup.cs` alone failed 2 of 2; reverting `DatabaseBackup.cs` alone failed 1 of
+2, naming the surviving directory.
+
+**2. Unit A alone already takes the run to zero leaked directories.**
+
+With both production fixes and `HubFactory.Dispose` still on its original `try { Directory.Delete } catch`, a
+full `dotnet test tests/Muthur.Server.Tests` left **0** directories behind (235 tests). The handles were the
+whole leak.
+
+This does not make Unit B redundant, and it is worth being explicit about why, because the tempting reading is
+that the cleanup accounting is now decoration:
+
+- The silent `catch` is the defect the task named third and independently. It is what let a two-day, 49,437-
+  directory leak go unseen; removing the leak without removing the silence leaves the next leak just as quiet.
+- Zero is only observable if something reports it. "0 could not be removed" printed once per run is the whole
+  point — an absence nobody prints is indistinguishable from an absence nobody checked.
+- The retention rule is what keeps T-41-style evidence after the directories stop accumulating by accident.
+
+So Unit B's expected output on an integrated branch is a summary line reporting 0 failures, and that is a pass,
+not a no-op.
