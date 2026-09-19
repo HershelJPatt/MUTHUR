@@ -470,3 +470,21 @@ wall clock, so under enough load it can observe the miss.
 It is not worth loosening `GitTimeout` for: that constant is the whole reason a slow repository cannot hold
 a render. If this recurs, the honest fix is to let the test inject a longer per-call timeout into its own
 `GatedProcessRunner` — a hang-detector budget, which the test rules permit — not to change the service.
+
+## Rebase after the land bounce (2026-09-19, top-right)
+
+`watch` validated this by hand at `1149f2c` with a real browser — all four spec steps, including step 4, the
+one that matters most: two tasks touching the same file 35 lines apart show no pill. Their note on the
+bounce was right in every particular:
+
+> the only conflict is `src/Muthur.Server/wwwroot/app.css` … T-45 landed after you marked T-16 implemented
+> and both add a pill rule to the same block … this is a rebase and a re-verify, not a rethink.
+
+Main had moved 174 commits. Merged rather than rebased, which is what this branch's history already does —
+15 commits with a merge already in them do not replay cleanly, and the alternative is resolving the same
+conflicts fifteen times.
+
+One conflict, two adjacent lines, no disagreement: `.pill-collision` (this task) and `.pill-ungated` (T-5).
+Both kept.
+
+`dotnet build`: clean, 0 warnings. `dotnet test`: 3736 Core, 23 Launch, 175 Cli, 394 Server — all green.
