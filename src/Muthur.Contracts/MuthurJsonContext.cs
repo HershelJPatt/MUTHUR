@@ -77,6 +77,8 @@ namespace Muthur.Contracts;
 [JsonSerializable(typeof(IReadOnlyList<InboundDto>))]
 [JsonSerializable(typeof(IReadOnlyList<IngestSourceDto>))]
 [JsonSerializable(typeof(PollResultDto))]
+[JsonSerializable(typeof(ConductorSessionDto))]
+[JsonSerializable(typeof(ConductorStallDto))]
 [JsonSerializable(typeof(ConductorStatusDto))]
 [JsonSerializable(typeof(ConductorSwitch))]
 [JsonSerializable(typeof(ConductorSessionsRequest))]

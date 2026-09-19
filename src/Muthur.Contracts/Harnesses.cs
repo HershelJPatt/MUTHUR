@@ -24,9 +24,21 @@ public sealed record WorkerRunReport(
     decimal? CostUsd,
     string? Parent = null);
 
+/// <summary>One validator session the conductor believes it has running.</summary>
+/// <param name="Task">"T-n".</param>
+/// <param name="Role">The validator role the session was staffed for.</param>
+public sealed record ConductorSessionDto(string Task, string Role);
+
+/// <summary>A (task, role) pair the conductor has stopped staffing until one probe is let through.</summary>
+/// <param name="Reason">"never started", "ran and failed" or "no verdict" — the three ways a session produces nothing.</param>
+/// <param name="Failures">Consecutive unproductive sessions for this pair.</param>
+/// <param name="NextProbeAt">When a probe is let through again.</param>
+public sealed record ConductorStallDto(string Task, string Role, string Reason, int Failures, DateTimeOffset? NextProbeAt);
+
 /// <summary>
 /// Whether the conductor is staffing validation, the limits it staffs within, and what it last did.
 /// </summary>
+/// <param name="Running">How many sessions it believes are running. Always <c>Sessions.Count</c>; kept because every caller reads it.</param>
 /// <param name="MaxSessions">What the configuration file asks for, whatever the founder has since said.</param>
 /// <param name="Ceiling">Sessions a pass will actually run: the founder's number, lowered while they sleep.</param>
 /// <param name="CeilingReason">One sentence saying where <paramref name="Ceiling"/> came from.</param>
@@ -34,10 +46,13 @@ public sealed record WorkerRunReport(
 /// Whether it may also start work from the backlog. The most expensive switch here, so it is readable without
 /// anyone having to go through the ledger to find out which way it was last thrown.
 /// </param>
+/// <param name="Sessions">Which pairs those running sessions are — "enabled, 2 running" does not say which two.</param>
+/// <param name="Stalls">Only pairs that have actually stalled. A pair with attempts left is not something a founder acts on.</param>
 public sealed record ConductorStatusDto(
     bool Enabled, int Running, int MaxSessions, int SessionMinutes, int MaxAttempts, int IntervalSeconds,
     int StallProbeMinutes, DateTimeOffset? LastPass, string? LastAction, int Ceiling, string CeilingReason,
-    bool Orchestrators);
+    bool Orchestrators,
+    IReadOnlyList<ConductorSessionDto> Sessions, IReadOnlyList<ConductorStallDto> Stalls);
 
 public sealed record ConductorSwitch(bool Enabled);
 
