@@ -530,37 +530,38 @@ public sealed class ConductorService(
         {
             // A project with no repository on record has nowhere for a session to run, and starting one there
             // spends a subscription to find that out.
-            var tasks = await db.Tasks.Include(t => t.Project)
+            var waiting = await db.Tasks.Include(t => t.Project)
                 .Where(t => t.State == TaskState.Backlog && t.Project != null && t.Project.RepoPath != "")
-                .OrderByDescending(t => t.Priority).ThenBy(t => t.Id)
                 .ToListAsync(ct);
-            if (tasks.Count == 0) return [];
+            if (waiting.Count == 0) return [];
 
-            // Work already begun before work nobody has touched, each half in the order the query returned. A task
-            // that is specced and branched is closer to done than one that is not, and leaving it while a session
-            // starts something new is how a board fills up with things nobody is carrying.
-            var begun = tasks.Where(CarriesWork).ToList();
-            var untouched = tasks.Where(t => !CarriesWork(t)).ToList();
-            var owners = await PreviousOwnersAsync(db, [.. begun.Select(t => t.Id)], ct);
+            // The founder's priority first and above everything else: it is the only lever they have for saying
+            // "this one matters most", and a queue that answers an urgent task by starting an old one instead is
+            // not a queue they can steer. Only among tasks they ranked equally does half-built work go first —
+            // finishing what is begun beats starting something new, but it never overrules what was called urgent.
+            var tasks = waiting
+                .OrderByDescending(t => t.Priority)
+                .ThenByDescending(CarriesWork)
+                .ThenBy(t => t.Id)
+                .ToList();
+            var owners = await PreviousOwnersAsync(db, [.. tasks.Where(CarriesWork).Select(t => t.Id)], ct);
 
             var plan = new List<OrchestratorAssignment>();
-            foreach (var task in begun) Consider(task, resuming: true);
-            foreach (var task in untouched) Consider(task, resuming: false);
-            return plan;
-
-            void Consider(WorkTask task, bool resuming)
+            foreach (var task in tasks)
             {
                 var key = OrchestratorKey(Wire.TaskId(task.Id));
                 lock (_running)
-                    if (_running.Contains(key)) return;
+                    if (_running.Contains(key)) continue;
                 lock (_stalls)
                     if (_stalls.GetValueOrDefault(key) is { StalledAt: { } stalled } &&
                         stalled + TimeSpan.FromMinutes(options.ConductorStallProbeMinutes) > now)
-                        return;
+                        continue;
 
+                var resuming = CarriesWork(task);
                 plan.Add(new OrchestratorAssignment(task.Id, Wire.TaskId(task.Id), task.Title, task.Project?.Key ?? "",
                     resuming, resuming ? owners.GetValueOrDefault(task.Id) : null));
             }
+            return plan;
         }, ct);
     }
 

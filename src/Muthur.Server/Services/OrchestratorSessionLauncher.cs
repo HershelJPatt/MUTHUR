@@ -135,7 +135,7 @@ public sealed class OrchestratorSessionLauncher(
 
         return $"""
             You are taking over {assignment.TaskKey} ("{assignment.TaskTitle}") from {from}. This is a
-            resumption, not a fresh start: the task already has a branch and may already have a frozen spec.
+            resumption, not a fresh start — the task already has work on it: a frozen spec, a branch, or both.
 
                 muthur task claim {assignment.TaskKey}
                 muthur task show {assignment.TaskKey}

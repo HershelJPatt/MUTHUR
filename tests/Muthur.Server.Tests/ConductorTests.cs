@@ -2235,6 +2235,11 @@ public sealed class ConductorTests : IDisposable
             prompt, StringComparison.Ordinal);
         Assert.Contains($"    muthur log --task {id}", prompt, StringComparison.Ordinal);
         Assert.DoesNotContain("from ``", prompt, StringComparison.Ordinal);
+
+        // This task has a branch and no spec; the one above has a spec and no branch. The opening promises
+        // neither in particular, because a resumption told to go and read a branch that was never pushed goes
+        // looking for work that does not exist.
+        Assert.Contains("the task already has work on it: a frozen spec, a branch, or both.", prompt, StringComparison.Ordinal);
     }
 
     [Fact]
@@ -2255,23 +2260,32 @@ public sealed class ConductorTests : IDisposable
     }
 
     [Fact]
-    public async Task Work_already_begun_is_planned_before_work_nobody_has_touched()
+    public async Task The_founders_priority_outranks_work_already_begun_and_is_only_tied_by_it()
     {
-        // Half-built work is closer to done than work not begun, and leaving it while a session starts something
-        // new is how a board fills up with things nobody is carrying. The group wins over priority deliberately:
-        // the urgent untouched task below still waits for the abandoned one, which is the whole of the rule.
+        // The order is intended, and which way round it runs is the whole point. Priority is the only lever a
+        // founder has for "this one matters most", so nothing may silently outrank it: the urgent untouched task
+        // goes first even though half-built work is waiting. "Resuming beats starting" is real but it is a
+        // tiebreaker - among the two tasks the founder ranked equally, the one already carrying work goes first.
         _hub.Settings["Muthur:ConductorMaxSessions"] = "5";
         var author = await OrchestratingAsync();
         var corner = await _hub.RegisterAgentAsync("corner");
         var urgent = (await author.AddTaskAsync("Urgent and untouched", priority: 9)).Id;
         var begun = await AbandonedAsync(corner, "Half done, and not urgent", priority: 1);
         var ordinary = (await author.AddTaskAsync("Ordinary and untouched", priority: 5)).Id;
+        var tied = (await author.AddTaskAsync("Tied with it, and half built", priority: 5)).Id;
+        await using (var db = await _hub.Services.GetRequiredService<IDbContextFactory<MuthurDb>>().CreateDbContextAsync())
+        {
+            (await db.Tasks.SingleAsync(t => t.Title == "Tied with it, and half built")).Branch = $"task/{tied}-work";
+            await db.SaveChangesAsync();
+        }
         Assert.Equal(1, await SweptAsync());
 
         var planned = await Conductor.PlanOrchestratorsAsync();
 
-        Assert.Equal([begun, urgent, ordinary], planned.Select(a => a.TaskKey));
-        Assert.Equal([true, false, false], planned.Select(a => a.Resuming));
+        // Added before `tied` and equal to it on priority, `ordinary` would win on id alone. It carries no work,
+        // so it does not - and `begun`, which carries work, still comes last because the founder ranked it last.
+        Assert.Equal([urgent, tied, ordinary, begun], planned.Select(a => a.TaskKey));
+        Assert.Equal([false, true, false, true], planned.Select(a => a.Resuming));
     }
 
     [Fact]
