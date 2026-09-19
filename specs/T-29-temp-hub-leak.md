@@ -449,3 +449,46 @@ The validator proved each with a temporary probe and reported the gap rather tha
 nothing pins that `Release` **keeps** a directory whose log recorded an error, that `ExpectsLoggedErrors: true`
 removes it anyway, or that an unreadable log keeps it. All three work; a regression in any would be silent,
 which is the failure mode this task exists to end. They get tests.
+
+## Amendment 5 — what the race measurement added to Amendment 4 (2026-09-19)
+
+Amendment 4's fix is implemented and the validator's reproduction is closed: exit 0, the summary printed,
+`b-locked` named as held, the other three deleted. Two things the amendment did not anticipate, both found by
+measuring rather than reasoning.
+
+**1. `gone` has to absorb a not-found raised *during* our own delete, not only one raised before it.**
+
+Amendment 4 said to treat a directory that was already missing as `gone`. Implemented literally, two cleaners
+racing over one root of 3,000 directories still reported **66 and 62 `failed`**, in two message shapes —
+`Could not find file '<path>\muthur.log'` and `Access to the path '<path>' is denied` — with **0 survivors**.
+Zero survivors is the whole argument: every one of those directories was in fact removed, by the other
+process, mid-delete. `failed` was lying about half of them.
+
+Classifying `FileNotFoundException` and `DirectoryNotFoundException` alongside `ItemNotFoundException` as
+`gone` removed the first shape entirely. Final race: `gone 1288 / failed 33` and `gone 1432 / failed 45`.
+
+`UnauthorizedAccessException` is deliberately **not** absorbed. A delete-pending file, a read-only file and a
+genuine ACL problem are indistinguishable from there, and that is a number an operator must see. The residual
+"Access is denied" shape only appears when two *cleaners* fight over one root, which is not how the script is
+run; against the real deployment — one cleaner, live test runs — it means a genuinely locked file, and staying
+`failed` and named is the conservative answer.
+
+**2. A root containing `[` or `]` was a wildcard to `Remove-Item`, which deletes.**
+
+Found by the implementer, outside the amendment. `Test-Path` and `Remove-Item` treat the path as a pattern, so
+a bracketed root could have matched sibling directories. Now `[IO.File]::Exists` and `Remove-Item -LiteralPath`.
+
+**Also:** `Test-LoggedAnError` became `Get-LogVerdict`. Amendment 4 gave the function three outcomes (error /
+held / clean) while keeping a name whose `Test-` verb promises a boolean. The name was inherited from a
+two-outcome version and should have changed with the shape.
+
+### The summary as it now prints
+
+```
+<Root>: examined 4, deleted 3, kept 0, held 1, skipped (too recent) 0, gone 0, failed 0.
+  held    <full path>  (The process cannot access the file '<path>\muthur.log' because it is being used by another process.)
+  failed  <full path>  (<exception message>)
+```
+
+`held` is a new number an operator reads beside `kept`, and on a shared root during a busy hour it will not be
+zero. That is correct: every one is a directory another process still owns.
