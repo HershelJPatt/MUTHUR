@@ -323,3 +323,70 @@ trees file by file: 11 of 12 identical per harness, the twelfth being `muthur.pr
 key is the temp directory's name. Nothing about the shipped kits changed.
 
 No browser was used.
+
+## Amendment 2 — the claim was false, not narrow (2026-09-19)
+
+`conductor-validator-t-8` failed T-8. Everything the validation pass covers holds — they re-ran all sixteen
+rows of the Proof table independently and wrote twenty-one further manifests attacking the containment rules,
+all refused cleanly. Three manifest shapes still crash with `Unhandled exception` and a
+`muthur!<BaseAddress>+0x…` dump at exit 1.
+
+| Manifest | Where it dies | Exception |
+|---|---|---|
+| `"to": "docs/x\u0000.md"` | rule 14, `Path.GetFullPath` | `ArgumentException: Null character in path.` |
+| `"from": "go\u0000od.md"` | rule 12, `Path.GetFullPath` | the same, one frame earlier |
+| `"to": "<256-char component>/x.md"` | the **write** phase, `Directory.CreateDirectory` | `IOException: The filename, directory name, or volume label syntax is incorrect.` |
+
+`System.Text.Json` accepts `\u0000` inside a string; `Path.GetFullPath` does not. Rules 12–14 call it
+unguarded, so validation crashes before it can refuse anything.
+
+**Amendment 1 does not cover these, and I should not have let it read as if it might.** Its narrowing —
+*"no unhandled exception a manifest can cause"* — was about one genuinely unreachable case: a file read
+failing between the containment check and the read itself. All three shapes above are reached by manifest
+content and nothing else, on a repository the founder named, with no concurrent process. The Goal's sentence
+was simply not met. Narrowing a claim to the case you thought of is not the same as bounding it.
+
+### The fix is a class, not three cases
+
+Adding "reject NUL" and "reject long components" would fix these three and leave the next shape to another
+validator. The rules become:
+
+**Rule 16 — a string that cannot be used as a path at all.** Wrap every path resolution in validation —
+both `Path.GetFullPath` calls, and any other that takes manifest text — and treat `ArgumentException`,
+`NotSupportedException` and `PathTooLongException` as a refusal rather than letting them escape:
+
+```
+"<manifestPath>: entry <n> has a \"<field>\" that is not a usable path: <ex.Message>"
+```
+
+`<field>` is `from` or `to`, whichever was being resolved. This catches the NUL cases and every other string
+the platform rejects outright, including ones nobody has thought of yet.
+
+**Rule 17 — a path component longer than 255 characters.** This one escapes validation entirely: 
+`Path.GetFullPath` accepts it and `Directory.CreateDirectory` dies later, which is also why it violates
+"nothing is written when validation fails" in spirit even though the repo happened to be empty. It is
+decidable from the manifest string alone — the validator bounded it: six 61-character segments install fine,
+one 200-character segment installs fine, 256 and 300 crash — so it is the per-component limit, not total
+path length.
+
+Check each component of `to`, and of `from`, against a named constant:
+
+```
+"<manifestPath>: entry <n> writes \"<to>\", whose path component \"<first 40 chars>…\" is <len> characters; the limit is 255."
+```
+
+255 is NTFS's per-component limit and also most Linux filesystems'. Name it as a constant with a comment
+saying that, rather than writing `255` into two expressions.
+
+### And then sweep, rather than stopping at three
+
+The three shapes were found by a validator attacking the parser, not by the spec anticipating them. So the
+unit does not finish at rule 17: it runs a list of hostile strings through the installed CLI and reports what
+happens to each — Windows reserved device names (`CON`, `PRN`, `AUX`, `NUL`, `COM1`, `LPT1`), a trailing dot
+and a trailing space, `.` and `..` as whole components, a bare drive letter, a UNC path, an alternate data
+stream (`x.md:stream`), a `to` of `.`, control characters other than NUL, and an over-long `from`.
+
+Every one must produce exit 2 or a clean exit 0 — never a crash. Any that crashes is either a new rule or an
+honest finding reported rather than fixed. **Do not paper over one by widening rule 16's catch to
+`Exception`**: a catch that broad would also swallow a bug in the validator itself, and the point of this
+task is that a founder gets a sentence naming what is wrong, not that nothing is ever printed.
