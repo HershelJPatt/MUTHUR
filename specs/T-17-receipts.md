@@ -432,8 +432,12 @@ $env:MUTHUR_HOME = "$PWD/artifacts/t17-home"; $env:MUTHUR_URL = "http://127.0.0.
   - a search for currency-formatted figures (`\$[0-9]+\.[0-9][0-9]`) finds **exactly one** — the run that
     reported a cost. A second would be a total, which is the founder's decision in #13 violated;
   - the run that reported nothing renders `<span class="receipt-none">—</span>`, not `$0.00`.
-- The window selector is a link, not a script: `curl -s 'http://127.0.0.1:7455/receipts?hours=1'` and
-  `?hours=168` are the same two states the buttons navigate to, and the `btn-on` marker moves between them.
+- The window selector is a link, not a script — see **Amendment 4**, which is where this check earned its
+  wording. Fetch `http://127.0.0.1:7455/receipts?hours=24` and `?hours=168`. Each of the three controls is an
+  `<a>` carrying the URL it leads to (`/receipts?hours=24`, `?hours=168`, `?hours=720`), the window row holds
+  no `<button>`, and the `btn-on` marker moves from the first control to the second. Compare 24 against 168,
+  **not** 1 against 168: no window is one hour, so `hours=1` leaves the marker merely absent, which is a weak
+  check that reads like a strong one.
   Whether the *numbers* change with the window cannot be shown this way unless real hours have passed, so it
   is not part of this check — Unit D acceptance 4 covers it with a stepped clock, which is the only honest
   way to test it.
