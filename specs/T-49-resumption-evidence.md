@@ -68,3 +68,44 @@ and the shutdown command also ran in a `finally` block.
 No `Error` or `Critical` lines appeared in the scratch log. No T-49 scratch server
 remained running after verification. This checks the installed long-poll contract;
 the deterministic disposal tests provide the regression evidence for the fix.
+
+After integrating Unit B and rebasing onto `main` (`72e24c4`), repeated the installed
+check from task commit `4e79c12`. All three inbox calls again returned exit 0 with
+the same empty, timed-out response, completing in 2.35, 2.35 and 2.34 seconds. The
+log again contained zero Error/Critical entries, and the scratch hub was stopped.
+
+## Orchestrator verification of the integrated branch
+
+Reviewed the launcher-created Unit B commit `d752431` in full before integration
+(`committedByLauncher=true`). Rebased the task branch onto `main` at `72e24c4`
+without conflicts. Final code commit: `4e79c12`.
+
+`dotnet build` passed with zero warnings and zero errors. Executed every test
+project myself on the integrated branch:
+
+| Project | Passed | Failed in final project run |
+| --- | ---: | ---: |
+| Core | 3,736 | 0 |
+| Launch | 28 | 0 |
+| CLI | 212 | 0 |
+| Server | 541 | 0 |
+
+The first `dotnet test -v n` invocation exited 1 because my private TEMP was under
+the Git repository. That invalidated
+`FileProvenanceTests.A_file_outside_any_repository_has_no_provenance_and_is_not_dirty`:
+Git correctly found the enclosing repository. Re-ran the entire CLI project with
+a private TEMP outside Git using `dotnet test tests/Muthur.Cli.Tests --no-build -v n`;
+all 212 passed. No source change or skipped test was involved. The other three
+projects passed in the original invocation; the table records those results plus
+the corrected CLI project run, not a claim that the original command exited 0.
+
+All three T-49 regression tests passed. The server process reported:
+
+```text
+muthur-tests: 447 removed, 0 kept (logged an error), 0 could not be removed.
+```
+
+Removed this resumption's two clean worker worktrees after preserving their work,
+and removed the stopped scratch installation and home after recording the results.
+Verification transcripts are retained under the main checkout's ignored `artifacts/`
+directory (`t49-final-*.log`).
