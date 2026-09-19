@@ -126,6 +126,42 @@ public sealed class TaskAttendedTests : IDisposable
         Assert.Equal(unattended, Assert.Single(plan).TaskKey);
     }
 
+    /// <summary>
+    /// T-45, end to end: the flag a second block sets is the same flag the conductor already honours, so the
+    /// loop that burned three sessions on T-5 closes without a second way to skip a task. Asserted as a
+    /// composition rather than assumed — the two halves live in different services.
+    /// </summary>
+    [Fact]
+    public async Task A_task_blocked_twice_stops_being_staffed_until_the_flag_is_lifted()
+    {
+        await SetUpAsync("win-validator");
+        await DefineAsync("win-validator");
+        var owner = await _hub.RegisterAgentAsync("owner");
+        var id = await ValidatingTaskAsync(owner, "Export the report", "task/T-1-export", "one.txt");
+        var validator = await _hub.RegisterAgentAsync("validator");
+
+        // Each round is a whole session: it takes the role, cannot run the spec, says so, and lets the role go.
+        async Task BlockOnceAsync(string evidence)
+        {
+            (await validator.PostAsync(Routes.RoleAction("win-validator", "take"), null)).EnsureSuccessStatusCode();
+            (await validator.PostActionAsync(id, "blocked", new VerdictRequest("win-validator", evidence))).EnsureSuccessStatusCode();
+            (await validator.PostAsync(Routes.RoleAction("win-validator", "release"), null)).EnsureSuccessStatusCode();
+            (await owner.PostActionAsync(id, "implemented", new ImplementedRequest("task/T-1-export"))).EnsureSuccessStatusCode();
+        }
+
+        // One block, and the conductor still staffs it: the owner may have fixed what stopped the first session.
+        await BlockOnceAsync("No browser here.");
+        Assert.Equal(id, Assert.Single(await Conductor.PlanAsync()).TaskKey);
+
+        // Two, and it stops — which is the whole point: no third session spends the budget to learn the same thing.
+        await BlockOnceAsync("Still no browser.");
+        Assert.Empty(await Conductor.PlanAsync());
+
+        // And it is a flag, not a verdict: the founder lifts it and the task is staffable again.
+        (await AttendedAsync(_hub.Founder(), id, null)).EnsureSuccessStatusCode();
+        Assert.Equal(id, Assert.Single(await Conductor.PlanAsync()).TaskKey);
+    }
+
     [Fact]
     public async Task An_owned_task_is_its_owners_to_flag_and_an_unowned_one_is_anyones()
     {
