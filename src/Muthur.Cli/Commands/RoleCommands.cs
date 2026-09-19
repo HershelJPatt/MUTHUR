@@ -21,7 +21,18 @@ public static class RoleCommands
         var define = new Command("define", "Create a role or replace its brief. Needs --founder.") { defineKey, briefFile, validator };
         define.SetAction(async (parse, ct) =>
         {
-            var brief = parse.GetValue(briefFile) is { } file ? await File.ReadAllTextAsync(file, ct) : null;
+            string? brief = null;
+            if (parse.GetValue(briefFile) is { } file)
+            {
+                if (FileProvenance.IsDirty(file))
+                    return Output.Error("brief_file_dirty",
+                        $"{file} has no committed version, so the brief you install will match no commit. Commit it, or pass the text you mean.",
+                        ExitCodes.RuleViolation);
+                brief = await File.ReadAllTextAsync(file, ct);
+                // stderr, never stdout: stdout is the JSON an agent parses.
+                if (FileProvenance.Describe(file) is { } source)
+                    Console.Error.WriteLine($"Read {file} at {source.Ref} ({source.Commit}).");
+            }
             var request = new DefineRoleRequest(parse.GetValue(defineKey)!, brief, parse.GetValue(validator));
             return Output.Emit(parse, await HubClient.For(parse).PutAsync(Routes.Roles, request, MuthurJsonContext.Default.DefineRoleRequest, ct));
         });
