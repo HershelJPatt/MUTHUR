@@ -23,11 +23,11 @@ internal sealed class InstallTransaction(string root)
     private readonly List<string> directories = [];
 
     /// <summary>
-    /// The path it was last asked to write, so a failure can name the file rather than the command. Settable
+    /// The path the install last read or wrote, so a failure names the file rather than the command. Settable
     /// from outside because <c>Install</c> reads <c>.gitignore</c> and the project file before handing either
     /// to <see cref="Write"/>, and a read that throws there would otherwise blame the last entry written.
     /// </summary>
-    internal string? Writing { get; set; }
+    internal string? Touching { get; set; }
 
     /// <summary>
     /// Applies one manifest entry. Returns created | updated | unchanged | kept. <c>create</c> exists because a
@@ -36,7 +36,7 @@ internal sealed class InstallTransaction(string root)
     /// </summary>
     internal string Apply(string path, string content, string? mode)
     {
-        Writing = path;
+        Touching = path;
         return Rendered(path, content, mode) is { } bytes ? WriteFile(path, bytes) : "kept";
     }
 
@@ -63,7 +63,7 @@ internal sealed class InstallTransaction(string root)
     {
         // Set before Record, so a failure inside journaling — reading the prior bytes of a locked file — still
         // names the file rather than the command. It is never cleared; on the happy path nothing reads it.
-        Writing = path;
+        Touching = path;
         Record(path);
         Directory.CreateDirectory(Path.GetDirectoryName(path)!);
         File.WriteAllText(path, content);

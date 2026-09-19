@@ -217,23 +217,23 @@ public sealed class InstallTransactionTests : IDisposable
     }
 
     [Fact]
-    public void Writing_names_the_path_it_was_last_asked_to_write()
+    public void Touching_names_the_path_the_install_last_read_or_wrote()
     {
         var transaction = New();
-        Assert.Null(transaction.Writing);
+        Assert.Null(transaction.Touching);
 
         transaction.Apply(Path("a.md"), "from the kit", "replace");
-        Assert.Equal(Path("a.md"), transaction.Writing);
+        Assert.Equal(Path("a.md"), transaction.Touching);
 
         // Set on the way in rather than on the way out, so a mode that writes nothing still names the path a
         // failure would be about.
         transaction.Apply(Path("b.md"), "from the kit", "replace");
-        Assert.Equal(Path("b.md"), transaction.Writing);
+        Assert.Equal(Path("b.md"), transaction.Touching);
         Assert.Equal("unchanged", transaction.Apply(Path("a.md"), "from the kit", "replace"));
-        Assert.Equal(Path("a.md"), transaction.Writing);
+        Assert.Equal(Path("a.md"), transaction.Touching);
 
         transaction.Write(Path(".gitignore"), ".worktrees/\n");
-        Assert.Equal(Path(".gitignore"), transaction.Writing);
+        Assert.Equal(Path(".gitignore"), transaction.Touching);
 
         transaction.Rollback();
     }

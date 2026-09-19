@@ -106,10 +106,28 @@ public sealed class KitInstallRollbackTests : IDisposable
 
         Assert.Equal(ExitCodes.Error, exit);
         Assert.Equal("install_failed", code);
-        Assert.Contains("while writing \"c.md\"", message, StringComparison.Ordinal);
+        Assert.Contains("while installing \"c.md\"", message, StringComparison.Ordinal);
         AsItWasFound();
 
         await InstallsCompletely();
+    }
+
+    [Fact]
+    public async Task A_locked_include_names_the_entry_source_and_leaves_the_repository_exactly_as_it_was_found()
+    {
+        var source = Path.Combine(Kit, Harness, "c.md");
+        File.WriteAllText(source, "{{core:dummy.md}}");
+
+        int exit;
+        string code, message;
+        using (File.Open(Path.Combine(Kit, "core", "dummy.md"), FileMode.Open, FileAccess.ReadWrite, FileShare.None))
+            (exit, code, message) = await Install();
+
+        Assert.Equal(ExitCodes.Error, exit);
+        Assert.Equal("install_failed", code);
+        Assert.DoesNotContain("b.md", message, StringComparison.Ordinal);
+        Assert.Contains($"while installing \"{source}\"", message, StringComparison.Ordinal);
+        AsItWasFound();
     }
 
     /// <summary>b.md and c.md byte for byte and nothing else: no docs\, no .gitignore, no project file.</summary>
