@@ -345,3 +345,56 @@ Naming a risk is cheap and I did it twice, correctly once. Neither guess was whe
   pass on an unrelated IO failure and the type name leads the xUnit report.
 - The outcome is recorded before the throw, so the summary still names the directory and the count is right.
 - The two test renames matching the new mechanism.
+
+## Amendment 3 — the founder reversed #14, and this task stops here (2026-09-19)
+
+`muthur ask` #19 is answered: **land the retry, keep the summary, stop there.** The founder reversed their own
+answer to #14 because the measurement falsified its premise, and said so plainly:
+
+> My answer said A cost "a handful of lines in `TestHubDirectories`". That was the premise the choice rested
+> on, and two rounds of measurement have falsified it twice over … **An answer whose stated cost turns out to
+> be false is not one to defend because I gave it.**
+
+Their reasoning for option 2 over option 1, which is the part worth keeping:
+
+> Option 1 puts roughly twenty lines of stateful tracking — live `DataDir`s, disposal depth, thread-safe
+> because xUnit runs collections in parallel — **inside `HubFactory`**. That is the fixture all 443 server
+> tests stand on, in a suite this organization has already documented as flaky under parallel load (T-22) …
+> Adding shared mutable state there to gain attribution for an event that, after your handle fixes and the
+> retry, is expected to fire **never**, is trading the reliability of the whole suite for better reporting on
+> zero.
+
+And on why the residual gap is acceptable now when option B was not this morning:
+
+> What actually changed since the 49,000-directory incident is that the failure is no longer silent. Three
+> things now stand between a leak and nobody noticing: the handle fixes, your bounded retry, and a summary
+> that prints. The original harm came from **nothing reporting at all**, not from a report that needed
+> `-v n`.
+
+### What lands
+
+- **Unit A's bounded retry.** Built, green, and the thing that answers the transient-lock objection which
+  made option A look unsafe in the first place.
+- **The summary, unchanged.**
+
+### What does not land
+
+- **Unit B's throw.** `task/T-58-b-fail-the-test` is not merged and must not be. It works — a class that
+  leaks on `Dispose` fails its test and plain `dotnet test` exits 1 — and it fails a legitimate restart test
+  3/3. The branch stays as the record of what was measured.
+- **`ExitCode()` and its assignment are removed.** Amendment 1 argued for keeping them with a comment; that
+  was written while option A was still the plan. Now that the decision is reversed, an inert assignment is
+  dead code carrying an abandoned intent, and the information it would have documented belongs where the
+  founder asked for it instead. Unit A's two tests that assert against `ExitCode()` assert the `Disposition`
+  directly.
+
+### The founder's two conditions, which are the task now
+
+> 1. **Say it where the command lives.** `CLAUDE.md`'s Commands line is where `dotnet test` is documented; the
+>    cleanup summary and the fact that it prints at `-v n` belong beside it, not only in the spec. **A gap
+>    that is written down is a decision; one that is not is an accident waiting to be rediscovered.**
+> 2. **Keep `scripts/clean-test-temp.ps1` as the periodic check it already is**, and say in the same place
+>    that it is how you find a leak that a run did not shout about.
+
+Both go in `CLAUDE.md` under `## Commands`, in that file's voice — it is terse and every line earns its
+place, so this is two or three sentences, not a section.
