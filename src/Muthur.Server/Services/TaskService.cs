@@ -10,7 +10,7 @@ namespace Muthur.Server.Services;
 
 public sealed record TaskQuery(IReadOnlyList<TaskState>? States = null, string? Project = null, string? Owner = null, bool OpenOnly = false, int Limit = 500);
 
-public sealed partial class TaskService(Ledger ledger, LeasePolicy leases)
+public sealed partial class TaskService(Ledger ledger, LeasePolicy leases, ITaskLander lander)
 {
     [GeneratedRegex(@"^#\s*(T-\d+)\b")]
     private static partial Regex SpecHeadingPattern();
@@ -129,7 +129,7 @@ public sealed partial class TaskService(Ledger ledger, LeasePolicy leases)
             if (string.IsNullOrWhiteSpace(request.Path) || Path.IsPathRooted(request.Path))
                 throw Fail.Rule("relative_path_required", "The spec path must be relative to the project repository.");
             var relative = request.Path.Replace('\\', '/');
-            RequireSpecBelongsToTask(task, relative);
+            await RequireSpecBelongsToTaskAsync(task, relative, request.Branch, ct);
             if (task.State is not (TaskState.InProgress or TaskState.Blocked))
                 throw Fail.Rule("not_in_progress", $"A spec can only be attached while the task is in progress; {Wire.TaskId(task.Id)} is '{task.State.ToWire()}'.");
             task.SpecPath = relative;
@@ -237,17 +237,57 @@ public sealed partial class TaskService(Ledger ledger, LeasePolicy leases)
     /// A spec must be a file inside the project's checkout, and if its first heading names a task it must name
     /// this one: ledger ids get reused, so attaching another task's spec is how implementers build the wrong thing.
     /// </summary>
-    private static void RequireSpecBelongsToTask(WorkTask task, string relative)
+    private async Task RequireSpecBelongsToTaskAsync(WorkTask task, string relative, string? branch, CancellationToken ct)
     {
         var root = Path.GetFullPath(task.Project!.RepoPath);
         var full = Path.GetFullPath(Path.Combine(root, relative));
+        // First, and on the path rather than on any content: reading out of a branch must not become a way to
+        // name something outside the repository.
         if (!IsInside(root, full))
             throw Fail.Rule("spec_outside_repository", "The spec path must stay inside the project repository.");
-        if (!File.Exists(full))
-            throw Fail.Rule("spec_missing", $"No file at '{relative}' in {task.Project.RepoPath}. Commit the spec on the task branch first.");
-        if (FirstHeadingTaskId(full, relative) is { } found && found != Wire.TaskId(task.Id))
+
+        // A branch is a hint, never an assertion: one that does not have the file is passed over rather than
+        // fatal, which is what makes it safe for the CLI to fill in from wherever the caller is standing.
+        var tried = new List<string>();
+        var content = await FromBranchAsync(branch) ?? await FromBranchAsync(task.Branch) ?? FromWorkingTree();
+        if (content is null)
+            throw Fail.Rule("spec_missing", tried.Count > 0
+                ? $"No file at '{relative}' in {task.Project.RepoPath}: not on {string.Join(" or ", tried.Select(b => $"branch '{b}'"))}, " +
+                  "and not in the working tree. If the spec is committed on a different branch, pass --branch <that branch>."
+                : $"No file at '{relative}' in {task.Project.RepoPath}. If the spec is committed on a task branch, pass --branch task/T-n-<slug>.");
+
+        if (FirstHeadingTaskId(content) is { } found && found != Wire.TaskId(task.Id))
             throw Fail.Rule("spec_id_mismatch", $"'{relative}' is the spec for {found}, not {Wire.TaskId(task.Id)}. Attaching it here would point implementers at the wrong work — and writing over it would destroy that record.");
+
+        async Task<string?> FromBranchAsync(string? candidate)
+        {
+            if (candidate is not { Length: > 0 } || tried.Contains(candidate)) return null;
+            tried.Add(candidate);
+            // Capped to the same head the working tree is read in, so which source answered can never change
+            // the verdict: the heading check has to see exactly as much either way.
+            return await lander.ReadFileAsync(task.Project!, candidate, relative, ct) is { } text
+                ? text[..Math.Min(text.Length, Head)]
+                : null;
+        }
+
+        string? FromWorkingTree()
+        {
+            if (!File.Exists(full)) return null;
+            try
+            {
+                using var reader = new StreamReader(full);
+                var head = new char[Head];
+                return new string(head, 0, reader.ReadBlock(head, 0, head.Length));
+            }
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+            {
+                throw Fail.Rule("spec_unreadable", $"'{relative}' could not be read: {ex.Message}");
+            }
+        }
     }
+
+    /// <summary>How much of a spec the heading check reads: a mistaken path to something enormous stays cheap.</summary>
+    private const int Head = 8 * 1024;
 
     /// <summary>A separator at the boundary is what keeps '/repo-evil' from counting as inside '/repo'.</summary>
     private static bool IsInside(string root, string full)
@@ -259,26 +299,19 @@ public sealed partial class TaskService(Ledger ledger, LeasePolicy leases)
             && (full[trimmed.Length] == Path.DirectorySeparatorChar || full[trimmed.Length] == Path.AltDirectorySeparatorChar);
     }
 
-    /// <summary>The task id in the file's first non-blank line, or null if the heading names none.</summary>
-    private static string? FirstHeadingTaskId(string full, string relative)
+    /// <summary>
+    /// The task id in the spec's first non-blank line, or null if the heading names none. Takes the content
+    /// rather than a path, because a spec read out of a branch must be checked exactly as one on disk is.
+    /// </summary>
+    private static string? FirstHeadingTaskId(string content)
     {
-        try
+        foreach (var line in content.Split('\n'))
         {
-            using var reader = new StreamReader(full);
-            var head = new char[8 * 1024]; // a mistaken path to something enormous stays cheap to reject
-            var read = reader.ReadBlock(head, 0, head.Length);
-            foreach (var line in new string(head, 0, read).Split('\n'))
-            {
-                if (string.IsNullOrWhiteSpace(line)) continue;
-                var match = SpecHeadingPattern().Match(line.Trim());
-                return match.Success ? match.Groups[1].Value : null;
-            }
-            return null;
+            if (string.IsNullOrWhiteSpace(line)) continue;
+            var match = SpecHeadingPattern().Match(line.Trim());
+            return match.Success ? match.Groups[1].Value : null;
         }
-        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
-        {
-            throw Fail.Rule("spec_unreadable", $"'{relative}' could not be read: {ex.Message}");
-        }
+        return null;
     }
 
     private static void ReturnToBacklog(WorkTask task, DateTimeOffset now)

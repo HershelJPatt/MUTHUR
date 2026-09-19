@@ -8,7 +8,7 @@ public sealed record ClaimTaskRequest(int? LeaseMinutes = null);
 
 public sealed record ReleaseTaskRequest(string? Reason = null);
 
-public sealed record SetSpecRequest(string Path);
+public sealed record SetSpecRequest(string Path, string? Branch = null);
 
 public sealed record SetPriorityRequest(int Priority);
 

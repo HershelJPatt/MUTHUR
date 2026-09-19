@@ -22,6 +22,9 @@ public interface ITaskLander
 {
     /// <summary>The commit at the tip of <paramref name="branch"/>, or null when the branch does not exist.</summary>
     Task<string?> BranchHeadAsync(Project project, string branch, CancellationToken ct = default);
+
+    /// <summary>The file's contents at the tip of <paramref name="branch"/>, or null when either is absent.</summary>
+    Task<string?> ReadFileAsync(Project project, string branch, string path, CancellationToken ct = default);
     Task<LandResult> LandAsync(Project project, WorkTask task, string ownerName, CancellationToken ct = default);
 }
 
@@ -44,6 +47,18 @@ public sealed class GitLander(IProcessRunner processes, IPullRequestOpener pullR
         var result = await GitAsync(project.RepoPath, ct, "rev-parse", "--verify", "--quiet", $"refs/heads/{branch}");
         var head = result.StdOut.Trim();
         return result.Ok && head.Length > 0 ? head : null;
+    }
+
+    /// <summary>
+    /// A file as a branch has it, without checking anything out. "Not there" — no such branch, or no such path
+    /// on it — is null rather than a failure: the caller has other places to look, and git cannot tell the two
+    /// apart in its exit code anyway.
+    /// </summary>
+    public async Task<string?> ReadFileAsync(Project project, string branch, string path, CancellationToken ct = default)
+    {
+        // Forward slashes whatever the platform: the argument is a path inside a git tree, not a path on disk.
+        var result = await GitAsync(project.RepoPath, ct, "show", $"{branch}:{path.Replace('\\', '/')}");
+        return result.Ok ? result.StdOut : null;
     }
 
     public async Task<LandResult> LandAsync(Project project, WorkTask task, string ownerName, CancellationToken ct = default)
