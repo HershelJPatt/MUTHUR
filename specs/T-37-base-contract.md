@@ -224,3 +224,65 @@ And the resumed-round case is written down rather than left to each implementer 
 implementer in this session was told by hand to read the amended spec with `git show <base>:<spec>`; none of
 them could have known to from the contract, and "stop and report" would have been wrong advice for all of
 them — they had their own commits legitimately, because they were on round two.
+
+## Amendment 2 — identity is not enough either (2026-09-18)
+
+Amendment 1's implementer was asked to attack its own work the way the validator attacked the last version,
+and **built a counterexample that passes the identity check while serving a stale spec**:
+
+```
+git checkout <old-sha> -- specs/T-9.md    # stage the pre-amendment spec; HEAD untouched
+HEAD == base : True            <- the new check passes
+spec on disk : "v1: build a widget"       (the amendment says gadget)
+```
+
+The check reads commits; nothing on the happy path ever reads the working tree. `git status --porcelain`
+appears only inside the failure branch. So any worktree whose spec file is dirty — a stray revert, a
+partially applied stash, a harness that populates files rather than checking them out — passes and hands
+over the wrong spec.
+
+Its own fix is the right one and costs a clause, so all four holes below close together.
+
+### 1. Read the spec from the base, always
+
+Not from the working tree, and not only on the resumed path:
+
+```
+git show <base>:<spec path>
+```
+
+The amended text already reaches for this command when an implementer is resumed; it simply did not reach
+for it on the ordinary path. Doing it always makes the working tree irrelevant to what gets read, which is
+the only way to be sure the bytes are the ones the orchestrator froze.
+
+### 2. The base must be a branch, not a commit
+
+`git rev-parse <sha>` is constant, so if an orchestrator names a SHA and then amends the spec, `HEAD == base`
+passes forever and the amendment is invisible. Identity only tracks amendments when `<base>` is a moving
+ref. Say so in the step: if you were given a bare commit, ask for the branch.
+
+### 3. Run every command in your own worktree
+
+The step never says where to run. This repository has a main checkout plus many `.claude/worktrees/agent-*`
+siblings sharing one `.git`, and orchestrator prompts hand out absolute paths — the prompt for this very
+amendment said *"in the MUTHUR repository (`C:\WorkSrc\MUTHUR`)"*, which is the **main** checkout, on
+whatever branch it happens to be sitting. Reading a spec from there passes every check and returns another
+branch's file. The implementer called this the likeliest real recurrence "because it is the mistake the
+prompt invites", and it is right: that phrasing is mine, in nine prompts.
+
+Add: confirm `git rev-parse --show-toplevel` is your own worktree, and never read a file through an absolute
+path into another checkout.
+
+### 4. The closing line still says "find"
+
+The step ends *"Never begin work against a tree whose spec you could not find"* — presence language under a
+step that no longer checks presence, and the one sentence a cold reader could take as permission to go back
+to looking for the file. Replace "could not find" with "could not verify".
+
+### What this pattern is worth recording
+
+Three rounds, three different people, three real holes, each found only by attacking the previous fix rather
+than reading it: the validator installed the kit and drove it against git; this implementer built a dirty
+tree and watched the check pass. Reading would have caught none of the three, because each version *looks*
+right. That is the argument for adversarial verification of documentation, which is normally the artefact
+least likely to get it.
