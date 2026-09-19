@@ -7,6 +7,9 @@ using Muthur.Contracts;
 
 namespace Muthur.Cli.Commands;
 
+/// <summary>One manifest entry, after validation: every field present, typed, and inside its directory.</summary>
+internal readonly record struct KitEntry(string From, string To, string Mode, bool Validator);
+
 /// <summary>Installs the agent kit (role procedures, agent definitions, spec template) into a repository.</summary>
 public static partial class KitCommands
 {
@@ -59,7 +62,9 @@ public static partial class KitCommands
         if (!Directory.Exists(repo))
             return Output.Error("repo_not_found", $"'{repo}' is not a directory.", ExitCodes.NotFound);
 
-        using var manifest = JsonDocument.Parse(File.ReadAllText(manifestPath));
+        if (!TryReadManifest(manifestPath, harnessDir, kitDir, repo, out var entries, out var problem))
+            return Output.Error("invalid_manifest", problem, ExitCodes.RuleViolation);
+
         using var stream = new MemoryStream();
         using (var json = new Utf8JsonWriter(stream))
         {
@@ -68,17 +73,15 @@ public static partial class KitCommands
             json.WriteString("repo", repo);
             var briefs = new List<(string Path, bool Validator)>();
             json.WriteStartArray("files");
-            foreach (var file in manifest.RootElement.GetProperty("files").EnumerateArray())
+            foreach (var entry in entries)
             {
-                var from = Path.GetFullPath(Path.Combine(harnessDir, file.GetProperty("from").GetString()!));
-                var to = file.GetProperty("to").GetString()!;
-                var mode = file.TryGetProperty("mode", out var m) ? m.GetString() : "replace";
+                var from = Path.GetFullPath(Path.Combine(harnessDir, entry.From));
                 var content = Expand(File.ReadAllText(from), kitDir);
-                var status = WriteKitFile(Path.Combine(repo, to), content, mode);
-                if (to.StartsWith(BriefDirectory, StringComparison.Ordinal) && to.EndsWith(".md", StringComparison.Ordinal))
-                    briefs.Add((to, file.TryGetProperty("validator", out var v) && v.GetBoolean()));
+                var status = WriteKitFile(Path.Combine(repo, entry.To), content, entry.Mode);
+                if (entry.To.StartsWith(BriefDirectory, StringComparison.Ordinal) && entry.To.EndsWith(".md", StringComparison.Ordinal))
+                    briefs.Add((entry.To, entry.Validator));
                 json.WriteStartObject();
-                json.WriteString("path", to);
+                json.WriteString("path", entry.To);
                 json.WriteString("status", status);
                 json.WriteEndObject();
             }
@@ -132,6 +135,173 @@ public static partial class KitCommands
         }
         return Output.Emit(parse, new ApiResult(200, Encoding.UTF8.GetString(stream.ToArray())));
     }
+
+    /// <summary>
+    /// The manifest's entries, or the error to return. Everything a bad manifest can do is decided here, before
+    /// a single file is written: an entry that fails leaves the repository untouched rather than half-installed.
+    /// </summary>
+    internal static bool TryReadManifest(
+        string manifestPath, string harnessDir, string kitDir, string repo,
+        out List<KitEntry> entries, out string problem)
+    {
+        entries = [];
+        problem = "";
+
+        string text;
+        try
+        {
+            text = File.ReadAllText(manifestPath);
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            problem = $"{manifestPath} could not be read: {ex.Message}";
+            return false;
+        }
+
+        JsonDocument manifest;
+        try
+        {
+            manifest = JsonDocument.Parse(text);
+        }
+        catch (JsonException ex)
+        {
+            problem = $"{manifestPath} is not valid JSON: {ex.Message}";
+            return false;
+        }
+
+        using (manifest)
+        {
+            if (manifest.RootElement.ValueKind is not JsonValueKind.Object)
+            {
+                problem = $"{manifestPath} must contain a JSON object.";
+                return false;
+            }
+            if (!manifest.RootElement.TryGetProperty("files", out var files))
+            {
+                problem = $"{manifestPath} has no \"files\" array.";
+                return false;
+            }
+            if (files.ValueKind is not JsonValueKind.Array)
+            {
+                problem = $"{manifestPath}: \"files\" must be an array, not {Kind(files)}.";
+                return false;
+            }
+
+            var kitRoot = Path.GetFullPath(kitDir);
+            var repoRoot = Path.GetFullPath(repo);
+            var index = 0;
+            var validated = new List<KitEntry>();
+            foreach (var file in files.EnumerateArray())
+            {
+                if (!TryReadEntry(manifestPath, harnessDir, kitRoot, repoRoot, file, index++, out var entry, out problem))
+                    return false;
+                validated.Add(entry);
+            }
+            entries = validated;
+        }
+        return true;
+    }
+
+    /// <summary>One entry of <c>files</c>, checked field by field so the message can name the field that is wrong.</summary>
+    private static bool TryReadEntry(
+        string manifestPath, string harnessDir, string kitRoot, string repoRoot,
+        JsonElement file, int index, out KitEntry entry, out string problem)
+    {
+        entry = default;
+        problem = "";
+
+        if (file.ValueKind is not JsonValueKind.Object)
+        {
+            problem = $"{manifestPath}: entry {index} must be an object, not {Kind(file)}.";
+            return false;
+        }
+        if (!file.TryGetProperty("from", out var fromField))
+        {
+            problem = $"{manifestPath}: entry {index} has no \"from\".";
+            return false;
+        }
+        if (fromField.ValueKind is not JsonValueKind.String)
+        {
+            problem = $"{manifestPath}: entry {index} has a \"from\" that is {Kind(fromField)}, not a string.";
+            return false;
+        }
+        if (!file.TryGetProperty("to", out var toField))
+        {
+            problem = $"{manifestPath}: entry {index} has no \"to\".";
+            return false;
+        }
+        if (toField.ValueKind is not JsonValueKind.String)
+        {
+            problem = $"{manifestPath}: entry {index} has a \"to\" that is {Kind(toField)}, not a string.";
+            return false;
+        }
+
+        var from = fromField.GetString()!;
+        var to = toField.GetString()!;
+
+        var mode = "replace";
+        if (file.TryGetProperty("mode", out var modeField))
+        {
+            if (modeField.ValueKind is not JsonValueKind.String)
+            {
+                problem = $"{manifestPath}: entry {index} ({to}) has a \"mode\" that is {Kind(modeField)}, not a string.";
+                return false;
+            }
+            mode = modeField.GetString()!;
+        }
+
+        var validator = false;
+        if (file.TryGetProperty("validator", out var validatorField))
+        {
+            if (validatorField.ValueKind is not (JsonValueKind.True or JsonValueKind.False))
+            {
+                problem = $"{manifestPath}: entry {index} ({to}) has a \"validator\" that is {Kind(validatorField)}, not a boolean.";
+                return false;
+            }
+            validator = validatorField.GetBoolean();
+        }
+
+        // Path.Combine hands back an absolute 'from' unchanged and follows '..' when it is relative, so a
+        // manifest picks its own source unless the resolved path is required to be under the kit.
+        var source = Path.GetFullPath(Path.Combine(harnessDir, from));
+        if (!IsInside(source, kitRoot))
+        {
+            problem = $"{manifestPath}: entry {index} ({to}) reads \"{from}\", which is outside the kit directory.";
+            return false;
+        }
+        if (!File.Exists(source))
+        {
+            problem = $"{manifestPath}: entry {index} ({to}) reads \"{from}\", which does not exist.";
+            return false;
+        }
+
+        // The same for the destination, plus the rooted case: Path.Combine(repo, to) is just 'to' when 'to' is
+        // absolute, which is how a manifest can write to C:\Windows while --repo says otherwise.
+        if (Path.IsPathRooted(to) || !IsInside(Path.GetFullPath(Path.Combine(repoRoot, to)), repoRoot))
+        {
+            problem = $"{manifestPath}: entry {index} writes \"{to}\", which is outside the repository.";
+            return false;
+        }
+
+        // Expand() reads whatever a {{core:...}} token names, so the token is checked here rather than
+        // discovered halfway through the write loop.
+        foreach (var name in IncludePattern().Matches(File.ReadAllText(source)).Select(m => m.Groups[1].Value))
+            if (!File.Exists(Path.Combine(kitRoot, "core", name)))
+            {
+                problem = $"{manifestPath}: entry {index} ({to}) includes \"{{{{core:{name}}}}}\", which does not exist.";
+                return false;
+            }
+
+        entry = new KitEntry(from, to, mode, validator);
+        return true;
+    }
+
+    /// <summary>The kind as the founder wrote it in the file: <c>number</c>, <c>string</c>, <c>null</c>.</summary>
+    private static string Kind(JsonElement element) => element.ValueKind.ToString().ToLowerInvariant();
+
+    /// <summary>Containment by full path, which a string test on the manifest's own spelling cannot give.</summary>
+    private static bool IsInside(string path, string root) =>
+        path.StartsWith(root.TrimEnd(Path.DirectorySeparatorChar) + Path.DirectorySeparatorChar, StringComparison.OrdinalIgnoreCase);
 
     private static string Expand(string template, string kitDir) =>
         IncludePattern().Replace(template, match => File.ReadAllText(Path.Combine(kitDir, "core", match.Groups[1].Value)).Trim());
