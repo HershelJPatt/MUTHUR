@@ -249,3 +249,63 @@ Every one of those is a founder action in the ledger, indistinguishable from the
   a text box.
 - **Editing a brief in the browser.** Briefs are versioned files served by `role brief`; a textarea that
   becomes their source of truth needs a decision about where the file then lives.
+
+## Amendment 1 — the harness select named vendors, and there is a fourth answer (2026-09-19)
+
+Unit A built the Agents control as the spec wrote it and then reported the consequence: a `<select>` of
+`claude`, `codex`, `generic` is **the first time anything in `Muthur.Server` names a model vendor**. A `grep`
+over that project for those words returned zero matches before the commit. `CLAUDE.md` is explicit —
+*"Nothing in Contracts/Core/Data/Server names a model vendor. Harness knowledge lives in `Muthur.Launch` and
+`kit/<harness>/`"* — and `Muthur.Launch/Harness.cs:20` says *"The only place vendor CLIs are named."*
+
+**That rule is load-bearing, not decorative.** It is what disqualified option A in T-19 two tasks ago, on the
+grounds that making a capability depend on which vendor staffed a tier is vendor knowledge leaking into the
+organization chart. Shipping a violation of it in the same session would be incoherent.
+
+The implementer also showed why the obvious fix is worse: sourcing the list from
+`Muthur.Launch.Harnesses.All` gives `claude`, `codex`, `codex-oss` — the **worker adapter** list, which has
+no `generic`, so a founder could no longer register a generic agent from the console. A functional regression
+bought to satisfy a layering rule is not a fix.
+
+### The fourth answer
+
+An `<input list="…">` with a `<datalist>` the hub fills from **data it already holds**: the harnesses named in
+the tier catalog (`{MUTHUR_HOME}/harnesses.json`, which `muthur harness tiers` already reads) unioned with the
+distinct `Harness` values of registered agents.
+
+- **No vendor is named in `Muthur.Server`.** The strings come from the founder's own configuration and their
+  own ledger, which is exactly where the rule wants harness knowledge to live.
+- **No regression.** A datalist suggests without constraining, so `generic` — or anything else — still
+  registers. `AgentService.RegisterAsync` accepts any non-empty string, and the console now matches the API
+  behind it, where a `<select>` was quietly narrower.
+- **The founder still does not have to remember spellings**, which is the task's whole reason for existing.
+  They get the list without being locked to it.
+- On a fresh hub the list may be short or empty. That is honest: it says what this organization actually
+  uses, and the field still works as free text.
+
+**Tier stays a `<select>`.** `mastermind` / `implementer` / `utility` are MUTHUR's own vocabulary, not a
+vendor's, so no rule objects to naming them.
+
+### The layout decision, made once
+
+Four stacked `flex: 1` panels each get a quarter of the viewport with their own scrollbar, which cramps a
+form. The console scrolls as one column instead, via a **new class in `app.css` used by the console's
+container** — `.page` itself is untouched, because every other page depends on it. The class is named for
+what it does, not for the console, so the next stacked-form page can use it.
+
+### Ratified from Unit A
+
+- The `<dl class="kv">` with a real `<label for>` inside each `dt` — associated as well as styled, reusing an
+  existing class rather than inventing one.
+- **A test that every class the page renders exists in `app.css`, and that the body contains no `style="`.**
+  That turns a house rule from prose into something mechanical, which is worth more than the control it was
+  written for.
+- A test that a refused registration carries `AgentService`'s own message and `invalid_name` code — which
+  makes *"render `ex.Message`, never invent wording"* testable without a click, on a page where I had assumed
+  behaviour was unreachable by a machine.
+- `ClearOnce()` and the comment on `_token`.
+
+### Noted, not fixed
+
+`AgentService.RegisterAsync` validates the harness against nothing. With a datalist rather than a select, the
+console no longer pretends otherwise — it suggests what exists and accepts what the API accepts.
