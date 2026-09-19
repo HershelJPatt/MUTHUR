@@ -12,7 +12,9 @@ namespace Muthur.Server.Tests;
 
 public sealed class SystemTests : IDisposable
 {
-    private readonly HubFactory _hub = new();
+    // A_disposed_object_on_a_hub_that_is_not_stopping_is_still_an_internal_error provokes the unhandled
+    // error it then reads out of this hub's log, so the log is a fixture rather than evidence.
+    private readonly HubFactory _hub = new() { ExpectsLoggedErrors = true };
 
     public void Dispose() => _hub.Dispose();
 

@@ -106,7 +106,7 @@ public sealed class DatabaseBackupTests : IDisposable
     {
         var dir = NewTempDirectory();
         var path = Path.Combine(dir, MuthurEnvironment.DatabaseFile);
-        SeedUnmigratedDatabase(path);
+        HubTestExtensions.SeedUnmigratedDatabase(path);
         var backups = Directory.CreateDirectory(Path.Combine(dir, BackupsDirectory));
         foreach (var day in Enumerable.Range(11, 6))
             await File.WriteAllTextAsync(Path.Combine(backups.FullName, $"muthur-202609{day}-120000-before-old_M.db"), "stale");
@@ -135,7 +135,7 @@ public sealed class DatabaseBackupTests : IDisposable
     public async Task A_hub_with_migrations_to_apply_copies_the_database_and_starts()
     {
         var dir = NewTempDirectory();
-        SeedUnmigratedDatabase(Path.Combine(dir, MuthurEnvironment.DatabaseFile));
+        HubTestExtensions.SeedUnmigratedDatabase(Path.Combine(dir, MuthurEnvironment.DatabaseFile));
 
         using var hub = new HubFactory { DataDir = dir };
         var status = await hub.CreateClient().GetFromJsonAsync(Routes.Status, MuthurJsonContext.Default.StatusResponse);
@@ -152,7 +152,7 @@ public sealed class DatabaseBackupTests : IDisposable
     public async Task A_backup_that_cannot_be_written_does_not_stop_the_hub()
     {
         var dir = NewTempDirectory();
-        SeedUnmigratedDatabase(Path.Combine(dir, MuthurEnvironment.DatabaseFile));
+        HubTestExtensions.SeedUnmigratedDatabase(Path.Combine(dir, MuthurEnvironment.DatabaseFile));
         // A file where the directory has to go: nothing can be copied into it.
         await File.WriteAllTextAsync(Path.Combine(dir, BackupsDirectory), "not a directory");
 
@@ -181,16 +181,6 @@ public sealed class DatabaseBackupTests : IDisposable
         Directory.CreateDirectory(dir);
         _temp.Add(dir);
         return dir;
-    }
-
-    /// <summary>A non-empty SQLite file that EF has never migrated, so every migration is pending.</summary>
-    private static void SeedUnmigratedDatabase(string path)
-    {
-        using var connection = new SqliteConnection($"Data Source={path};Pooling=False");
-        connection.Open();
-        using var command = connection.CreateCommand();
-        command.CommandText = "CREATE TABLE probe (note TEXT);";
-        command.ExecuteNonQuery();
     }
 
     private static async Task ExecuteAsync(SqliteConnection connection, string sql)
