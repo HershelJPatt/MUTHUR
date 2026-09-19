@@ -2043,4 +2043,103 @@ public sealed class ConductorTests : IDisposable
 
         Assert.Equal(System.Net.HttpStatusCode.Unauthorized, refused.StatusCode);
     }
+
+    [Fact]
+    public async Task Status_says_which_way_the_most_expensive_switch_was_last_thrown()
+    {
+        // Without this a founder can only learn whether the hub may start orchestrators by reading the ledger for
+        // the last time it changed - which is a question about history standing in for one about state.
+        Assert.False((await Conductor.StatusAsync()).Orchestrators);
+
+        var on = await ReadStatusAsync(await OrchestratorsAsync(true));
+        Assert.True(on.Orchestrators);
+
+        // And the rest of the card reads exactly as a founder saw it yesterday: this switch is a new line on it,
+        // not a change to the numbers beside it.
+        Assert.True(on.Enabled);
+        Assert.Equal(2, on.MaxSessions);
+        Assert.Equal(2, on.Ceiling);
+        Assert.Equal("Muthur:ConductorMaxSessions.", on.CeilingReason);
+
+        var off = await ReadStatusAsync(await OrchestratorsAsync(false));
+        Assert.False(off.Orchestrators);
+    }
+
+    [Fact]
+    public async Task The_answer_survives_the_process_that_heard_it_and_is_readable_over_HTTP()
+    {
+        (await OrchestratorsAsync(true)).EnsureSuccessStatusCode();
+
+        using var restarted = new HubFactory { DataDir = _hub.DataDir };
+        var status = await restarted.CreateClient().GetFromJsonAsync(Routes.Conductor, MuthurJsonContext.Default.ConductorStatusDto);
+
+        Assert.True(status!.Orchestrators, "the switch is in the database, not in the process that was told");
+    }
+
+    [Fact]
+    public async Task A_stalled_orchestrator_is_not_reported_to_the_founder_as_a_validator()
+    {
+        // The wording of a failure is the whole of what the founder has to go on at three in the morning. Told a
+        // validator could not start - for a task no validator has been asked to look at, because nobody has even
+        // claimed it - they go looking at validation, which is not where this broke.
+        _hub.Settings["Muthur:ConductorMaxAttempts"] = "2";
+        var author = await OrchestratingAsync();
+        await author.AddTaskAsync("Nothing can start it");
+        _hub.Orchestrators.Throw = new ValidatorLaunchException("No available mastermind candidate to orchestrate T-1.");
+
+        for (var pass = 0; pass < 3; pass++)
+        {
+            await Conductor.RunPassAsync();
+            await SettledAsync();
+        }
+
+        var told = Assert.Single(await FounderMessagesAsync());
+        Assert.StartsWith(
+            "The conductor could not start an orchestrator for T-1 (#orchestrator) 2 times and has stopped trying: " +
+            "No available mastermind candidate to orchestrate T-1.",
+            told.Body);
+        Assert.DoesNotContain("validator", told.Body, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task A_founder_told_nothing_claimed_the_task_is_not_sent_to_go_and_validate_it()
+    {
+        // The neighbouring wrong place. "None of them reached a verdict … validate it yourself" is sound advice
+        // about validation and nonsense about a task sitting unclaimed in the backlog: what failed is that no
+        // session ever started it.
+        _hub.Settings["Muthur:ConductorMaxAttempts"] = "2";
+        var author = await OrchestratingAsync();
+        await author.AddTaskAsync("Nobody claims it");
+
+        for (var pass = 0; pass < 3; pass++)
+        {
+            await Conductor.RunPassAsync();
+            await SettledAsync();
+        }
+
+        var told = Assert.Single(await FounderMessagesAsync());
+        Assert.StartsWith(
+            "The conductor started 2 orchestrators for T-1 (#orchestrator) and none of them claimed it. They ran " +
+            "and exited cleanly, so something is stopping them from starting the task at all rather than failing " +
+            "at it. Look at the bus for what they said, then re-spec the task, take it yourself, or raise " +
+            "Muthur:ConductorMaxAttempts.",
+            told.Body);
+        Assert.Contains("retries by itself within", told.Body, StringComparison.Ordinal);   // the half-open probe, on this message too
+    }
+
+    [Theory]
+    [InlineData("git push*")]
+    [InlineData("git merge*")]
+    [InlineData("git rebase*")]
+    [InlineData("git checkout main*")]
+    [InlineData("git switch main*")]
+    [InlineData("gh*")]
+    public void No_session_the_conductor_starts_may_push_merge_or_take_the_default_branch(string forbidden)
+    {
+        // Asserted as a floor rather than as the list itself, so adding a guard passes and removing one fails.
+        // Both launchers read this array: it is one boundary, and a second copy of a boundary is how one of them
+        // quietly grows a hole while every test still passes.
+        Assert.Contains(forbidden, SessionCommands.Denied);
+        Assert.Contains("muthur*", SessionCommands.Allowed);   // and it can still talk to the hub
+    }
 }

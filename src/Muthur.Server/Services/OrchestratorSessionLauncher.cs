@@ -46,8 +46,8 @@ public sealed class OrchestratorSessionLauncher(
                 Prompt: Prompt(assignment, candidate),
                 Model: candidate.Model,
                 GitCommonDirectory: null,
-                AllowedCommands: Allowed,
-                DeniedCommands: Denied,
+                AllowedCommands: SessionCommands.Allowed,
+                DeniedCommands: SessionCommands.Denied,
                 ScratchDirectory: scratch,
                 ReasoningEffort: candidate.ReasoningEffort),
             candidate => IdentityFor(assignment, candidate, ct),
@@ -94,14 +94,6 @@ public sealed class OrchestratorSessionLauncher(
         account is { Length: > 0 }
             ? ledger.MutateAsync(Caller.Founder, m => HarnessService.ApplyAsync(m, account, null, ct), ct)
             : Task.CompletedTask;
-
-    /// <summary>
-    /// The same lists a validator session runs under, and kept the same on purpose: an orchestrator does more than
-    /// a validator, but nothing it does needs more reach than the hub's own CLI and the tools to build with.
-    /// </summary>
-    private static readonly string[] Allowed = ["muthur*", "git*", "dotnet*", "pwsh*", "powershell*"];
-
-    private static readonly string[] Denied = ["git push*", "git merge*", "git rebase*", "git checkout main*", "git switch main*", "gh*"];
 
     /// <summary>
     /// Every non-limited candidate for the tier, in catalog order. No harness is moved to the back: a validator
