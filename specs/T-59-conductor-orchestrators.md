@@ -537,3 +537,69 @@ could only see it because it had the full message body in front of it; I had quo
 Left as they are, deliberately: `_lastAction`'s strings still name the role key rather than the kind, and the
 `(#orchestrator)` parenthetical is redundant beside "an orchestrator". Both are accurate, and one message
 format is worth more than two that read slightly better.
+
+## Amendment 5 — a session the hub started must not outlive the hub
+
+Validation failed T-59 on a defect it reproduced exactly: stop the hub while a session is running, start it
+again, and a second session is staffed for the same task. Two orchestrators, one task — the thing Unit C's
+acceptance promises never happens, and the most expensive way this system can fail.
+
+The validator's reproduction, on the installed product with a stand-in harness so nothing was spent: hub PID
+57396 staffs `orchestrator-t-9` as PID 71032; `down` then `up`; hub PID 48708 staffs `orchestrator-t-9`
+again as PID 26832. Both children alive, both told to claim T-9, `status` reporting `running=1`.
+
+### Root cause, and it is one argument
+
+`ConductorService.RunSessionAsync` launches with **`CancellationToken.None`**:
+
+```csharp
+try { await launcher.StartAsync(assignment, CancellationToken.None); }
+```
+
+`_running` is in-memory, so a restart begins with an empty set and re-plans a task whose process is still
+alive. The child is not merely unaccounted for — it is deliberately detached from the host's lifetime.
+
+`ProcessRunner` already does the right thing when its token is cancelled:
+
+```csharp
+catch (OperationCanceledException)
+{
+    try { process.Kill(entireProcessTree: true); } catch (InvalidOperationException) { }
+    if (ct.IsCancellationRequested) throw;
+```
+
+So the machinery exists and is simply not wired to anything.
+
+### The fix
+
+`ConductorService` owns a `CancellationTokenSource` for the sessions it starts, created with the service and
+cancelled when the host stops. Both `RunSessionAsync` and the orchestrator equivalent pass **that** token to
+`StartAsync` in place of `CancellationToken.None`. `ConductorWorker` cancels it as it stops, before the host
+exits, so every child is killed with its process tree.
+
+One ledger event when it fires — `conductor.sessions_terminated` with `{ count }` — because a founder
+restarting a hub should be able to see that work was cut off rather than infer it from a gap.
+
+Nothing else changes. In particular the conductor still does not persist `_running` across restarts and does
+not need to: with the children dead, an empty set after restart is *true*.
+
+### Why killing is right, rather than adopting or persisting
+
+A session that outlives the hub cannot be accounted for by anything — not `status`, not the ceiling, not the
+stall counter — so letting it run is strictly worse than ending it. And ending it loses less than it appears
+to, because the rest of the machine already handles what follows: the killed session's task claim lapses,
+`LeaseSweeper` returns the task to the backlog inside thirty seconds keeping its branch and spec, and T-60
+then plans it with `Resuming: true` so the next session is told it is continuing rather than starting. The
+work in the branch survives; only the process is lost.
+
+### Acceptance
+
+- A fake launcher that blocks until its token is cancelled: cancelling the conductor's session lifetime ends
+  the call, and the ledger records `conductor.sessions_terminated`.
+- After that cancellation `RunningCount` is 0, so a subsequent pass plans the task again exactly once.
+- A session that finishes normally records nothing about termination.
+- Driven by the fake clock and observable conditions, never a sleep.
+
+The validator's end-to-end reproduction is the real acceptance: `down` and `up` with a stand-in harness
+holding a session must leave no surviving child, and must not produce two `conductor.staffing` events for one
+task.
