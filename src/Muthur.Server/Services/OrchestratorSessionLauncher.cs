@@ -110,13 +110,48 @@ public sealed class OrchestratorSessionLauncher(
     private Task<string?> RepositoryPathAsync(string projectKey, CancellationToken ct) =>
         ledger.ReadAsync((db, _) => db.Projects.Where(p => p.Key == projectKey).Select(p => p.RepoPath).SingleOrDefaultAsync(ct), ct);
 
+    /// <summary>
+    /// How the session is told what it has been handed. A task that already carries a spec or a branch has been
+    /// worked on before — the sweep that returned it to the backlog kept both — and a session told to start it
+    /// from nothing writes the spec a second time and builds over a branch it never read. The rules below are the
+    /// same either way; only this changes, because only this is different.
+    /// </summary>
+    private static string Opening(OrchestratorAssignment assignment)
+    {
+        if (!assignment.Resuming)
+            return $"""
+                Claim {assignment.TaskKey} ("{assignment.TaskTitle}") and take it from claim to landing:
+
+                    muthur task claim {assignment.TaskKey}
+                """;
+
+        // Who it was is worth naming: the next session is about to read the ledger, and a name is how it finds the
+        // part of it that matters. Nothing always knows — a task released before it was ever claimed has no holder
+        // to name — and a resumption nobody can attribute is still a resumption, so it is never sent back to the
+        // fresh-start wording for want of a name.
+        var from = assignment.PreviousOwner is { Length: > 0 } previous
+            ? $"`{previous}`, whose session stopped"
+            : "an earlier session that stopped";
+
+        return $"""
+            You are taking over {assignment.TaskKey} ("{assignment.TaskTitle}") from {from}. This is a
+            resumption, not a fresh start — the task already has work on it: a frozen spec, a branch, or both.
+
+                muthur task claim {assignment.TaskKey}
+                muthur task show {assignment.TaskKey}
+                muthur log --task {assignment.TaskKey}
+
+            Read those three before you write anything. The branch on the task is the work so far; the ledger is what
+            the last session did and why it stopped. Continue from there rather than starting again — and if the branch
+            is further along than the ledger suggests, trust the branch and say so in your first heartbeat.
+            """;
+    }
+
     internal static string Prompt(OrchestratorAssignment assignment, HarnessCandidate candidate) =>
         $"""
         You are a mastermind orchestrator in this MUTHUR organization, acting as the agent in $MUTHUR_AGENT.
 
-        Claim {assignment.TaskKey} ("{assignment.TaskTitle}") and take it from claim to landing:
-
-            muthur task claim {assignment.TaskKey}
+        {Opening(assignment)}
 
         Then follow the orchestrate procedure in this repository. Exit code 3 on the claim means another session
         already has it: stop immediately and do nothing else.

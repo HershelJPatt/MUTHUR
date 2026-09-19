@@ -11,6 +11,10 @@ Your session was started with `MUTHUR_AGENT=<name>`. If `muthur agent whoami` fa
 `muthur agent register --name <name> --harness <harness> --model <model> --tier mastermind`.
 Every `muthur` call renews your leases. When idle for long stretches, run
 `muthur agent heartbeat --summary "<what you are doing>"` — the summary is what the founders see.
+Heartbeat before anything that will take more than a few minutes — a full `dotnet test`, an AOT publish, a
+delegated worker — and again when it returns. A heartbeat renews the claim on every task you own; a session
+that is silent for longer than the claim lease looks exactly like one that has died, and the hub returns your
+task to the backlog for someone else to pick up.
 
 ## The loop
 
