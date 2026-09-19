@@ -105,7 +105,9 @@ public sealed class ReceiptsService(Ledger ledger)
                     // report nothing are not a random sample, so a total would omit the largest category.
                     Money(p, "costUsd"),
                     e.Type == "worker.finished",
-                    e.At);
+                    e.At,
+                    // Null on every run an orchestrator started itself, because the payload carries no such key.
+                    Text(p, "parent"));
             })
             .ToList();
 

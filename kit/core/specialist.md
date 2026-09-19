@@ -25,6 +25,9 @@ Write each line so an implementer could take it with no more context than the sp
 the same bar the spec's own units are held to, and the reason the plan goes through the orchestrator is that
 it can be read before anyone spends money on it.
 
+Every unit you plan will be staffed with `--parent` pointing at this run, so the ledger keeps the tree and the
+cost of the fan-out stays attributable to the work that caused it.
+
 A plan is not a way out of the work. If the subtree is one agent's worth, do it yourself and report no plan.
 If you return a plan, say in your report what you have already established — the design you chose and why —
 because that is the expertise the units are built on and it does not survive in the lines above.

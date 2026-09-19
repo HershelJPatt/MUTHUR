@@ -34,12 +34,14 @@ public static class WorkerCommands
         var baseRef = new Option<string?>("--base") { Description = "Branch the worker starts from (default: the current branch)." };
         var branch = new Option<string?>("--branch") { Description = "Branch to create for the worker (default: worker/<task>-<unit>-<id>)." };
         var note = new Option<string?>("--note") { Description = "One extra instruction for the worker." };
+        var parent = new Option<string?>("--parent")
+            { Description = "The worker run whose plan this unit came from. Recorded so a two-level fan-out is readable in the ledger." };
         var timeout = new Option<int>("--timeout-minutes") { DefaultValueFactory = _ => 60 };
         var run = new Command("run", "Run one worker in its own worktree and print its report. The worker gets no hub identity.")
-            { tier, spec, unit, task, harness, baseRef, branch, note, timeout };
+            { tier, spec, unit, task, harness, baseRef, branch, note, parent, timeout };
         run.SetAction((parse, ct) => RunAsync(parse, new RunOptions(
             parse.GetValue(tier)!, parse.GetValue(spec)!, parse.GetValue(unit), parse.GetValue(task), parse.GetValue(harness),
-            parse.GetValue(baseRef), parse.GetValue(branch), parse.GetValue(note), parse.GetValue(timeout)), ct));
+            parse.GetValue(baseRef), parse.GetValue(branch), parse.GetValue(note), parse.GetValue(timeout), parse.GetValue(parent)), ct));
         worker.Subcommands.Add(run);
     }
 
@@ -92,7 +94,7 @@ public static class WorkerCommands
         }
     }
 
-    private sealed record RunOptions(string Tier, string Spec, string? Unit, string? Task, string? Harness, string? Base, string? Branch, string? Note, int TimeoutMinutes);
+    private sealed record RunOptions(string Tier, string Spec, string? Unit, string? Task, string? Harness, string? Base, string? Branch, string? Note, int TimeoutMinutes, string? Parent = null);
 
     /// <summary>
     /// The contract this tier is handed. A mastermind is given a problem area, not a frozen unit, so handing it
@@ -191,7 +193,7 @@ public static class WorkerCommands
         var commits = (await Git(worktree, "log", "--oneline", $"{baseRef}..HEAD") ?? "").Split('\n', StringSplitOptions.RemoveEmptyEntries);
 
         await hub.PostAsync(Routes.WorkerRuns, new WorkerRunReport(o.Task, o.Tier, final.Candidate.Harness, final.Candidate.Model, final.Candidate.Account,
-            branchName, o.Unit, success, (int)final.Duration.TotalSeconds, final.Outcome.CostUsd), MuthurJsonContext.Default.WorkerRunReport, ct);
+            branchName, o.Unit, success, (int)final.Duration.TotalSeconds, final.Outcome.CostUsd, o.Parent), MuthurJsonContext.Default.WorkerRunReport, ct);
 
         using var stream = new MemoryStream();
         using (var json = new Utf8JsonWriter(stream, new JsonWriterOptions { Encoder = System.Text.Encodings.Web.JavaScriptEncoder.UnsafeRelaxedJsonEscaping }))
