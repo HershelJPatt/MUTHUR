@@ -35,13 +35,15 @@ if (-not (Test-Path $Root)) {
 # "{timestamp} {level,-11} {category}: {message}". Read line by line and stop at the first match: a log can
 # be megabytes and one Error line is the whole answer.
 #
-# Three answers, not two, and the read never throws. FileLoggerProvider holds muthur.log open with
-# FileShare.ReadWrite; [IO.File]::ReadLines asks for FileShare.Read, which that writer's own write access
-# refuses. So a log we cannot read means another process still owns this directory -- the one fact that
-# should stop us touching it -- and that is a different fact from a log that recorded an error, so it gets
-# its own verdict and its own counter. (TestHubDirectories reads with the wider share mode on purpose: it
-# reads its own hub's log after disposal, where a refusal would lose exactly the evidence worth keeping.)
-function Test-LoggedAnError([string]$LogPath) {
+# A verdict rather than a yes or no, because reading the log answers two separate questions and the read
+# itself never throws. FileLoggerProvider holds muthur.log open with FileShare.ReadWrite; [IO.File]::ReadLines
+# asks for FileShare.Read, which that writer's own write access refuses. So a log we cannot read means
+# another process still owns this directory -- the one fact that should stop us touching it -- and that is a
+# different fact from a log that recorded an error. Each gets its own verdict and its own counter, because an
+# operator reading the summary acts on them differently. (TestHubDirectories reads with the wider share mode
+# on purpose: it reads its own hub's log after disposal, where a refusal would lose the evidence worth
+# keeping.)
+function Get-LogVerdict([string]$LogPath) {
     try {
         foreach ($line in [IO.File]::ReadLines($LogPath)) {
             $tokens = $line.Split([char[]]@(), 3, [StringSplitOptions]::RemoveEmptyEntries)
@@ -110,7 +112,7 @@ try {
         $log = Join-Path $dir 'muthur.log'
         # A directory with no log has nothing to preserve, which is also why muthur-cli-tests empties completely.
         if (-not $All -and [IO.File]::Exists($log)) {
-            $answer = Test-LoggedAnError $log
+            $answer = Get-LogVerdict $log
             if ($answer.Verdict -ceq 'error') {
                 $kept++
                 continue
