@@ -328,3 +328,42 @@ own suite contradicted its handover, and the suite was right.
 - The Verification section above now says **fetch**, not "open". That one word is what three sessions read as
   a browser requirement, and correcting it only in an amendment would leave the next validator reading the
   same instruction. This is T-46's rule applied to the spec that motivated it.
+
+## Proof of Amendment 1 (2026-09-19)
+
+Branch rebased onto `main` (one conflict, `app.css`, where T-30's `.pill-verdict-blocked` and this task's
+`.pill-ungated` were added at the same place; both kept).
+
+```
+dotnet build   →  0 Warning(s), 0 Error(s)
+dotnet test
+  Muthur.Launch.Tests    23/23
+  Muthur.Core.Tests      3708/3708
+  Muthur.Cli.Tests       60/60
+  Muthur.Server.Tests    275/275
+```
+
+The whole end-to-end, with an installed CLI from this branch against a scratch hub on port 7496 — **no
+browser at any point**:
+
+```
+project add nogate --founder                  →  "requiredValidators":[], "ungated":true
+project add gated  --validator validator      →  "requiredValidators":["validator"], "ungated":false
+
+GET /projects
+  pill-ungated occurrences : 1
+  Virtualize in markup     : False
+  nogate → <span class="pill pill-ungated">ungated</span>
+           none required — implemented goes straight to validated
+  gated  → no pill; <span class="pill pill-role">validator</span>
+
+project set nogate --validator validator      →  ungated: False
+GET /projects
+  pill-ungated occurrences : 0
+```
+
+The gate appearing and disappearing is visible in the fetched HTML both ways. Scratch hub stopped; the live
+hub's `processId` 63224 and `instanceId` 25c38c19… are unchanged.
+
+The negative the founder asked for is unchanged and untested by this round: `land` stays permissive
+everywhere, per request #2.
