@@ -1,0 +1,106 @@
+@inherits LivePanel
+@inject ConductorService Conductor
+@inject TimeProvider Clock
+
+<section class="panel">
+    <div class="panel-head">
+        <span class="panel-title">Conductor</span>
+        <span class="panel-sub">@(_status.Enabled ? $"{_status.Running} of {_status.MaxSessions} running" : "off")</span>
+    </div>
+    <div class="panel-body">
+        <div class="btn-row">
+            @if (_status.Enabled)
+            {
+                <button class="btn btn-stop" @onclick="() => SetAsync(false)">Turn off</button>
+            }
+            else
+            {
+                <button class="btn btn-go" @onclick="() => SetAsync(true)">Turn on</button>
+            }
+        </div>
+        @if (_error is { } error)
+        {
+            <div class="error-text">@error</div>
+        }
+
+        @* Idle and wedged both read "0 running", which is the whole reason the last pass is here beside it. *@
+        <div class="agent-meta">
+            @if (_status.LastPass is { } pass)
+            {
+                <span>last pass @Format.Age(pass, _now)</span>
+                <span>@(_status.LastAction ?? "nothing to do")</span>
+            }
+            else
+            {
+                <span>no pass yet</span>
+            }
+        </div>
+
+        @if (_status.Sessions.Count == 0)
+        {
+            <div class="empty">no sessions running</div>
+        }
+        @foreach (var session in _status.Sessions)
+        {
+            <div class="agent">
+                <div class="agent-head">
+                    <a class="agent-name" href="/tasks/@session.Task">@session.Task</a>
+                    <span class="pill pill-role">@session.Role</span>
+                </div>
+            </div>
+        }
+
+        @* Last and loudest: a stall is the one conductor state a founder has to act on. *@
+        @foreach (var stall in _status.Stalls)
+        {
+            <div class="agent">
+                <div class="agent-head">
+                    <a class="agent-name" href="/tasks/@stall.Task">@stall.Task</a>
+                    <span class="pill pill-blocked">stalled</span>
+                    <span class="pill pill-role">@stall.Role</span>
+                </div>
+                <div class="agent-meta">
+                    <span>@stall.Reason</span>
+                    <span>@stall.Failures failures</span>
+                    @if (stall.NextProbeAt is { } probe)
+                    {
+                        <span>next probe @Format.Age(probe, _now)</span>
+                    }
+                </div>
+            </div>
+        }
+    </div>
+</section>
+
+@code {
+    private ConductorStatusDto _status = new(false, 0, 0, 0, 0, 0, 0, null, null, [], []);
+    private DateTimeOffset _now;
+    private string? _error;
+
+    // The last-pass age and the next-probe time move on their own, so refresh even when nothing is written.
+    protected override TimeSpan? ClockInterval => TimeSpan.FromSeconds(30);
+
+    protected override bool IsRelevant(Muthur.Core.Entities.LedgerEvent e) =>
+        e.Type.StartsWith("conductor.", StringComparison.Ordinal);
+
+    protected override async Task LoadAsync()
+    {
+        _now = Clock.GetUtcNow();
+        _status = await Conductor.StatusAsync();
+    }
+
+    private async Task SetAsync(bool enabled)
+    {
+        try
+        {
+            await Conductor.SetEnabledAsync(Caller.Founder, enabled);
+        }
+        catch (Muthur.Core.MuthurException ex)
+        {
+            _error = ex.Message;
+            return;
+        }
+        _error = null;
+        await ReloadNowAsync();
+    }
+}

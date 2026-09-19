@@ -87,6 +87,44 @@ public sealed class ConductorService(Ledger ledger, MuthurOptions options, TimeP
     /// <summary>Sessions the conductor believes it has running, by "T-n/role".</summary>
     public int RunningCount { get { lock (_running) return _running.Count; } }
 
+    /// <summary>Which pairs those sessions are for. "Enabled, 2 running" does not say which two.</summary>
+    private List<ConductorSessionDto> Sessions()
+    {
+        lock (_running)
+            return [.. _running.Select(Split).Select(p => new ConductorSessionDto(p.Task, p.Role))
+                .OrderBy(s => s.Task, StringComparer.Ordinal).ThenBy(s => s.Role, StringComparer.Ordinal)];
+    }
+
+    /// <summary>
+    /// Only the pairs that have actually stalled. A pair with one failure and two attempts left is not
+    /// something a founder acts on, and listing it would bury the ones that are.
+    /// </summary>
+    private List<ConductorStallDto> Stalls()
+    {
+        lock (_stalls)
+            return [.. _stalls
+                .Where(e => e.Value.StalledAt is not null)
+                .Select(e =>
+                {
+                    var (task, role) = Split(e.Key);
+                    return new ConductorStallDto(task, role, Describe(e.Value.Last), e.Value.Failures,
+                        e.Value.StalledAt + TimeSpan.FromMinutes(options.ConductorStallProbeMinutes));
+                })
+                .OrderBy(s => s.Task, StringComparer.Ordinal).ThenBy(s => s.Role, StringComparer.Ordinal)];
+    }
+
+    /// <summary>The keys of both dictionaries are "T-n/role"; a role key never contains '/'.</summary>
+    private static (string Task, string Role) Split(string key) =>
+        key.IndexOf('/') is var slash and >= 0 ? (key[..slash], key[(slash + 1)..]) : (key, "");
+
+    /// <summary>Words rather than the enum's names: this crosses HTTP and is read by a person.</summary>
+    private static string Describe(Unproductive outcome) => outcome switch
+    {
+        Unproductive.NeverStarted => "never started",
+        Unproductive.RanAndFailed => "ran and failed",
+        _ => "no verdict",
+    };
+
     public async Task<ConductorStatusDto> StatusAsync(CancellationToken ct = default) => new(
         await EnabledAsync(ct),
         RunningCount,
@@ -96,7 +134,9 @@ public sealed class ConductorService(Ledger ledger, MuthurOptions options, TimeP
         options.EffectiveConductorIntervalSeconds,   // what it runs at, not what was asked for
         options.ConductorStallProbeMinutes,
         _lastPass,
-        _lastAction);
+        _lastAction,
+        Sessions(),
+        Stalls());
 
     /// <summary>The founder turns staffing on and off; the decision is in the ledger like any other.</summary>
     public async Task<ConductorStatusDto> SetEnabledAsync(Caller caller, bool enabled, CancellationToken ct = default)

@@ -167,3 +167,26 @@ Passing is 0 warnings, 0 errors, every test green, and those patterns present.
 
 T-6 lands `<RolesPanel />` into the same two `aside` blocks. The conflict is one adjacent line in each file
 and nothing else; take both panels, `RolesPanel` first.
+
+## Proof
+
+`dotnet build`: clean, 0 warnings. `dotnet test`: 3736 Core, 23 Launch, 77 Cli, 345 Server — all green.
+
+Load-bearing checked by a targeted revert — `StatusAsync` returning `[]` for both new lists while everything
+else, including the panel and the DTOs, stays. Three of the five fail:
+`A_running_session_says_which_task_and_role_it_is_for`,
+`A_pair_with_attempts_left_is_not_a_stall_and_one_that_has_run_out_is`, and
+`Turning_staffing_on_clears_the_stalls_the_page_was_showing`. The two that still pass are the ones about the
+switch and the last pass, which is right: those read fields that already existed.
+
+### What is asserted off the prerendered HTML
+
+`Conductor`, `1 of 2 running`, `href="/tasks/T-1"`, `>win-validator<`, `no sessions running`, `last pass`,
+`no pass yet`, `>Turn on<`, `>Turn off<`, `class="panel-sub">off<`, `pill-blocked`, `never started`,
+`3 failures`, `next probe`. No browser, and none of it inside a `<Virtualize>`.
+
+### The stall list is bounded by the state it reports
+
+`Turning_staffing_on_clears_the_stalls_the_page_was_showing` exists because a new read of old state is where
+a list starts outliving its source. Turning staffing on already clears `_stalls`; the panel had to be shown
+to clear with it rather than keep a row the conductor no longer believes.
