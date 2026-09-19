@@ -62,11 +62,41 @@ public sealed class KitInstallTests : IDisposable
 
         var installed = Path.Combine(repo, procedure);
         Assert.True(File.Exists(installed), $"The {harness} kit installed no {procedure}.");
-        Assert.Contains("is a defect in the spec", File.ReadAllText(installed), StringComparison.Ordinal);
+
+        // The rule is written twice on purpose - the section teaches and the ## Rules bullet enforces - so
+        // each half is pinned by a phrase only it uses. The defect-class wording is common to both and is
+        // pinned as well: it is the phrasing the founder asked for.
+        var procedureText = File.ReadAllText(installed);
+        Assert.True(
+            procedureText.Contains("no browser, no GUI, no hands", StringComparison.Ordinal),
+            $"{procedure} has lost the 'Verification a conductor-started session can run' section.");
+        Assert.True(
+            procedureText.Contains("no browser, no GUI and no human", StringComparison.Ordinal),
+            $"{procedure} has lost the ## Rules bullet that restates the section.");
+        Assert.True(
+            procedureText.Contains("is a defect in the spec", StringComparison.Ordinal),
+            $"{procedure} no longer calls such a spec a defect in the spec.");
+
         Assert.Contains(
             "no browser, no GUI and no human",
             File.ReadAllText(Path.Combine(repo, "specs", "_TEMPLATE.md")),
             StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    /// `kit install` writes `kit/core/spec-template.md` over `specs/_TEMPLATE.md`, and this repository is
+    /// itself a MUTHUR project, so its checked-in template is one of those installed copies. Let the two
+    /// drift and every future install here produces a diff nobody asked for.
+    /// </summary>
+    [Fact]
+    public void This_repositorys_spec_template_is_still_the_kit_source_byte_for_byte()
+    {
+        var source = Path.Combine(RepositoryRoot, "kit", "core", "spec-template.md");
+        var installed = Path.Combine(RepositoryRoot, "specs", "_TEMPLATE.md");
+
+        Assert.True(
+            File.ReadAllBytes(source).SequenceEqual(File.ReadAllBytes(installed)),
+            $"{installed} has drifted from its source {source}, which kit install writes over it.");
     }
 
     /// <summary>The claude kit is the only one that reaches a core procedure through a `{{core:…}}` token.</summary>
