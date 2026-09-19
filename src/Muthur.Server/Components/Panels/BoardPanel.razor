@@ -1,6 +1,7 @@
 @inherits LivePanel
 @inject TaskService Tasks
 @inject ProjectService Projects
+@inject CollisionService Collisions
 @inject TimeProvider Clock
 
 <section class="panel board">
@@ -30,6 +31,7 @@
     private IReadOnlyList<ProjectDto> _projects = [];
     private string? _project;
     private List<TaskDto> _backlog = [], _inProgress = [], _validating = [], _done = [];
+    private Dictionary<string, IReadOnlyList<string>> _collides = [];
     private int _open, _priority;
     private DateTimeOffset _now;
 
@@ -52,6 +54,12 @@
         _done = done.Where(t => t.DoneAt >= _now.AddHours(-24)).OrderByDescending(t => t.DoneAt).ToList();
         _open = open.Count;
         _priority = open.Count(t => t.Priority > 0);
+
+        // Cached for a minute inside the service, so the board's own refresh cadence costs nothing extra.
+        _collides = (await Collisions.CurrentAsync())
+            .SelectMany(c => new[] { (Id: c.TaskA, Other: c.TaskB), (Id: c.TaskB, Other: c.TaskA) })
+            .GroupBy(pair => pair.Id)
+            .ToDictionary(g => g.Key, g => (IReadOnlyList<string>)[.. g.Select(pair => pair.Other).Order()]);
     }
 
     private async Task OnProjectChanged(ChangeEventArgs e)
@@ -66,7 +74,8 @@
             <div class="column-head">@title <span class="count">@tasks.Count</span></div>
             <div class="column-body">
                 <Virtualize Items="tasks" Context="task" ItemSize="74" OverscanCount="6">
-                    <TaskCard Task="task" Now="_now" ShowProject="@(_project is null && _projects.Count > 1)" />
+                    <TaskCard Task="task" Now="_now" ShowProject="@(_project is null && _projects.Count > 1)"
+                              CollidesWith="@_collides.GetValueOrDefault(task.Id)" />
                 </Virtualize>
                 @if (tasks.Count == 0)
                 {

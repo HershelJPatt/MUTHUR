@@ -75,6 +75,7 @@ public static class Startup
         builder.Services.AddSingleton<IValidatorSessionLauncher, ValidatorSessionLauncher>();
         builder.Services.AddSingleton<IOrchestratorSessionLauncher, OrchestratorSessionLauncher>();
         builder.Services.AddSingleton<ConductorService>();
+        builder.Services.AddSingleton<CollisionService>();
         builder.Services.AddSingleton<IPullRequestOpener, GhPullRequestOpener>();
         builder.Services.AddSingleton<ITaskLander, GitLander>();
         builder.Services.AddSingleton<DoctorService>();

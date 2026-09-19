@@ -46,10 +46,16 @@ public sealed class ErrorMiddleware(
         }
         // The stop arrived after this request was already past the guard above — the window is microseconds
         // wide, and the disposal that follows the signal is what the request actually trips over. Both
-        // conditions are required: an ObjectDisposedException on a hub that is *not* stopping is a real
-        // defect (a disposed HttpClient, a captured scoped service) and has to keep arriving as a 500 with
-        // its stack in the log, or this stops being a fix and becomes a way to stop hearing about a bug.
-        catch (ObjectDisposedException) when (!http.Response.HasStarted && lifetime.ApplicationStopping.IsCancellationRequested)
+        // conditions are required: a disposed object on a hub that is *not* stopping is a real defect (a
+        // disposed HttpClient, a captured scoped service) and has to keep arriving as a 500 with its stack in
+        // the log, or this stops being a fix and becomes a way to stop hearing about a bug.
+        //
+        // Matched on the cause and not on the type, because nothing between here and the connection re-throws
+        // what it caught: a hub disposed underneath a live request answers a write with an AggregateException
+        // over an ObjectDisposedException, raised out of SaveChangesAsync, and the type match let that
+        // through to be logged as an unhandled error. What is forgiven is still only teardown — an exception
+        // with no ObjectDisposedException anywhere in its chain is a 500 whether the hub is stopping or not.
+        catch (Exception ex) when (!http.Response.HasStarted && lifetime.ApplicationStopping.IsCancellationRequested && IsTeardown(ex))
         {
             await StoppingAsync(http);
         }
@@ -59,6 +65,16 @@ public sealed class ErrorMiddleware(
             http.Response.StatusCode = StatusCodes.Status500InternalServerError;
             await http.Response.WriteAsJsonAsync(new ErrorResponse("internal_error", ex.Message), json.Value.SerializerOptions);
         }
+    }
+
+    /// <summary>True when the hub's own teardown is what this failure came from, however deeply it is wrapped.</summary>
+    private static bool IsTeardown(Exception ex)
+    {
+        for (var cause = ex; cause is not null; cause = cause.InnerException)
+        {
+            if (cause is ObjectDisposedException) return true;
+        }
+        return false;
     }
 
     /// <summary>Deliberately not logged: a hub that was asked to stop and then declined a request did nothing wrong.</summary>

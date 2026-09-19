@@ -1,3 +1,4 @@
+using System.Text.RegularExpressions;
 using Muthur.Contracts;
 using Muthur.Core.Entities;
 using Muthur.Launch;
@@ -13,7 +14,16 @@ public enum LandOutcome
     Refused,
 }
 
-public sealed record LandResult(LandOutcome Outcome, string? Commit = null, string? PrUrl = null, string? Code = null, string? Message = null)
+public sealed record LandResult(
+    LandOutcome Outcome,
+    string? Commit = null,
+    string? PrUrl = null,
+    string? Code = null,
+    string? Message = null,
+    /// <summary>Files that conflicted, on a <see cref="LandOutcome.Conflict"/> result. Uncapped.</summary>
+    IReadOnlyList<string>? Files = null,
+    /// <summary>Task ids landed on the target since this branch diverged — the candidates it collided with. Best effort.</summary>
+    IReadOnlyList<string>? LandedSince = null)
 {
     public static LandResult Refuse(string code, string message) => new(LandOutcome.Refused, Code: code, Message: message);
 }
@@ -38,9 +48,13 @@ public interface IPullRequestOpener
 /// The only code in the organization that writes to a project's default branch. Agents ask; the hub,
 /// having checked the task is validated, performs the merge (or opens the pull request) itself.
 /// </summary>
-public sealed class GitLander(IProcessRunner processes, IPullRequestOpener pullRequests) : ITaskLander
+public sealed partial class GitLander(IProcessRunner processes, IPullRequestOpener pullRequests) : ITaskLander
 {
     private static readonly TimeSpan GitTimeout = TimeSpan.FromMinutes(2);
+
+    /// <summary>The merge subject <see cref="MergeAsync"/> writes, which is how a land is recognised in the target's history.</summary>
+    [GeneratedRegex(@"^Land (T-\d+):")]
+    private static partial Regex LandedSubject();
 
     public async Task<string?> BranchHeadAsync(Project project, string branch, CancellationToken ct = default)
     {
@@ -107,7 +121,9 @@ public sealed class GitLander(IProcessRunner processes, IPullRequestOpener pullR
         {
             var conflicted = await GitAsync(checkout, ct, "diff", "--name-only", "--diff-filter=U");
             await GitAsync(checkout, ct, "merge", "--abort");
-            return new LandResult(LandOutcome.Conflict, Code: "merge_conflict", Message: ConflictMessage(branch, target, conflicted.StdOut));
+            var files = SplitFiles(conflicted.StdOut);
+            return new LandResult(LandOutcome.Conflict, Code: "merge_conflict", Message: ConflictMessage(branch, target, files),
+                Files: files, LandedSince: await LandedSinceAsync(checkout, branch, target, ct));
         }
         var head = await GitAsync(checkout, ct, "rev-parse", "HEAD");
         return new LandResult(LandOutcome.Landed, Commit: head.StdOut.Trim());
@@ -119,8 +135,11 @@ public sealed class GitLander(IProcessRunner processes, IPullRequestOpener pullR
         var tree = await GitAsync(repo, ct, "merge-tree", "--write-tree", "--name-only", target, branch);
         var lines = tree.StdOut.Split('\n', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
         if (tree.ExitCode == 1)
-            return new LandResult(LandOutcome.Conflict, Code: "merge_conflict",
-                Message: ConflictMessage(branch, target, string.Join('\n', lines.Skip(1).TakeWhile(l => !l.Contains(' ')))));
+        {
+            var files = SplitFiles(string.Join('\n', lines.Skip(1).TakeWhile(l => !l.Contains(' '))));
+            return new LandResult(LandOutcome.Conflict, Code: "merge_conflict", Message: ConflictMessage(branch, target, files),
+                Files: files, LandedSince: await LandedSinceAsync(repo, branch, target, ct));
+        }
         if (!tree.Ok || lines.Length == 0) return LandResult.Refuse("git_failed", tree.Message);
 
         var branchSha = (await GitAsync(repo, ct, "rev-parse", branch)).StdOut.Trim();
@@ -166,11 +185,32 @@ public sealed class GitLander(IProcessRunner processes, IPullRequestOpener pullR
         return null;
     }
 
-    private static string ConflictMessage(string branch, string target, string files)
+    private static IReadOnlyList<string> SplitFiles(string files) =>
+        files.Split('\n', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+
+    /// <summary>The prose agents read on a bounced land. Its list stays capped; only <see cref="LandResult.Files"/> is uncapped.</summary>
+    private static string ConflictMessage(string branch, string target, IReadOnlyList<string> files)
     {
-        var list = string.Join(", ", files.Split('\n', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries).Take(12));
+        var list = string.Join(", ", files.Take(12));
         return $"'{branch}' no longer merges cleanly into '{target}'" + (list.Length > 0 ? $" (conflicts: {list})" : "") +
                ". Rebase or merge the default branch into the task branch, re-verify, and mark it implemented again.";
+    }
+
+    /// <summary>
+    /// Task ids landed on <paramref name="target"/> since <paramref name="branch"/> diverged — what this branch collided
+    /// with. Evidence, not a contract: if git cannot answer, the answer is empty and the land reports the conflict anyway.
+    /// </summary>
+    private async Task<IReadOnlyList<string>> LandedSinceAsync(string workingDirectory, string branch, string target, CancellationToken ct)
+    {
+        var mergeBase = await GitAsync(workingDirectory, ct, "merge-base", branch, target);
+        if (!mergeBase.Ok) return [];
+        var log = await GitAsync(workingDirectory, ct, "log", "--format=%s", $"{mergeBase.StdOut.Trim()}..{target}");
+        if (!log.Ok) return [];
+
+        return [.. log.StdOut.Split('\n', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+            .Select(subject => LandedSubject().Match(subject))
+            .Where(match => match.Success)
+            .Select(match => match.Groups[1].Value)];
     }
 
     private Task<ProcessResult> GitAsync(string workingDirectory, CancellationToken ct, params string[] arguments) =>
