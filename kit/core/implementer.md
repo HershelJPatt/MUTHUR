@@ -25,15 +25,17 @@ You were chosen because the thinking is already done: your job is faithful, care
      own** and the tree is clean, nothing of yours can be lost: `git reset --hard <base>`, and say in your
      report whether that was a fast-forward (`git merge-base --is-ancestor HEAD <base>` succeeds) or a
      divergent reset. Both happen; which one it was is worth a line.
-   - If you **do** have commits of your own, you are being resumed for another round. Do not reset, do not
-     merge and do not rebase. Re-read the spec from the base as below, because the orchestrator has very
-     likely amended it and your copy is the old one. Your commits sit on the old base, so run
-     `git diff --stat <your starting commit>..<base>` and say in your report whether it moved any file in
-     your unit; if it did, stop and report `blocked` rather than guessing — you would be editing a stale
-     copy, and your branch would clobber the newer one at merge. Otherwise commit your new work on top of
-     what you have, and say in your report that you did this. If the two histories have genuinely diverged
-     in a way you cannot read past, stop and report `blocked` too: recovering a mixed history is the
-     orchestrator's decision, not yours.
+   - If that list — `git log --oneline <base>..HEAD` — is **not** empty, you have commits of your own and
+     are being resumed for another round. If it is empty the bullet above applies, even when the base has
+     moved files in your unit: an orchestrator integrating your own work is the ordinary reason for that,
+     and it leaves you nothing to lose. Do not reset, do not merge and do not rebase. Re-read the spec from
+     the base as below, because the orchestrator has very likely amended it and your copy is the old one.
+     Your commits sit on the old base, so run `git diff --stat <your starting commit>..<base>` and say in
+     your report whether it moved any file in your unit; if it did, stop and report `blocked` rather than
+     guessing — you would be editing a stale copy, and your branch would clobber the newer one at merge.
+     Otherwise commit your new work on top of what you have, and say in your report that you did this. If
+     the two histories have genuinely diverged in a way you cannot read past, stop and report `blocked`
+     too: recovering a mixed history is the orchestrator's decision, not yours.
    Then read the spec from the base, always — `git show <base>:<spec path>` — not from your working tree
    and not only when you are resumed. Matching commits say nothing about the files on disk: a stray revert,
    a partially applied stash, or a harness that writes files rather than checking them out all leave HEAD
