@@ -223,3 +223,54 @@ No browser is needed and none should be used.
 - **`MUTHUR_KIT` pointing at a kit from outside this repository** is the case that turns the containment rules
   from tidiness into a boundary. Nothing today says where a kit may come from. Worth its own task if kits ever
   become shareable.
+
+## Amendment 1 — two decisions the build surfaced (2026-09-19)
+
+**1. The `MUTHUR_KIT` constraint gets a collection, not an assembly.**
+
+`KitInstallTests` (T-46) already points `MUTHUR_KIT` at the repository's own kit "for the life of the class",
+on the stated grounds that no other class in the assembly reads it. This task adds a second class that must
+point it at a scratch kit, which retires that reasoning. xUnit 2.9.3 runs collections in parallel, so without
+something the two could swap the kit out from under each other mid-install — a race that would reproduce
+rarely and read as a mystery.
+
+The implementer's first answer was `[assembly: CollectionBehavior(DisableTestParallelization = true)]`. It
+works, and it is the wrong size: it serializes the whole `Muthur.Cli.Tests` assembly forever as a side effect
+of one file, where nobody later wondering why the suite is slow would think to look. Replaced by a
+`[CollectionDefinition(..., DisableParallelization = true)]` that both classes join, so the constraint is
+declared where it is caused and the rest of the assembly stays parallel.
+
+`KitRosterTests` (T-20, in validation) reads `kit.json` files off disk and never sets the variable, so it does
+not join and does not conflict.
+
+**2. An empty `to` gets its own rule.**
+
+`to: ""` fell into rule 14 and reported *"writes "", which is outside the repository"* — true, since
+`Path.Combine(repo, "")` resolves to the repository root and the containment test requires a path strictly
+under it, but no help to someone who typed an empty string. Added as **rule 9b**, checked with the other `to`
+checks:
+
+> `"<manifestPath>: entry <n> has an empty \"to\"."`
+
+### Scope of the claim this task makes
+
+Worth stating precisely, because the implementer drew the line and it is the right one. Rule 15 reads each
+`from` file after rules 12 and 13 have proved it is inside the kit and exists. If *that* read fails — an
+exclusive lock or a permission change in the window between the check and the read — the exception is
+unhandled, exactly as the write loop's own `File.ReadAllText` has always been.
+
+No manifest content can reach it. So what T-8 delivers is **"no unhandled exception a manifest can cause"**,
+not "no unhandled exception". Inventing a sixteenth rule for an unreachable case would have made the spec
+look more complete and the software no safer.
+
+### Accepted as built
+
+- **Rule 1 is unit-tested rather than end-to-end.** `Install` checks `File.Exists` before validating, so the
+  only route to it through `kit install` is an exclusive lock, which is a Windows-only construction. The test
+  calls `TryReadManifest` with a directory as the manifest path — `File.ReadAllText` on a directory fails on
+  every platform — and the fourteen end-to-end rows carry the exit-code and code mapping that rule 1 shares.
+- **Proof 3 is stronger than the acceptance asked for.** Rather than assert the shipped kits still install,
+  the implementer published the *pre-change* commit as a second binary, installed all three harnesses with
+  both, and compared the trees file by file: 11 of 12 files identical per harness, the twelfth being
+  `muthur.project.json`, whose generated key is the temp directory's name. That is the difference between
+  "still works" and "unchanged".
