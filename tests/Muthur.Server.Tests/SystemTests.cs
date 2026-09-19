@@ -7,7 +7,6 @@ using Microsoft.Extensions.Hosting;
 using Muthur.Contracts;
 using Muthur.Server.Infrastructure;
 using Muthur.Server.Services;
-using Xunit.Sdk;
 
 namespace Muthur.Server.Tests;
 
@@ -203,26 +202,23 @@ public sealed class SystemTests : IDisposable
         var request = founder.PostAsJsonAsync(Routes.Outbound, new DraftOutboundRequest("news", DraftBody));
         // Three observations, no sleeps: the channel says the request is parked, Dispose returning says the
         // host is gone, and only then is the request let go into what is left of the hub.
-        await Eventually.TrueAsync(() => channel.Entered, "the draft never reached the channel");
-        await Eventually.CompletesAsync(Task.Run(() => { hub.Dispose(); return true; }), "disposing the hub never finished");
-        channel.Release();
-
-        // A disposed TestServer aborts what is still inside it rather than draining it, so this request ends
-        // at the transport instead of with a response — the connection going away is teardown, not an answer.
-        // What must not happen is the hub handing back a failure of its own, and that is exactly what a guard
-        // matched on the exception's type allows: the AggregateException raised out of SaveChangesAsync is
-        // not an ObjectDisposedException, so it walks out of the middleware unanswered and arrives here.
         try
         {
-            using var response = await Eventually.CompletesAsync(request, "the draft never came back");
-            Assert.False(response.StatusCode is HttpStatusCode.InternalServerError,
-                $"a request that met a disposed hub was told it broke: {await response.Content.ReadAsStringAsync()}");
+            await Eventually.TrueAsync(() => channel.Entered, "the draft never reached the channel");
+            await Eventually.CompletesAsync(Task.Run(() => { hub.Dispose(); return true; }), "disposing the hub never finished");
         }
-        catch (Exception ex) when (ex is not XunitException)
+        finally
         {
-            Assert.True(ex is HttpRequestException or TaskCanceledException,
-                $"a request that met a disposed hub was answered with the hub's own failure: {ex}");
+            channel.Release();
         }
+
+        // Disposal cancels the founder client's pending request. The middleware chooses 503 hub_stopping,
+        // but the aborted TestServer connection cannot carry it: WriteAsJsonAsync absorbs the cancelled
+        // flush, and HttpClient throws TaskCanceledException while buffering the response. No response
+        // reaches the caller. With the type-matched guard, EF's wrapped failure escapes the middleware and
+        // the host's diagnostics hands an AggregateException to the client, so this exact assertion fails.
+        await Assert.ThrowsAsync<TaskCanceledException>(() =>
+            Eventually.CompletesAsync(request, "the draft never came back"));
 
         Assert.DoesNotContain(nameof(ErrorMiddleware), ReadHubLog()[before..], StringComparison.Ordinal);
     }
@@ -379,9 +375,9 @@ public sealed class SystemTests : IDisposable
     /// an ordinary defect on a hub nobody has asked to stop.
     /// </summary>
     /// <param name="wrapped">
-    /// Fails the way the layers between the middleware and the connection really do. A hub disposed
-    /// underneath a live request does not answer with an ObjectDisposedException: EF Core raises it out of
-    /// SaveChangesAsync wrapped in an AggregateException, which is the shape this reproduces.
+    /// Stands in for the AggregateException over an ObjectDisposedException observed when EF Core's failure
+    /// logging reaches a disposed log writer inside SaveChangesAsync. This reproduces the exception shape
+    /// the middleware classifies, not the EF logging path or the disposed writer that produced it.
     /// </param>
     private sealed class DisposedChannel(IHostApplicationLifetime? stopFirst, bool wrapped = false) : IOutboundChannel
     {
