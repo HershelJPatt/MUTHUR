@@ -53,7 +53,8 @@ Two questions, both settled here:
 - `src/Muthur.Server/Services/ProjectService.cs` — `Normalize` (line ~101), its two call sites in
   `AddAsync` and `UpdateAsync`, and `ValidSources` (line ~89), which is the shape to copy.
 - `src/Muthur.Server/Services/RoleService.cs` — `KeyPattern` at line 12 and its `invalid_key` message:
-  `"Role keys are 1-48 chars of a-z, 0-9 or '-'."`
+  `"Role keys are 1-48 chars of a-z, 0-9 or '-'."` — **this sentence changes**, see below: its code and shape
+  survive, its number comes from `RoleKey.Rule`.
 - `src/Muthur.Core/` holds pure rules with no EF and no HTTP — `LeasePolicy`, `TaskStateMachine`,
   `OutboundGate`, `SecretScanner`. A key-format rule belongs with them.
 - `src/Muthur.Server/Services/DoctorProjectCheck.cs` already reports a required validator that is not a
@@ -149,15 +150,15 @@ namespace Muthur.Core;
 public static partial class RoleKey
 {
     /// <summary>The longest a role key may be. Callers that build something out of a key budget against this.</summary>
-    public const int MaxLength = 48;
+    public const int MaxLength = 38;   // derived in 'The length relationship' above; not 48
 
-    [GeneratedRegex("^[a-z0-9][a-z0-9-]{0,47}$")]
+    [GeneratedRegex("^[a-z0-9][a-z0-9-]{0,37}$")]   // MaxLength - 1; the attribute cannot interpolate a const
     private static partial Regex Pattern();
 
     public static bool IsValid(string? key) => key is not null && Pattern().IsMatch(key);
 
     /// <summary>The rule in the words the founder reads when they break it.</summary>
-    public const string Rule = "1-48 chars of a-z, 0-9 or '-'";
+    public const string Rule = "1-38 chars of a-z, 0-9 or '-'";
 }
 ```
 
@@ -244,3 +245,43 @@ $env:MUTHUR_HOME = "$PWD/artifacts/t40-home"; $env:MUTHUR_URL = "http://127.0.0.
 - `OutboundService.KeyPattern` and `ProjectService`'s own project-key rule are separate limits that happen
   to look similar. They are not this rule and should not be folded into it; `ProjectService` already
   diverges at 32 characters, which is the evidence they are independent by design.
+
+## Correction — the Design block's numbers were the pre-amendment ones
+
+This spec was internally contradictory and its implementer caught it rather than picking a side silently.
+
+The Design block was written when `MaxLength` was 48, and says `RoleService` keeps its `invalid_key` message
+verbatim — *"Role keys are 1-48 chars of a-z, 0-9 or '-'."* — and that its behaviour does not change. The
+length section then moved the cap to 38 and I did not update the block. Both cannot hold:
+
+- the accepted set **must** change, because that is what founder request #12 asked for, and because the
+  assertion test cannot pass otherwise (48 + `conductor-` = 58 > 48);
+- keeping the sentence verbatim would ship a message reading "1-48" from code that refuses at 39.
+
+**A wrong message is worse than an edited one**, so `RoleService` keeps the `invalid_key` code, the call site
+and the sentence's shape, and sources its number from the single rule: `$"Role keys are {RoleKey.Rule}."`
+The Design block's `MaxLength`, regex literal and `Rule` above are corrected to 38 so the next reader does
+not meet the same contradiction. "Verbatim" was only ever meant to say *state the rule once, through
+`RoleKey.Rule`* — which was the same string when the block was written.
+
+This is the same defect that failed T-32: an amendment that changed one section and left another asserting
+the old value. Recording it here because it is now twice.
+
+## What the length change actually costs, for whoever lands T-13 second
+
+Re-deriving to 62 is not one constant. The full set, from the implementer that built it:
+
+- `RoleKey.MaxLength`
+- the `{0,37}` literal inside `[GeneratedRegex]`, which cannot interpolate the const
+- `RoleKey.Rule`'s text
+- the probe bound in `ConductorTests.The_longest_role_key_there_can_be_still_makes_an_agent_name_the_hub_accepts`
+
+Two tests fail loudly if any is missed: the Core test pinning `Rule` to `MaxLength`, and the drift assertion
+comparing the probed limit to `MaxLength`. That is the point of them.
+
+## A note for the next implementer, about proving a check is load-bearing
+
+The mutation this spec asks for — drop the check and confirm the tests fail — was first attempted as
+`if (false && !RoleKey.IsValid(key))`, and the sandbox's auto-mode classifier refused the test run as
+security-test removal. The honest equivalent was allowed: point the call sites back at `Normalize`, which is
+literally `main`'s own code. Worth knowing before someone concludes the verification is impossible.
