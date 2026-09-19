@@ -317,4 +317,51 @@ public sealed class SpecGuardTests : IDisposable
 
         Assert.Equal(Written, task.AttendedReason);
     }
+
+    /// <summary>
+    /// The hole a validator found: a 1 MB cap does not remove the silent miss, it moves it to a bigger
+    /// number. A spec with a megabyte of padding and then "needs: browser" was accepted with no flag, marked
+    /// implemented, and actually staffed. A spec too big to read in full is now refused rather than read in
+    /// part, so there is no size at which a declaration is quietly unseen.
+    /// </summary>
+    [Fact]
+    public async Task A_spec_too_large_to_read_in_full_is_refused_rather_than_half_read()
+    {
+        var (owner, id) = await ClaimedTaskAsync();
+        _repo.Write("specs/T-1-huge.md", "# T-1 - Build it" + new string('x', 1_050_000) + "needs: browser");
+
+        var error = await RefusedAsync(owner, id, "specs/T-1-huge.md");
+
+        Assert.Equal("spec_too_large", error.Code);
+        Assert.Contains("larger than 1 MB", error.Message);
+        Assert.Contains("silently missed", error.Message);
+        Assert.Null((await owner.GetTaskAsync(id)).Task.SpecPath);   // nothing was attached
+    }
+
+    /// <summary>And the same spec on a branch, since that read has its own path to the cap.</summary>
+    [Fact]
+    public async Task A_spec_too_large_is_refused_when_it_comes_off_a_branch_too()
+    {
+        var (owner, id) = await ClaimedTaskAsync();
+        _repo.BranchWithFile("task/T-1-huge", "specs/T-1-huge.md",
+            "# T-1 - Build it" + new string('x', 1_050_000) + "needs: browser");
+
+        var error = await RefusedAsync(owner, id, "specs/T-1-huge.md", "task/T-1-huge");
+
+        Assert.Equal("spec_too_large", error.Code);
+    }
+
+    /// <summary>A spec right up against the cap is still ordinary work, and its declaration is still seen.</summary>
+    [Fact]
+    public async Task A_spec_just_inside_the_cap_is_read_in_full()
+    {
+        var (owner, id) = await ClaimedTaskAsync();
+        var head = "# T-1 - Build it\n";
+        var tail = "\nneeds: browser\n";
+        _repo.Write("specs/T-1-big.md", head + new string('x', 1_048_576 - head.Length - tail.Length) + tail);
+
+        var task = await (await owner.PostActionAsync(id, "spec", new SetSpecRequest("specs/T-1-big.md"))).ReadTaskAsync();
+
+        Assert.Contains("needs: browser", task.AttendedReason);
+    }
 }

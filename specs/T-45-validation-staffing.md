@@ -187,3 +187,43 @@ afterwards" — which is exactly the step that kept being skipped.
 
 Six declaration spellings, prose that is not a declaration, a declaration 20,000 characters in (past the
 heading window), and a hand-written reason surviving a freeze that declares a need.
+
+## Amendment after validation of the option-C half (2026-09-19, top-right)
+
+`conductor-validator` failed `c36bc65` on the cap, and it is my own sentence turned against me:
+
+> Real installed CLI accepted a spec with 1,050,000 padding characters followed by `needs: browser`, without
+> attendedReason; `task implemented` succeeded and the conductor actually staffed it.
+
+The section above says a declaration the hub silently failed to see "would be the worst of both worlds", and
+then introduces a 1 MB cap that does exactly that at 1,048,577 characters. A cap that truncates does not
+remove the silent miss; it moves it to a number nobody will think to test. The validator thought to test it.
+
+**A spec too large to read in full is now refused, not read in part:**
+
+```
+{"code":"spec_too_large","message":"'specs/x.md' is larger than 1 MB. A spec that size cannot be read in
+ full, and a 'needs:' line past the cut would be silently missed. Shorten it, or split what belongs
+ elsewhere out of it."}
+```
+
+Both reads enforce it. The working tree asks for one character more than the cap, so "it filled the buffer"
+and "there was more" are different answers; the branch read has the whole blob already and checks its length.
+Nothing is attached when it refuses, so the task is exactly as it was.
+
+The cap stays at 1 MB and keeps doing the job it was added for — a mistaken path to something enormous is
+still cheap to reject. What changed is that rejecting is now what happens, rather than reading the first
+megabyte and hoping.
+
+### Tests
+
+- `A_spec_too_large_to_read_in_full_is_refused_rather_than_half_read` — the validator's own shape, 1,050,000
+  characters of padding then `needs: browser`: `spec_too_large`, and `specPath` still null.
+- `A_spec_too_large_is_refused_when_it_comes_off_a_branch_too` — the branch read has its own path to the cap.
+- `A_spec_just_inside_the_cap_is_read_in_full` — one byte under, and the declaration is still found. A rule
+  that refused ordinary work would be a worse cure than the disease.
+
+Both refusal tests fail with the truncating cap put back, which is the check that they are about this change
+and not about the DTO.
+
+`dotnet build`: clean, 0 warnings. `dotnet test`: 3736 Core, 23 Launch, 159 Cli, 382 Server — all green.

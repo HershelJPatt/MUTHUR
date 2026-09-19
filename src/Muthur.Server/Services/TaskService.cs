@@ -280,10 +280,12 @@ public sealed partial class TaskService(Ledger ledger, LeasePolicy leases, ITask
         {
             if (candidate is not { Length: > 0 } || tried.Contains(candidate)) return null;
             tried.Add(candidate);
-            // Capped the same way the working tree is read, so which source answered can never change a verdict.
-            return await lander.ReadFileAsync(task.Project!, candidate, relative, ct) is { } text
-                ? text[..Math.Min(text.Length, MaxSpec)]
-                : null;
+            // Refused rather than truncated, the same way the working tree is read: a spec too big to read in
+            // full is one whose declared need could be past the cut, and silently scanning a prefix is the
+            // failure this whole rule exists to prevent.
+            if (await lander.ReadFileAsync(task.Project!, candidate, relative, ct) is not { } text) return null;
+            if (text.Length > MaxSpec) throw TooLarge(relative);
+            return text;
         }
 
         string? FromWorkingTree()
@@ -292,8 +294,11 @@ public sealed partial class TaskService(Ledger ledger, LeasePolicy leases, ITask
             try
             {
                 using var reader = new StreamReader(full);
-                var buffer = new char[MaxSpec];
-                return new string(buffer, 0, reader.ReadBlock(buffer, 0, buffer.Length));
+                // One more than the cap, so "it filled the buffer" and "there was more" are different answers.
+                var buffer = new char[MaxSpec + 1];
+                var read = reader.ReadBlock(buffer, 0, buffer.Length);
+                if (read > MaxSpec) throw TooLarge(relative);
+                return new string(buffer, 0, read);
             }
             catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
             {
@@ -306,11 +311,16 @@ public sealed partial class TaskService(Ledger ledger, LeasePolicy leases, ITask
     private const int Head = 8 * 1024;
 
     /// <summary>
-    /// How much of a spec is read at all. Larger than <see cref="Head"/> because a declared need can be
-    /// anywhere in the document and a declaration the hub silently failed to see would be the worst of both
-    /// worlds; small enough that a mistaken path to something enormous is still cheap.
+    /// The largest spec that is read at all. A declared need can be anywhere in the document, so the read
+    /// cannot stop early — and a cap that truncates silently does not remove that problem, it only moves it
+    /// to a bigger number. Anything past this is **refused**, which keeps a mistaken path to something
+    /// enormous cheap to reject while leaving no size at which a declaration is quietly unseen.
     /// </summary>
     private const int MaxSpec = 1024 * 1024;
+
+    private static MuthurException TooLarge(string relative) =>
+        Fail.Rule("spec_too_large", $"'{relative}' is larger than 1 MB. A spec that size cannot be read in full, " +
+            "and a 'needs:' line past the cut would be silently missed. Shorten it, or split what belongs elsewhere out of it.");
 
     /// <summary>A separator at the boundary is what keeps '/repo-evil' from counting as inside '/repo'.</summary>
     private static bool IsInside(string root, string full)
