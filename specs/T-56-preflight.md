@@ -188,3 +188,45 @@ check off:
   what the install would add.
 
 `dotnet build`: clean, 0 warnings. `dotnet test`: 3736 Core, 28 Launch, 199 Cli, 450 Server — all green.
+
+## Amendment after the second validation round (2026-09-19, top-right)
+
+`conductor-validator-t-56` confirmed the create-mode and installer-file exceptions now work, and found the
+same defect one layer in:
+
+> The ordinary unchanged-file case does not. A founder who protects an already-installed, current kit file
+> cannot re-run installation. This affects all three shipped kits, including overwrite mode in claude/generic
+> and section mode in codex.
+
+Right, and the reason is worth naming rather than patching around: `Writes()` was answering from the
+**mode**, and the write answers from the **content**. `WriteFile` returns `"unchanged"` without writing when
+the bytes already match, and `WriteSection` computes a whole document that is usually identical on a re-run.
+Two functions answering "would this write" from different information is a defect that regenerates itself
+every time either one changes — which is exactly what the first amendment did.
+
+### One place decides
+
+`Rendered(path, content, mode)` now returns exactly what the install would leave in a file, or null when it
+would not write at all. Both callers go through it:
+
+- `WriteKitFile` is `Rendered(...) is { } bytes ? WriteFile(path, bytes) : "kept"`.
+- `Writes()` asks `Rendered(...)`, and then whether those bytes are already there.
+
+`WriteSection` became `SectionDocument`, which builds the document and returns it rather than writing it —
+the same code, with the decision and the action separated. The pre-flight now needs the kit directories to
+read and expand a source, which `TryReadManifest` already had.
+
+This is smaller than the first amendment and it is the fix that stops the class, not the instance: mode,
+content, line endings and the section merge are now decided once.
+
+### Tests
+
+- `A_read_only_file_a_reinstall_would_leave_unchanged_is_not_refused` — install, protect a file, install
+  again: exit 0 and the bytes untouched. Over overwrite mode (claude, generic) and section mode (codex),
+  which is the spread the validator named.
+- `A_read_only_file_a_reinstall_would_change_is_still_refused` — the same file, edited by hand first, so the
+  install really would write it. Refused.
+
+Fifteen tests in this class now, and each narrowing of F3 has arrived with the half that keeps it honest.
+
+`dotnet build`: clean, 0 warnings. `dotnet test`: 3736 Core, 28 Launch, 203 Cli, 450 Server — all green.

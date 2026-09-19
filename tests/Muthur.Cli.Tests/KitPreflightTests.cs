@@ -172,4 +172,44 @@ public sealed class KitPreflightTests : IDisposable
 
         Assert.Equal(ExitCodes.Ok, await Install(repo));
     }
+
+    /// <summary>
+    /// The validator's round-2 repro, and the same defect one layer in: a re-install writes nothing to a file
+    /// whose content already matches, so a founder who protects an already-current kit file must still be able
+    /// to re-run the install. Covers overwrite mode (claude, generic) and section mode (codex).
+    /// </summary>
+    [Theory]
+    [InlineData("claude", ".claude/agents/muthur-implementer.md")]
+    [InlineData("generic", ".muthur/procedures/orchestrate.md")]
+    [InlineData("codex", "AGENTS.md")]
+    public async Task A_read_only_file_a_reinstall_would_leave_unchanged_is_not_refused(string harness, string path)
+    {
+        var repo = NewRepository();
+        Assert.Equal(ExitCodes.Ok, await Install(repo, harness));
+
+        var installed = Path.Combine(repo, path.Replace('/', Path.DirectorySeparatorChar));
+        var before = File.ReadAllText(installed);
+        File.SetAttributes(installed, FileAttributes.ReadOnly);
+
+        Assert.Equal(ExitCodes.Ok, await Install(repo, harness));
+
+        Assert.Equal(before, File.ReadAllText(installed));   // untouched, because nothing needed writing
+    }
+
+    /// <summary>
+    /// And the half that keeps the check honest: the same file, read-only, with content the install *would*
+    /// change. Refused, because this one really cannot be written.
+    /// </summary>
+    [Fact]
+    public async Task A_read_only_file_a_reinstall_would_change_is_still_refused()
+    {
+        var repo = NewRepository();
+        Assert.Equal(ExitCodes.Ok, await Install(repo));
+
+        var installed = Path.Combine(repo, ".claude", "agents", "muthur-implementer.md");
+        File.WriteAllText(installed, "somebody edited this by hand\n");
+        File.SetAttributes(installed, FileAttributes.ReadOnly);
+
+        Assert.Equal(ExitCodes.RuleViolation, await Install(repo));
+    }
 }
