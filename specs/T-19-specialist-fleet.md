@@ -184,6 +184,7 @@ In step 4 (*Split and delegate*), after the paragraph about `worker run`, add:
 
 ### Unit A — the specialist contract, and `worker run` choosing it
 - **Files:** new `kit/core/specialist.md`; `kit/claude/agents/muthur-specialist.md`;
+  `kit/codex/kit.json`; `kit/generic/kit.json`;
   `src/Muthur.Cli/Commands/WorkerCommands.cs`; `tests/Muthur.Cli.Tests/` (a new file).
 - **Does:** Design 1 and 2.
 - **Depends on:** nothing.
@@ -229,7 +230,9 @@ foreach ($h in 'claude','codex','generic') { ./artifacts/t19/muthur.exe kit inst
 
 Passing looks like: `When the subtree is bigger than you` present in the installed specialist procedure for
 all three harnesses (`.claude/agents/muthur-specialist.md`, `.muthur/procedures/specialist.md`),
-`--parent <the specialist's branch>` present in all four installed copies of the orchestrate procedure, and
+`--parent <the specialist's branch>` present in all **three** installed copies of the orchestrate procedure
+(`.claude/skills/muthur-orchestrate/SKILL.md` for claude, `.muthur/procedures/orchestrate.md` for codex and
+generic), and
 **no `{{core:` token anywhere** under the scratch directory.
 
 Then the CLI surface:
@@ -250,3 +253,30 @@ muthur worker run --help          # shows --parent
   no rule validates. Deliberate — the orchestrator reads it, which is the point of routing it through them —
   but if plans ever get long, a `--plan-file` that `worker run` could take unit-by-unit would remove the
   retyping.
+
+## Amendment 1 — two counting errors, one of which would have leaked (2026-09-19)
+
+Both found by Unit C reviewing the integration rather than its own unit.
+
+**1. `specialist.md` was never registered in the harness manifests.** Design 1 creates the file and Design 2
+wires the Claude agent to include it — and codex and generic include nothing. Their `kit.json` files copy
+each core procedure explicitly (`../core/implementer.md` → `.muthur/procedures/implementer.md`, and four
+more). So as frozen, `specialist.md` would have reached Claude and **not reached codex or generic at all**:
+the exact vendor-capability leak this task exists to close, reintroduced by the spec that closes it.
+
+Unit A's file list gains `kit/codex/kit.json` and `kit/generic/kit.json`, with an entry beside the existing
+`implementer.md` one. `kit/claude/kit.json` needs none — that harness reaches it through the include.
+
+**2. "all four installed copies of the orchestrate procedure" is three.** I carried the number from T-44,
+where `implementer.md` is included by **two** Claude agent files (implementer and specialist) and copied by
+codex and generic — four. `orchestrate.md` is included by one Claude file and copied by two harnesses —
+three. Corrected in place, because an instruction a validator will run has to be right where they read it,
+not only in an amendment.
+
+### Ratified from Unit C
+
+Design 4 said to place the passage "after the paragraph about `worker run`", and four paragraphs in step 4
+mention it. Unit C placed it after the one whose *subject* is the command — the `worker run` works block and
+its three bullets — and before *"A worker that cannot do what it was asked returns `success: false`"*. That
+is right, and for a reason worth keeping: the paragraph that follows spells out what a real refusal looks
+like, which gives *"not a refusal"* its referent.
