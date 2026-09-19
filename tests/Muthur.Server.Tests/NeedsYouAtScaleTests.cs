@@ -363,4 +363,42 @@ public sealed class NeedsYouAtScaleTests : IDisposable
         Assert.Equal(1, after.Count);
         Assert.Equal(asked + TimeSpan.FromHours(9), after.Oldest);
     }
+
+    /// <summary>
+    /// The validator's repro, and the reason a separator is the wrong thing to build a group key out of. The
+    /// CLI accepts U+001F in a question, so a question carrying one used to flatten to the same string as a
+    /// different question with a different option list — two unlike questions, one group, one Answer all.
+    /// </summary>
+    [Fact]
+    public async Task A_question_carrying_the_old_separator_is_not_confused_with_another()
+    {
+        await _hub.AddProjectAsync();
+        var agent = await _hub.RegisterAgentAsync("asker");
+        // "Approve release?production" + [hold, go] and "Approve release?" + [production, hold, go]
+        // join to the identical string under the old key, and to different ones under this key.
+        await AskAsync(agent, "Approve release?production", null, "hold", "go");
+        await AskAsync(agent, "Approve release?", null, "production", "hold", "go");
+
+        var page = await _hub.CreateClient().GetStringAsync("/needs-you");
+
+        Assert.DoesNotContain("group-head", page);
+        Assert.DoesNotContain("answer all", page);
+        Assert.Contains("2 open", page);
+    }
+
+    [Fact]
+    public async Task Two_questions_alike_in_every_character_are_still_one_group()
+    {
+        // The other half: hardening the key must not stop it grouping what it is for.
+        await _hub.AddProjectAsync();
+        var first = await _hub.RegisterAgentAsync("top-right");
+        var second = await _hub.RegisterAgentAsync("bottom-left");
+        await AskAsync(first, "Approve release?production", null, "hold", "go");
+        await AskAsync(second, "Approve release?production", null, "hold", "go");
+
+        var page = await _hub.CreateClient().GetStringAsync("/needs-you");
+
+        Assert.Contains("group-head", page);
+        Assert.Contains("2 waiting", page);
+    }
 }

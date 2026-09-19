@@ -95,8 +95,24 @@
         foreach (var key in keys) _groupDrafts.TryAdd(key, "");
     }
 
-    /// <summary>The unit separator cannot appear in a typed question, so no two unlike groups collide on it.</summary>
-    private static string Key(FounderRequestDto r) => string.Join('\u001f', [r.Question, .. r.Options]);
+    /// <summary>
+    /// The group a request belongs to: its question and its options, encoded so that no two unlike requests
+    /// can ever produce the same key.
+    /// <para>
+    /// Each part is written as its length, a colon, then the part itself, which makes the encoding decodable
+    /// and therefore injective whatever the characters are. An earlier version joined on U+001F and justified
+    /// itself with "that cannot appear in a typed question" — the CLI accepts it, a validator put one there,
+    /// and two unlike questions became one group with one Answer all button. A separator is an assumption
+    /// about content; a length is a fact about it.
+    /// </para>
+    /// </summary>
+    private static string Key(FounderRequestDto r)
+    {
+        var key = new System.Text.StringBuilder();
+        key.Append(r.Question.Length).Append(':').Append(r.Question);
+        foreach (var option in r.Options) key.Append(option.Length).Append(':').Append(option);
+        return key.ToString();
+    }
 
     private Task AnswerAsync(int id, string answer) =>
         ActAsync(id, () => Requests.AnswerAsync(Caller.Founder, id, new AnswerRequest(answer)));

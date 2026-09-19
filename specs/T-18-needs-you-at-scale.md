@@ -307,3 +307,42 @@ the first test does not. It is replaced by an assertion at `OpenSummaryAsync`, w
 lives. A test that cannot fail for the reason it claims is worse than no test.
 
 `dotnet build`: clean, 0 warnings. `dotnet test`: 3708 Core, 23 Launch, 65 Cli, 295 Server — all green.
+
+## Amendment after the third validation round (2026-09-19, top-right)
+
+`conductor-validator` confirmed the 210-request fix at `e133eac` and failed the branch on the group key:
+
+> real CLI accepts U+001F in question and Needs You conflates unlike questions/options into one answer-all
+> group. Repro: question A = `Approve release?` + U+001F + `production`, options hold/go; question B =
+> `Approve release?`, options production/hold/go. HTTP page shows 1 group and answer all 2.
+
+Right, and the fault is in a sentence I wrote. The key was
+`string.Join('\u001f', [Question, ..Options])`, and the comment beside it said the unit separator "cannot
+appear in a typed question". Nothing enforced that. The CLI takes whatever it is given, so the two requests
+above flatten to the identical string, and the page offers one **Answer all** over two questions that are not
+the same question. That is the exact failure the exact-match rule was chosen to prevent, arriving through the
+encoding instead of through fuzzy matching.
+
+### The fix: a length, not a separator
+
+Each part is now written as its length, a colon, then the part — `6:Alpha?4:hold2:go`. That is decodable, so
+it is injective for any characters at all, including the separator that broke it. A separator is an
+assumption about content; a length is a fact about it.
+
+The same reasoning applies to anything else built this way, which is why the key is now a named method with
+the reason on it rather than a one-line join.
+
+### Tests
+
+- `A_question_carrying_the_old_separator_is_not_confused_with_another` — the validator's two requests,
+  verbatim. No group header, no **Answer all**, `2 open`. It fails on the previous commit.
+- `Two_questions_alike_in_every_character_are_still_one_group` — the other half, with U+001F in both: a
+  harder key must not stop it grouping what it is for.
+
+### Not done, and deliberately
+
+`AskAsync` still accepts control characters in a question. Rejecting them is a change to what an agent may
+ask, which is a wider decision than this task, and the grouping no longer depends on the answer. Worth a task
+of its own if a founder wants questions constrained.
+
+`dotnet build`: clean, 0 warnings. `dotnet test`: 3708 Core, 23 Launch, 65 Cli, 307 Server — all green.
