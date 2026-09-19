@@ -124,19 +124,71 @@ public sealed class RoleTests : IDisposable
         Assert.True(unchanged.IsValidator);
         Assert.Equal(2, unchanged.Capacity);
 
-        // Two agents could hold it before, and that is precisely what must not survive the conversion.
+        // With nobody holding it, saying both things in one call is how the founder converts it.
+        (await _hub.Founder().PutAsJsonAsync(Routes.Roles, new DefineRoleRequest("platform-checks", IsValidator: false, Holders: 1))).EnsureSuccessStatusCode();
+        var post = await RoleAsync("platform-checks");
+        Assert.False(post.IsValidator);
+        Assert.Equal(1, post.Capacity);
+    }
+
+    /// <summary>
+    /// The second round's finding, and the sharper one: setting the ceiling to one is not enough. Lowering a
+    /// capacity evicts nobody and a holder renews its own lease, so a post converted while two agents held it
+    /// would read one holder and have two of them, permanently. The conversion waits for the release.
+    /// </summary>
+    [Fact]
+    public async Task A_role_two_agents_are_holding_cannot_be_converted_into_a_standing_post()
+    {
+        (await _hub.Founder().PutAsJsonAsync(Routes.Roles, new DefineRoleRequest("platform-checks", IsValidator: true, Holders: 2))).EnsureSuccessStatusCode();
         var one = await _hub.RegisterAgentAsync("one");
         var two = await _hub.RegisterAgentAsync("two");
         (await one.PostAsync(Routes.RoleAction("platform-checks", "take"), null)).EnsureSuccessStatusCode();
         _hub.Clock.Advance(TimeSpan.FromSeconds(1));
         (await two.PostAsync(Routes.RoleAction("platform-checks", "take"), null)).EnsureSuccessStatusCode();
 
-        // Saying both things in one call is how the founder actually converts it, and that is accepted.
+        // Both things in one call, which is the form that used to slip through: the ceiling is legal, the
+        // occupancy is not.
+        var refused = await _hub.Founder().PutAsJsonAsync(Routes.Roles, new DefineRoleRequest("platform-checks", IsValidator: false, Holders: 1));
+        Assert.Equal(HttpStatusCode.UnprocessableEntity, refused.StatusCode);
+        var error = await refused.ReadErrorAsync();
+        Assert.Equal("single_holder", error.Code);
+        Assert.Contains("2 agents hold it: one, two", error.Message);
+
+        // Nothing moved: still a validator role, still held by both, and both can still renew.
+        var unmoved = await RoleAsync("platform-checks");
+        Assert.True(unmoved.IsValidator);
+        Assert.Equal(["one", "two"], Names(unmoved));
+        (await two.PostAsync(Routes.RoleAction("platform-checks", "take"), null)).EnsureSuccessStatusCode();
+
+        // The founder's actual move: the extra holder releases, and then the conversion is accepted.
+        (await two.PostAsync(Routes.RoleAction("platform-checks", "release"), null)).EnsureSuccessStatusCode();
         (await _hub.Founder().PutAsJsonAsync(Routes.Roles, new DefineRoleRequest("platform-checks", IsValidator: false, Holders: 1))).EnsureSuccessStatusCode();
+
         var post = await RoleAsync("platform-checks");
         Assert.False(post.IsValidator);
         Assert.Equal(1, post.Capacity);
-        Assert.Equal(["one", "two"], Names(post)); // standing holds are still not evicted by a lower ceiling
+        Assert.Equal(["one"], Names(post));   // the one holder it is allowed to have kept its lease
+    }
+
+    /// <summary>
+    /// A validator role may still be lowered below its standing holds — the rule the conversion check must not
+    /// have swallowed. Over-capacity holds on a validator role drain by release or lapse, not by eviction.
+    /// </summary>
+    [Fact]
+    public async Task Lowering_a_validator_roles_capacity_below_its_holders_is_still_allowed()
+    {
+        (await _hub.Founder().PutAsJsonAsync(Routes.Roles, new DefineRoleRequest("win-validator", Holders: 2))).EnsureSuccessStatusCode();
+        var one = await _hub.RegisterAgentAsync("one");
+        var two = await _hub.RegisterAgentAsync("two");
+        (await one.PostAsync(Routes.RoleAction("win-validator", "take"), null)).EnsureSuccessStatusCode();
+        _hub.Clock.Advance(TimeSpan.FromSeconds(1));
+        (await two.PostAsync(Routes.RoleAction("win-validator", "take"), null)).EnsureSuccessStatusCode();
+
+        (await _hub.Founder().PutAsJsonAsync(Routes.Roles, new DefineRoleRequest("win-validator", Holders: 1))).EnsureSuccessStatusCode();
+
+        var role = await RoleAsync("win-validator");
+        Assert.Equal(1, role.Capacity);
+        Assert.Equal(["one", "two"], Names(role));
     }
 
     /// <summary>

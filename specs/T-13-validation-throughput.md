@@ -600,3 +600,58 @@ on `LeaseExpires > m.Now`, and the test advances the clock two days to prove it.
   fails here rather than in a staged validator session.
 
 `dotnet build`: clean, 0 warnings. `dotnet test`: 3708 Core, 23 Launch, 60 Cli, 266 Server — all green.
+
+## Amendment after the second validation round (2026-09-19, top-right)
+
+`conductor-validator` failed `4a33330`. The first round's fixes hold ("Original no-holders conversion gate
+and response fix work; full tests pass"), but the fix was incomplete, and the finding is the better one:
+
+> conversion with `--validator false --holders 1` leaves two live holders on a non-validator, and both can
+> renew via `role take` (exit 0)
+
+That is right, and it is not a detail. Two rules in this spec meet here:
+
+- **"Lowering the ceiling evicts nobody: existing holds stand until they lapse or are released."**
+- **"non-validator roles like `comms-oncall` stay strictly one holder"** — the founder's word, and a non-goal
+  of this task to weaken.
+
+Setting the ceiling to 1 satisfies the first and breaks the second: the role reads "1 holder" while two
+agents hold it, and because taking a role you already hold is a renewal — deliberately exempt from the
+capacity check, so a working agent never loses its post mid-task — the two never drain. Not "until they
+lapse": permanently.
+
+### The resolution: the conversion waits for the release
+
+`DefineAsync` now refuses to make a role a standing post while more than one agent holds it live, and names
+them:
+
+```
+'platform-checks' cannot become a standing post while 2 agents hold it: one, two.
+Lowering a capacity never evicts anyone, so the post would read one holder and have several.
+Release all but one first.
+```
+
+Both halves are checked against the role's state after the request is applied, not against the argument
+that was passed: `role.Holders > 1` (the ceiling) and `live.Count > 1` (the occupancy).
+
+**Refusing rather than evicting** is the only option that breaks neither rule. The two rejected alternatives:
+evicting all but the oldest holder contradicts "evicts nobody" and makes a call about `--validator` decide
+whose post it is; letting it through is what the validator just failed. Nothing here is a new product
+decision — it is the only reading that leaves both of the founder's sentences standing. If the founder
+would rather the conversion evict, it is one branch in this method.
+
+Renewal stays exempt from the capacity check. That exemption is correct — it is what stops a validator
+losing its role mid-verdict when the founder lowers a ceiling — and with this fix it can no longer be the
+thing that keeps a standing post over-held, because such a post cannot be created in the first place.
+
+### Tests
+
+- `A_role_two_agents_are_holding_cannot_be_converted_into_a_standing_post` — the validator's exact repro,
+  through the API: refused with `single_holder`, the role unmoved, both holders still able to renew, and the
+  conversion accepted the moment one releases, with the remaining holder keeping its lease.
+- `Lowering_a_validator_roles_capacity_below_its_holders_is_still_allowed` — the rule the new check must not
+  have swallowed. A validator role may still go from 2 to 1 with two holders standing.
+- `Converting_a_validator_role_into_a_standing_post_cannot_leave_its_capacity_behind` loses its tail, which
+  asserted the behaviour this round removed.
+
+`dotnet build`: clean, 0 warnings. `dotnet test`: 3708 Core, 23 Launch, 60 Cli, 268 Server — all green.

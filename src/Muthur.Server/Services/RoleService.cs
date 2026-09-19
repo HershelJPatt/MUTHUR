@@ -35,19 +35,35 @@ public sealed class RoleService(Ledger ledger, LeasePolicy leases)
                 // Lowering the ceiling evicts nobody: existing holds stand until they lapse or are released.
                 role.Holders = holders;
             }
-            // Judged after both fields have been applied, and whether or not --holders was passed: a capacity
-            // above one on a standing post is the thing that is forbidden, not the argument that sets it.
-            // "--validator true --holders 3" works in one call; "--validator false" alone on a role already at
-            // three is refused rather than silently narrowed, because how many may hold a post is the founder's
-            // sentence to write, not a number the hub picks while answering a different question.
-            if (role.Holders > 1 && !role.IsValidator)
-                throw Fail.Rule("single_holder", $"Only a validator role may have more than one holder: '{key}' is a standing post, and who holds it has to have one answer.");
+            // Read once: the live holds decide whether this definition is legal, and they are the answer to it.
+            var live = Ordered(await m.Db.RoleHolds.Include(h => h.Agent)
+                .Where(h => h.RoleKey == key && h.LeaseExpires > m.Now).ToListAsync(ct));
+
+            // "Strictly one holder" is a fact about the post, so it is checked against the role's state after
+            // both fields have been applied, and against what is standing — not against the argument that
+            // happened to be passed. Two ways to break it, and both are refused rather than fixed silently:
+            if (!role.IsValidator)
+            {
+                // The ceiling. "--validator true --holders 3" works in one call; "--validator false" alone on a
+                // role already at three is refused, because how many may hold a post is the founder's sentence
+                // to write, not a number the hub picks while answering a different question.
+                if (role.Holders > 1)
+                    throw Fail.Rule("single_holder", $"Only a validator role may have more than one holder: '{key}' is a standing post, and who holds it has to have one answer.");
+
+                // The occupancy. Setting the ceiling to one is not enough: lowering a capacity evicts nobody by
+                // design, and a holder renews its own lease, so a post converted while two agents held it would
+                // read "1" and be held by two of them with no way to lose one. Refused instead of choosing whom
+                // to evict — whose role it is cannot be decided by a call that was about something else.
+                if (live.Count > 1)
+                    throw Fail.Rule("single_holder",
+                        $"'{key}' cannot become a standing post while {live.Count} agents hold it: {string.Join(", ", live.Select(h => h.Agent?.Name))}. " +
+                        "Lowering a capacity never evicts anyone, so the post would read one holder and have several. Release all but one first.");
+            }
             role.UpdatedAt = m.Now;
             m.Record(created ? "role.defined" : "role.updated", payload: new { role = key, role.IsValidator, role.Holders, briefChars = role.BriefMd.Length });
             // The live holds, not an empty list: a define that lowers a capacity below what is standing must not
             // answer as though it had emptied the role. The very next take will name those holders back.
-            return ToDto(role, Ordered(await m.Db.RoleHolds.Include(h => h.Agent)
-                .Where(h => h.RoleKey == key && h.LeaseExpires > m.Now).ToListAsync(ct)));
+            return ToDto(role, live);
         }, ct);
     }
 
