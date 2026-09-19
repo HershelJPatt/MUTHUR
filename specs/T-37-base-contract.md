@@ -156,3 +156,39 @@ A validator should also confirm the negative: `git diff --stat main..<branch> --
   visible.
 - If the harness's worktree base is ever worth reporting upstream, the eight-case table above is the
   evidence. Nothing in MUTHUR can fix it.
+
+## Proof (2026-09-18)
+
+```
+dotnet build   0 warnings, 0 errors
+dotnet test    Launch 23 + Cli 40 + Core 3692 + Server 196 = 3951, all passing
+git diff --stat main...HEAD -- src/ tests/   empty
+```
+
+The tests are run to prove a documentation change touched no code, not because they exercise it. The real
+check is the cold read, and the implementer — the ninth to be handed a wrong base, and saved for the ninth
+time by a hand-written line in its prompt rather than by this contract — did it three times and found
+something real each time:
+
+1. **"Stop and report" named no status.** A bad base carrying your own commits fits none of
+   `done | blocked | spec-problem` cleanly, so implementers would guess differently and the case would be
+   invisible in aggregate — exactly when someone wants to count how often it happens. Now says `blocked`.
+2. **`kit/claude/agents/muthur-implementer.md` asserted the worktree is "based on the orchestrator's task
+   branch"** — false in all nine cases, and sitting *below* the `{{core:implementer.md}}` include, so it was
+   the document's last word. A fresh implementer would have read the new step and then read a reassurance
+   that the step exists to distrust. Now "intended to be based on", which as the implementer put it *states
+   the orchestrator's intent, which is true, rather than the outcome, which has been false nine times*.
+3. **The first fix closed the gap in the less-read file.** `orchestrate.md` step 4 gained "name the base
+   branch", but the agent card's frontmatter `description` carried the same list and is **the copy an
+   orchestrator meets at the moment of delegation** — the harness surfaces the card when spawning, while
+   `orchestrate.md` is read once at the start of a loop. Both now name it.
+
+Also removed: the kit's only hard count of this failure, `orchestrate.md`'s "three times in a row". It was
+nine by the time it was read. A number in a procedure is stale the day after it is written.
+
+### What this does not do
+
+The contract only reaches an implementer once the kit is reinstalled into the live hub, which is a founder
+action, and the live installation is at `54c455d` — well behind. Until then the instruction to verify your
+base exists only on this branch. For a change specifically about implementers trusting a base nobody told
+them to check, that gap is worth closing sooner rather than later.
