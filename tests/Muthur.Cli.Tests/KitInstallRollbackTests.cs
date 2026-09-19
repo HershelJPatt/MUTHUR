@@ -18,11 +18,10 @@ namespace Muthur.Cli.Tests;
 /// and the case that must still pass after everything below.
 /// </para>
 /// <para>
-/// The read-only case is true today and will die honestly. T-56 adds an <c>Unwritable</c> pass to
-/// <c>ReadManifest</c> that refuses a read-only destination at validation, with <c>invalid_manifest</c> and
-/// exit 2, so once T-56 lands that failure never reaches the write phase and this test fails. That is the two
-/// tasks composing, not a regression: whoever integrates second re-points it at T-56's sentence — still
-/// nothing left behind, by a different mechanism — rather than deleting it.
+/// The read-only case used to reach the write phase and no longer does: T-56 (landed at <c>086fee9</c>) added
+/// an <c>Unwritable</c> pass to <c>ReadManifest</c> that refuses a read-only destination at validation, with
+/// <c>invalid_manifest</c> and exit 2, before a byte is written. It is kept below because the repository being
+/// untouched afterwards is the same claim by a different mechanism — but it proves T-56, not this task.
 /// </para>
 /// </summary>
 [Collection(KitEnvironment.Name)]
@@ -72,17 +71,21 @@ public sealed class KitInstallRollbackTests : IDisposable
         Directory.Delete(scratch, recursive: true);
     }
 
-    /// <summary>The founder's own failure: a destination the repository will not let go of.</summary>
+    /// <summary>
+    /// T-56's half: a read-only destination is decidable before the write phase, so it is refused there and
+    /// the write phase is never entered. The repository is untouched either way, which is what
+    /// <see cref="AsItWasFound"/> asserts unchanged across both mechanisms.
+    /// </summary>
     [Fact]
-    public async Task A_read_only_destination_leaves_the_repository_exactly_as_it_was_found()
+    public async Task A_read_only_destination_is_refused_before_the_write_phase_and_the_repository_is_untouched()
     {
         File.SetAttributes(Blocked, FileAttributes.ReadOnly);
 
         var (exit, code, message) = await Install();
 
-        Assert.Equal(ExitCodes.Error, exit);
-        Assert.Equal("install_failed", code);
-        Assert.Contains("while writing \"c.md\"", message, StringComparison.Ordinal);
+        Assert.Equal(ExitCodes.RuleViolation, exit);
+        Assert.Equal("invalid_manifest", code);
+        Assert.Contains("c.md", message, StringComparison.Ordinal);
         AsItWasFound();
 
         File.SetAttributes(Blocked, FileAttributes.Normal);

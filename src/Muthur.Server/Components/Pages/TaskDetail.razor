@@ -2,6 +2,7 @@
 @inherits LivePanel
 @inject TaskService Tasks
 @inject TimeProvider Clock
+@inject MuthurOptions Options
 
 <PageTitle>MUTHUR · @Id</PageTitle>
 
@@ -45,6 +46,14 @@
                     @if (task.AttendedReason is { } attended)
                     {
                         <dt>Needs a human</dt><dd>@attended</dd>
+                    }
+                    @* The detail page, not only the card: the board's cards render inside a Virtualize, which
+                       emits nothing to a fetch, and a lander deciding whether to override a hold is reading
+                       this page. Who, when and why verbatim - "there is a hold" is not weighable. *@
+                    @if (task.HoldExpires is { } until && until > _now && task.HoldBy is { } by)
+                    {
+                        <dt>Held</dt>
+                        <dd>by @by, @Format.Age(until.AddMinutes(-HoldMinutes), _now) ago: @task.HoldReason</dd>
                     }
                     @if (task.Parent is { } parent)
                     {
@@ -100,6 +109,7 @@ else if (_error is { } message)
     private string? _error;
     private string? _loadedId;
     private DateTimeOffset _now;
+    private int HoldMinutes => Options.HoldMinutes;
 
     [Parameter] public string Id { get; set; } = "";
 

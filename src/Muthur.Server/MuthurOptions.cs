@@ -13,6 +13,12 @@ public sealed class MuthurOptions
 
     public int ClaimLeaseMinutes { get; set; } = 30;
     public int RoleLeaseMinutes { get; set; } = 30;
+    /// <summary>
+    /// How long a hold on a task counts for. Two hours spans several thirty-minute orchestrator rounds, so a
+    /// hold placed in one iteration is still there for the next, and clears itself inside the session that
+    /// placed it — a permanent note nobody cleared is text the next lander learns to skip.
+    /// </summary>
+    public int HoldMinutes { get; set; } = 120;
     public int AgentStaleSeconds { get; set; } = 180;
     public int IngestIntervalSeconds { get; set; } = 180;
     /// <summary>When true, outbound text must be reviewed by an agent on a different provider than its author.</summary>

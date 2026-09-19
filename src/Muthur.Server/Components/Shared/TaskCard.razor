@@ -21,6 +21,11 @@
         {
             <span class="pill pill-blocked">needs a human</span>
         }
+        @* Who and how long, not just that: "this task has a hold" tells the next lander nothing they can weigh. *@
+        @if (Task.HoldExpires is { } until && until > Now && Task.HoldBy is { } by)
+        {
+            <span class="pill pill-blocked">held by @by · @Format.Age(until.AddMinutes(-HoldMinutes), Now)</span>
+        }
         @foreach (var v in Task.Validations)
         {
             <span class="pill pill-verdict-@v.Verdict">@v.Validator @(v.Verdict == "pending" ? "···" : v.Verdict)</span>
@@ -32,5 +37,7 @@
 @code {
     [Parameter, EditorRequired] public TaskDto Task { get; set; } = default!;
     [Parameter] public DateTimeOffset Now { get; set; }
+    /// <summary>The hold window, so the card can say when a hold was placed from when it expires.</summary>
+    [Parameter] public int HoldMinutes { get; set; } = 120;
     [Parameter] public bool ShowProject { get; set; }
 }

@@ -37,13 +37,21 @@ internal sealed class InstallTransaction(string root)
     internal string Apply(string path, string content, string? mode)
     {
         Writing = path;
-        return mode switch
-        {
-            "section" => WriteSection(path, content),
-            "create" => File.Exists(path) ? "kept" : WriteFile(path, content),
-            _ => WriteFile(path, content),
-        };
+        return Rendered(path, content, mode) is { } bytes ? WriteFile(path, bytes) : "kept";
     }
+
+    /// <summary>
+    /// Exactly what this install would leave in <paramref name="path"/>, or null when it would not write at
+    /// all. One answer to "what does this produce", so the pre-flight's question — would this put bytes here —
+    /// and the write itself cannot drift apart. They did: T-56's F3 refused a read-only file whose content
+    /// already matched, because the pre-flight knew the mode and not the content.
+    /// </summary>
+    internal static string? Rendered(string path, string content, string? mode) => mode switch
+    {
+        "section" => SectionDocument(path, content),
+        "create" => File.Exists(path) ? null : content.ReplaceLineEndings("\n"),
+        _ => content.ReplaceLineEndings("\n"),
+    };
 
     /// <summary>
     /// Writes a file verbatim — no mode, no line-ending normalisation, no status — and the only place a write
@@ -169,20 +177,22 @@ internal sealed class InstallTransaction(string root)
         return existed ? "updated" : "created";
     }
 
-    /// <summary>For files the repository also owns (AGENTS.md): maintain only a marked MUTHUR section inside them.</summary>
-    private string WriteSection(string path, string content)
+    /// <summary>
+    /// The whole document a section-mode entry would produce, existing content and all. For files the
+    /// repository also owns (AGENTS.md): only a marked MUTHUR section inside them is maintained.
+    /// </summary>
+    private static string SectionDocument(string path, string content)
     {
         const string begin = "<!-- BEGIN MUTHUR -->";
         const string end = "<!-- END MUTHUR -->";
         var section = $"{begin}\n{content.ReplaceLineEndings("\n").Trim()}\n{end}\n";
-        if (!File.Exists(path)) return WriteFile(path, section);
+        if (!File.Exists(path)) return section;
 
         var existing = File.ReadAllText(path).ReplaceLineEndings("\n");
         var start = existing.IndexOf(begin, StringComparison.Ordinal);
         var stop = existing.IndexOf(end, StringComparison.Ordinal);
-        var updated = start >= 0 && stop > start
+        return start >= 0 && stop > start
             ? existing[..start] + section + existing[(stop + end.Length)..].TrimStart('\n')
             : existing.TrimEnd('\n') + "\n\n" + section;
-        return WriteFile(path, updated);
     }
 }
