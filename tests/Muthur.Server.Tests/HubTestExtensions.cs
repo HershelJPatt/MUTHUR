@@ -1,4 +1,5 @@
 using System.Net.Http.Json;
+using Microsoft.Data.Sqlite;
 using Muthur.Contracts;
 
 namespace Muthur.Server.Tests;
@@ -59,4 +60,17 @@ public static class HubTestExtensions
 
     public static async Task<ErrorResponse> ReadErrorAsync(this HttpResponseMessage response) =>
         (await response.Content.ReadFromJsonAsync(MuthurJsonContext.Default.ErrorResponse))!;
+
+    /// <summary>
+    /// A non-empty SQLite file that EF has never migrated, so every migration is pending and startup has an
+    /// upgrade to copy the database before.
+    /// </summary>
+    public static void SeedUnmigratedDatabase(string path)
+    {
+        using var connection = new SqliteConnection($"Data Source={path};Pooling=False");
+        connection.Open();
+        using var command = connection.CreateCommand();
+        command.CommandText = "CREATE TABLE probe (note TEXT);";
+        command.ExecuteNonQuery();
+    }
 }

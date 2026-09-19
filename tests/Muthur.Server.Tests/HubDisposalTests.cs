@@ -1,4 +1,3 @@
-using Microsoft.Data.Sqlite;
 using Muthur.Contracts;
 
 namespace Muthur.Server.Tests;
@@ -37,7 +36,7 @@ public sealed class HubDisposalTests
     {
         var dataDir = Path.Combine(Path.GetTempPath(), "muthur-tests", Guid.NewGuid().ToString("n"));
         Directory.CreateDirectory(dataDir);
-        SeedUnmigratedDatabase(Path.Combine(dataDir, MuthurEnvironment.DatabaseFile));
+        HubTestExtensions.SeedUnmigratedDatabase(Path.Combine(dataDir, MuthurEnvironment.DatabaseFile));
 
         var hub = new HubFactory { DataDir = dataDir };
         try
@@ -52,15 +51,5 @@ public sealed class HubDisposalTests
 
         Assert.False(Directory.Exists(dataDir),
             $"{dataDir} survived disposal: the copy taken before migrating is still open");
-    }
-
-    /// <summary>A non-empty SQLite file that EF has never migrated, so startup has an upgrade to copy the database before.</summary>
-    private static void SeedUnmigratedDatabase(string path)
-    {
-        using var connection = new SqliteConnection($"Data Source={path};Pooling=False");
-        connection.Open();
-        using var command = connection.CreateCommand();
-        command.CommandText = "CREATE TABLE probe (note TEXT);";
-        command.ExecuteNonQuery();
     }
 }
