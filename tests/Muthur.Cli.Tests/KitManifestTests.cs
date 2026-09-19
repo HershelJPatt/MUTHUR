@@ -482,6 +482,45 @@ public sealed class KitManifestTests : IDisposable
         Installs(to);
 
     /// <summary>
+    /// The half of Win32's trimming the rule above cannot reach: a component that trims to something rather
+    /// than to nothing. Directory.CreateDirectory takes trailing spaces and dots off the last component it is
+    /// given, so WriteFile made "repo\docs" and then asked for a file inside "repo\docs " — which is why
+    /// "docs /x.md" crashed with an entry already on disk. The check is of the resolved path, so "docs..."
+    /// survives GetFullPath and is refused here.
+    /// </summary>
+    [Theory]
+    [InlineData("docs /x.md", "docs ")]
+    [InlineData("a /b /x.md", "b ")]
+    [InlineData("docs.../x.md", "docs...")]
+    [InlineData("docs ../x.md", "docs ..")]
+    [InlineData("a/docs /x.md", "docs ")]
+    public async Task A_parent_directory_the_platform_trims_is_refused_before_the_write(string to, string parent)
+    {
+        // Win32's own trimming: elsewhere "docs " is an ordinary directory and refusing it would invent a rule.
+        if (!OperatingSystem.IsWindows()) return;
+
+        await Rejects(
+            $$"""{"files":[{"from":"source.md","to":"{{to}}"}]}""",
+            $": entry 0 writes \"{to}\", whose parent directory \"{parent}\" ends in a space or a dot, "
+                + "which this platform cannot create.");
+    }
+
+    /// <summary>
+    /// The two measurements that make that rule the immediate parent, asked after resolution, rather than
+    /// every component asked of the manifest's spelling. "docs " is created and then trimmed away only when it
+    /// is the last directory CreateDirectory is handed, so as an intermediate component it installs; and a
+    /// single trailing dot is gone before the check ever sees it.
+    /// </summary>
+    [Theory]
+    // The over-refusal a rule over all components would cause: "docs " is fine on the way to "y".
+    [InlineData("docs /y/x.md")]
+    [InlineData("a /b /c/x.md")]
+    // GetFullPath normalises one trailing dot away, so the parent on disk is "docs".
+    [InlineData("docs./x.md")]
+    public Task A_trimmed_component_that_is_not_the_files_own_parent_still_installs(string to) =>
+        OperatingSystem.IsWindows() ? Installs(to) : Task.CompletedTask;
+
+    /// <summary>
     /// Rule 21. A lone surrogate is a legal JSON escape that System.Text.Json parses and then refuses to hand
     /// back, so it threw one statement after the ValueKind check had said "string" — the thing that exists to
     /// turn a bad manifest into a sentence was itself the thing that crashed.

@@ -435,6 +435,12 @@ public static partial class KitCommands
                 + "spaces and dots, which this platform trims to nothing.";
             return false;
         }
+        if (UncreatableParent(destination) is { } parent)
+        {
+            problem = $"{manifestPath}: entry {index} writes \"{to}\", whose parent directory \"{parent}\" "
+                + "ends in a space or a dot, which this platform cannot create.";
+            return false;
+        }
 
         // Decided by the repository rather than by the manifest, which is the question rule 13 already asks one
         // directory over: it calls File.Exists on the source. WriteFile would ask File.WriteAllText to overwrite
@@ -587,6 +593,24 @@ public static partial class KitCommands
 
         return Components(value).FirstOrDefault(part =>
             part is not ("" or "." or "..") && part.TrimEnd(' ', '.').Length == 0);
+    }
+
+    /// <summary>
+    /// The other half of what Win32 trims, and the half the sibling rule above cannot reach: a component that
+    /// trims to something rather than to nothing. Directory.CreateDirectory takes trailing spaces and dots off
+    /// the last component it is handed, so WriteFile creates "repo\docs" and then asks File.WriteAllText for a
+    /// file in "repo\docs ", which does not exist. Only the file's *immediate parent* is asked about, because
+    /// that is the only component CreateDirectory trims: "docs /y/x.md" creates "docs " happily on the way to
+    /// "y" and installs, so a rule over every component would refuse a manifest that works. Asked of the
+    /// resolved path rather than of the manifest's spelling, which is what lets "docs./x.md" through — the
+    /// single trailing dot is already gone — while "docs.../x.md" is refused, because those dots are kept.
+    /// </summary>
+    private static string? UncreatableParent(string destination)
+    {
+        if (!OperatingSystem.IsWindows()) return null;
+
+        var parent = Path.GetFileName(Path.GetDirectoryName(destination));
+        return parent is [.., ' ' or '.'] ? parent : null;
     }
 
     private static string Expand(string template, string kitDir) =>
