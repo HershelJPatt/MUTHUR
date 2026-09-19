@@ -17,8 +17,8 @@ You were chosen because the thinking is already done: your job is faithful, care
      own** and the tree is clean, nothing of yours can be lost: `git reset --hard <base>`, and say in your
      report whether that was a fast-forward (`git merge-base --is-ancestor HEAD <base>` succeeds) or a
      divergent reset. Both happen; which one it was is worth a line.
-   - If you **do** have commits of your own, stop and report. Do not merge and do not rebase — recovering a
-     mixed history is the orchestrator's decision, not yours.
+   - If you **do** have commits of your own, stop and report `blocked`. Do not merge and do not rebase —
+     recovering a mixed history is the orchestrator's decision, not yours.
    Never begin work against a tree whose spec you could not find. A spec read from the wrong base is the
    wrong spec, and the work will look correct and be wrong.
 2. Read the whole spec, then the code you will touch and the code next to it. Match the surrounding style:

@@ -18,6 +18,6 @@ disallowedTools:
 
 ## In Claude Code
 
-You are running in a git worktree that was created for you, on a branch of its own, based on the orchestrator's
-task branch. Work only inside it. When you are done, commit, and put the output of `git branch --show-current`
+You are running in a git worktree that was created for you, on a branch of its own, intended to be based on
+the orchestrator's task branch. Work only inside it. When you are done, commit, and put the output of `git branch --show-current`
 in the BRANCH line of your report — the orchestrator integrates your branch; you never do.
