@@ -62,14 +62,21 @@ Add one step to `kit/core/implementer.md`, as the **first** thing under its numb
 reading the spec, because a spec read from the wrong tree is the wrong spec.
 
 ```markdown
-0. **Check you are where you were told.** Your orchestrator names a base branch. Run `git log --oneline -3`
-   and confirm the spec it named is present. If it is not:
+0. **Check you are where you were told.** Your orchestrator names a base branch. Run
+   `git rev-parse HEAD` and `git rev-parse <base>` and confirm **they are the same commit**. Presence of the
+   spec file is not enough: a stale ancestor often already contains an older version of it, so the file is
+   there, the check passes, and you build from a spec that has since been amended. That failure looks
+   correct all the way to the verdict. If the two commits differ:
    - `git status --porcelain` and `git log --oneline <base>..HEAD`. If your branch has **no commits of its
      own** and the tree is clean, nothing of yours can be lost: `git reset --hard <base>`, and say in your
      report whether that was a fast-forward (`git merge-base --is-ancestor HEAD <base>` succeeds) or a
      divergent reset. Both happen; which one it was is worth a line.
-   - If you **do** have commits of your own, stop and report. Do not merge and do not rebase — recovering a
-     mixed history is the orchestrator's decision, not yours.
+   - If you **do** have commits of your own, you are being resumed for another round. Do not reset, do not
+     merge and do not rebase. Read the spec from the base instead of from your working tree —
+     `git show <base>:<spec path>` — because the orchestrator has very likely amended it, and your copy is
+     the old one. Commit your new work on top of what you have, and say in your report that you did this.
+     If the two histories have genuinely diverged in a way you cannot read past, stop and report `blocked`:
+     recovering a mixed history is the orchestrator's decision, not yours.
    Never begin work against a tree whose spec you could not find. A spec read from the wrong base is the
    wrong spec, and the work will look correct and be wrong.
 ```
@@ -192,3 +199,28 @@ The contract only reaches an implementer once the kit is reinstalled into the li
 action, and the live installation is at `54c455d` — well behind. Until then the instruction to verify your
 base exists only on this branch. For a change specifically about implementers trusting a base nobody told
 them to check, that gap is worth closing sooner rather than later.
+
+## Amendment 1 — presence is not enough (2026-09-18)
+
+`conductor-validator` failed T-37 at `134d8bc`, having installed the kit from this branch and reproduced the
+hole against real git:
+
+> Installed Claude/Codex contracts allow a stale ancestor containing an older spec: file-presence check
+> succeeds, recovery is skipped, named base/spec content is never verified.
+
+They are right, and the defect is worse than the one this task was filed for. "Confirm the spec it named is
+present" passes on any base that already contains *some* version of that file — which a stale ancestor
+usually does, because the spec is committed early and amended later. The implementer then reads a spec that
+has since changed, builds exactly what it says, and reports success. **Nothing downstream can tell that
+apart from correct work**, which is precisely the failure this contract exists to stop, arrived at through
+the contract itself.
+
+This organization amends specs constantly — T-15, T-16, T-22, T-32 and T-37 itself all gained amendments
+mid-build — so the stale-spec case is not a corner, it is the common one.
+
+The check is now identity, not existence: `git rev-parse HEAD` must equal `git rev-parse <base>`.
+
+And the resumed-round case is written down rather than left to each implementer to reinvent. Every resumed
+implementer in this session was told by hand to read the amended spec with `git show <base>:<spec>`; none of
+them could have known to from the contract, and "stop and report" would have been wrong advice for all of
+them — they had their own commits legitimately, because they were on round two.
