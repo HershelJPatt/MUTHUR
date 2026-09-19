@@ -678,8 +678,22 @@ already decided what to do with that class.
 
 `DashboardReceiptsTests` gains a theory over `7d`, `24h`, `abc`, `1e9`, `24,168`, `null`, a single space, an
 empty value and `9999999999999`, asserting each returns **200**. Two of them are pinned harder:
-`9999999999999` puts `btn-on` on the 30d control (clamped to 720, as the design says), and `7d` falls back to
-24h. None of this needed a browser to find and none needs one to check.
+`9999999999999` is shown to have been clamped to 720, and `7d` falls back to 24h. None of this needed a
+browser to find and none needs one to check.
+
+**Corrected during the unit.** This paragraph first said `9999999999999` puts `btn-on` on the 30d control.
+It cannot, and the implementer said so rather than bending something to make it true. `ReceiptsPanel` marks a
+control by comparing the **requested** window to that control's hours (`Window == hours`), and this amendment
+deliberately saturates to `int.MaxValue` in the page so the 1..720 bounds stay in `ReceiptsService`. No
+control equals `int.MaxValue`, so none is marked — which is pre-existing, already-validated behaviour:
+`?hours=100000` returned 200 with no marker on the pre-fix build too, and the validator's own table accepted
+that row. The three constraints (don't clamp in the page, don't touch the panel, mark 30d) are mutually
+unsatisfiable.
+
+The clamp is pinned through the effective window instead, which is what actually matters and is directly
+observable: the panel for `?hours=9999999999999` reports the **same window as `?hours=720`** and a different
+one from the default. That reads the outcome rather than a marker, and the same evidence shows up on a real
+hub as the panel's own `since` line.
 
 ### Follow-up, not done here
 
