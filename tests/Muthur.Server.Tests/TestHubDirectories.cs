@@ -5,58 +5,53 @@ namespace Muthur.Server.Tests;
 
 /// <summary>
 /// What becomes of a hub's data directory when its <see cref="HubFactory"/> is disposed, and the count that
-/// says so out loud. A directory is kept only when its hub logged an error: T-41's root cause was read off
-/// exactly such a log and nothing else here records an unhandled server error, while keeping every directory
-/// is what left 49,437 of them in the temp directory without anyone noticing.
+/// says so out loud. A directory is kept only when its hub logged an error it was not expecting: T-41's root
+/// cause was read off exactly such a log and nothing else here records an unhandled server error, while
+/// keeping every directory is what left 49,437 of them in the temp directory without anyone noticing.
 /// </summary>
 internal static class TestHubDirectories
 {
+    private enum Disposition { Removed, Kept, Failed }
+
+    private readonly record struct Outcome(Disposition What, string Note);
+
     private static readonly Lock Gate = new();
-    private static readonly HashSet<string> Released = new(StringComparer.OrdinalIgnoreCase);
-    private static readonly List<(string Path, string Note)> Kept = [];
-    private static readonly List<(string Path, string Message)> Failed = [];
-    private static int _removed;
+
+    /// <summary>One entry per data directory, holding the latest outcome for it — see <see cref="Release"/>.</summary>
+    private static readonly Dictionary<string, Outcome> Outcomes = new(StringComparer.OrdinalIgnoreCase);
 
     /// <summary>The directory every hub's <c>DataDir</c> is created under, named so a reader can go and look.</summary>
     private static string Root => Path.Combine(Path.GetTempPath(), "muthur-tests");
 
-    internal static void Release(string dataDir)
+    internal static void Release(string dataDir, bool expectsLoggedErrors = false)
     {
         // A restart test brings a second hub up over the same DataDir; whichever disposes second finds it
-        // already gone. That is not a failure, and nothing is counted for it.
+        // already gone. That is not a failure, and the outcome already recorded for the path stands.
         if (!Directory.Exists(dataDir)) return;
-        // WebApplicationFactory.Dispose() reaches Dispose(bool) twice — once directly, once through the
-        // DisposeAsync() it starts — so every hub asks to be released twice. Deleting twice was harmless
-        // and invisible; counting twice would not be.
-        lock (Gate)
-        {
-            if (!Released.Add(dataDir)) return;
-        }
 
-        if (Evidence(dataDir) is { } note)
-        {
-            lock (Gate) Kept.Add((dataDir, note));
-            return;
-        }
+        // WebApplicationFactory.Dispose() reaches Dispose(bool) twice — once directly, and once through the
+        // DisposeAsync() it starts — and only by the second arrival has the host let go of its log. So both
+        // arrivals attempt the delete, and the outcome recorded for a path is the latest one: a first attempt
+        // that fails and a second that succeeds is one directory, removed.
+        var outcome = Attempt(dataDir, expectsLoggedErrors);
+        lock (Gate) Outcomes[dataDir] = outcome;
+    }
 
+    private static Outcome Attempt(string dataDir, bool expectsLoggedErrors)
+    {
+        if (!expectsLoggedErrors && Evidence(dataDir) is { } note) return new(Disposition.Kept, note);
         try
         {
             Directory.Delete(dataDir, recursive: true);
-            // The path is free again, and a restart test's other hub shares it: let it be released on its
-            // own account if it puts the directory back.
-            lock (Gate)
-            {
-                Released.Remove(dataDir);
-                _removed++;
-            }
+            return new(Disposition.Removed, "");
         }
         catch (IOException ex)
         {
-            lock (Gate) Failed.Add((dataDir, ex.Message));
+            return new(Disposition.Failed, ex.Message);
         }
         catch (UnauthorizedAccessException ex)
         {
-            lock (Gate) Failed.Add((dataDir, ex.Message));
+            return new(Disposition.Failed, ex.Message);
         }
     }
 
@@ -106,22 +101,31 @@ internal static class TestHubDirectories
         return lines;
     }
 
-    // A module initializer runs before any test in the assembly, so no test class has to opt in and none can
-    // forget. The summary itself waits for process exit, when every hub has been disposed.
-    [ModuleInitializer]
-    internal static void ReportAtExit() => AppDomain.CurrentDomain.ProcessExit += (_, _) => WriteSummary();
-
-    private static void WriteSummary()
+    /// <summary>The summary as it will be written, so a test can read back what was recorded for a path.</summary>
+    internal static List<string> Summary()
     {
         lock (Gate)
         {
-            if (_removed == 0 && Kept.Count == 0 && Failed.Count == 0) return;
-            // Written whenever anything was released, even with nothing kept and nothing failed: a number
-            // that is always there is what stops this going unnoticed again.
-            Console.Error.WriteLine(
-                $"muthur-tests: {_removed} removed, {Kept.Count} kept (logged an error), {Failed.Count} could not be removed. Root: {Root}");
-            foreach (var (path, note) in Kept) Console.Error.WriteLine($"  kept    {path}  ({note})");
-            foreach (var (path, message) in Failed) Console.Error.WriteLine($"  failed  {path}  ({message})");
+            if (Outcomes.Count == 0) return [];
+            var kept = Outcomes.Where(o => o.Value.What is Disposition.Kept).ToList();
+            var failed = Outcomes.Where(o => o.Value.What is Disposition.Failed).ToList();
+            // The first line is written whenever anything was released, even with nothing kept and nothing
+            // failed: a number that is always there is what stops this going unnoticed again.
+            List<string> lines =
+            [
+                $"muthur-tests: {Outcomes.Count - kept.Count - failed.Count} removed, {kept.Count} kept (logged an error), {failed.Count} could not be removed. Root: {Root}",
+                .. kept.Select(o => $"  kept    {o.Key}  ({o.Value.Note})"),
+                .. failed.Select(o => $"  failed  {o.Key}  ({o.Value.Note})"),
+            ];
+            return lines;
         }
     }
+
+    // A module initializer runs before any test in the assembly, so no test class has to opt in and none can
+    // forget. The summary itself waits for process exit, when every hub has been disposed.
+    [ModuleInitializer]
+    internal static void ReportAtExit() => AppDomain.CurrentDomain.ProcessExit += (_, _) =>
+    {
+        foreach (var line in Summary()) Console.Error.WriteLine(line);
+    };
 }

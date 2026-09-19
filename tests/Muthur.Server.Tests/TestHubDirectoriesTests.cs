@@ -53,4 +53,31 @@ public sealed class TestHubDirectoriesTests
         // A restart test brings a second hub up over the same DataDir, so the second disposal finds nothing.
         TestHubDirectories.Release(Path.Combine(Path.GetTempPath(), "muthur-tests", Guid.NewGuid().ToString("n")));
     }
+
+    [Fact]
+    public void A_delete_that_fails_and_then_succeeds_is_reported_once_as_removed()
+    {
+        // Every hub is released twice, and the handle that defeats the first attempt is gone by the second.
+        var dir = Path.Combine(Path.GetTempPath(), "muthur-tests", Guid.NewGuid().ToString("n"));
+        Directory.CreateDirectory(dir);
+        var held = new FileStream(Path.Combine(dir, "held.bin"), FileMode.CreateNew, FileAccess.Write, FileShare.None);
+        try
+        {
+            TestHubDirectories.Release(dir);
+
+            Assert.True(Directory.Exists(dir), "a directory holding an open file cannot be deleted");
+            var reported = Assert.Single(TestHubDirectories.Summary(), line => line.Contains(dir, StringComparison.Ordinal));
+            Assert.StartsWith("  failed  ", reported, StringComparison.Ordinal);
+        }
+        finally
+        {
+            held.Dispose();
+        }
+
+        TestHubDirectories.Release(dir);
+
+        Assert.False(Directory.Exists(dir));
+        // Removed directories are counted, not listed, so the earlier failure must no longer be named.
+        Assert.DoesNotContain(TestHubDirectories.Summary(), line => line.Contains(dir, StringComparison.Ordinal));
+    }
 }
