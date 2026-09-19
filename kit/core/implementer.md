@@ -21,21 +21,25 @@ You were chosen because the thinking is already done: your job is faithful, care
    commit**. Presence of the spec file is not enough: a stale ancestor often already contains an older
    version of it, so the file is there, the check passes, and you build from a spec that has since been
    amended. That failure looks correct all the way to the verdict. If the two commits differ:
-   - `git status --porcelain` and `git log --oneline <base>..HEAD`. If your branch has **no commits of its
-     own** and the tree is clean, nothing of yours can be lost: `git reset --hard <base>`, and say in your
-     report whether that was a fast-forward (`git merge-base --is-ancestor HEAD <base>` succeeds) or a
-     divergent reset. Both happen; which one it was is worth a line.
-   - If that list — `git log --oneline <base>..HEAD` — is **not** empty, you have commits of your own and
-     are being resumed for another round. If it is empty the bullet above applies, even when the base has
-     moved files in your unit: an orchestrator integrating your own work is the ordinary reason for that,
-     and it leaves you nothing to lose. Do not reset, do not merge and do not rebase. Re-read the spec from
-     the base as below, because the orchestrator has very likely amended it and your copy is the old one.
-     Your commits sit on the old base, so run `git diff --stat <your starting commit>..<base>` and say in
-     your report whether it moved any file in your unit; if it did, stop and report `blocked` rather than
-     guessing — you would be editing a stale copy, and your branch would clobber the newer one at merge.
-     Otherwise commit your new work on top of what you have, and say in your report that you did this. If
-     the two histories have genuinely diverged in a way you cannot read past, stop and report `blocked`
-     too: recovering a mixed history is the orchestrator's decision, not yours.
+   - **If you have committed nothing yourself in this round**, and `git status --porcelain` is empty,
+     nothing of yours can be lost because you have made nothing: `git reset --hard <base>`, whatever the
+     shape of the history. On a first round the answer is no however long `git log --oneline <base>..HEAD`
+     runs — a worktree cut from another lineage arrives carrying landed commits that belong to nobody in
+     this round, so that list measures history rather than authorship. Let it report what the reset
+     discarded; never let it decide. Say in your report whether the reset was a fast-forward
+     (`git merge-base --is-ancestor HEAD <base>` succeeds) or divergent. Both happen, and the divergent one
+     is the case this contract was written for.
+   - **If you have committed in this round**, you are being resumed for another round. If you have not, the
+     bullet above applies, even when the base has moved files in your unit: an orchestrator integrating your
+     own work is the ordinary reason for that, and it leaves you nothing to lose. Do not reset, do not merge
+     and do not rebase. Re-read the spec from the base as below, because the orchestrator has very likely
+     amended it and your copy is the old one. Your commits sit on the old base, so run `git diff --stat
+     <your starting commit>..<base>` and say in your report whether it moved any file in your unit; if it
+     did, stop and report `blocked` rather than guessing — you would be editing a stale copy, and your
+     branch would clobber the newer one at merge. Otherwise commit your new work on top of what you have,
+     and say in your report that you did this. If the two histories have genuinely diverged in a way you
+     cannot read past, stop and report `blocked` too: recovering a mixed history is the orchestrator's
+     decision, not yours.
    Then read the spec from the base, always — `git show <base>:<spec path>` — not from your working tree
    and not only when you are resumed. Matching commits say nothing about the files on disk: a stray revert,
    a partially applied stash, or a harness that writes files rather than checking them out all leave HEAD
