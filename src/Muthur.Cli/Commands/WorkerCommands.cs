@@ -90,7 +90,36 @@ public static class WorkerCommands
                 Routes.Conductor, new ConductorSwitch(enabled), MuthurJsonContext.Default.ConductorSwitch, ct)));
             conductor.Subcommands.Add(command);
         }
+
+        var count = new Argument<int>("count") { Description = "Sessions the conductor may run at once." };
+        var sessions = new Command("sessions", "Raise or lower how many sessions the conductor may run at once. Needs --founder.") { count };
+        sessions.SetAction(async (parse, ct) => Output.Emit(parse, await HubClient.For(parse).PostAsync(
+            Routes.ConductorSessions, SessionsRequest(parse.GetValue(count)), MuthurJsonContext.Default.ConductorSessionsRequest, ct)));
+        conductor.Subcommands.Add(sessions);
+
+        var from = new Option<string?>("--from") { Description = "When the window opens, HH:mm in local time." };
+        var to = new Option<string?>("--to") { Description = "When it closes, HH:mm in local time. Earlier than --from means it crosses midnight." };
+        var inWindow = new Option<int?>("--sessions") { Description = "Sessions allowed while the window is open." };
+        var clear = new Option<bool>("--clear") { Description = "Drop the window and the standing ceiling with it." };
+        var unattended = new Command("unattended", "Cap sessions during the hours nobody is watching. Needs --founder.")
+            { from, to, inWindow, clear };
+        unattended.SetAction(async (parse, ct) => Output.Emit(parse, await HubClient.For(parse).PostAsync(
+            Routes.ConductorSessions,
+            UnattendedRequest(parse.GetValue(from), parse.GetValue(to), parse.GetValue(inWindow), parse.GetValue(clear)),
+            MuthurJsonContext.Default.ConductorSessionsRequest, ct)));
+        conductor.Subcommands.Add(unattended);
     }
+
+    /// <summary>
+    /// What the two ceiling commands put on the wire. Pulled out of the actions because the mistake worth catching
+    /// is a value reaching the wrong field: the window's <c>--sessions</c> is not the standing ceiling, and the hub
+    /// would happily obey either. The hub decides what is legal; neither of these judges anything.
+    /// </summary>
+    public static ConductorSessionsRequest SessionsRequest(int sessions) => new(sessions, null, null, null, Clear: false);
+
+    /// <inheritdoc cref="SessionsRequest"/>
+    public static ConductorSessionsRequest UnattendedRequest(string? from, string? to, int? sessions, bool clear) =>
+        new(null, from, to, sessions, clear);
 
     private sealed record RunOptions(string Tier, string Spec, string? Unit, string? Task, string? Harness, string? Base, string? Branch, string? Note, int TimeoutMinutes);
 

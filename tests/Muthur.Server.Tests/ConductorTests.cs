@@ -1486,4 +1486,233 @@ public sealed class ConductorTests : IDisposable
         var refused = await agent.PostAsJsonAsync(Routes.Conductor, new ConductorSwitch(true));
         Assert.Equal(System.Net.HttpStatusCode.Unauthorized, refused.StatusCode);
     }
+
+    /// <summary>The founder moving the ceiling, as the CLI sends it.</summary>
+    private Task<HttpResponseMessage> SetCeilingAsync(int? sessions = null, string? from = null, string? to = null, int? inWindow = null, bool clear = false) =>
+        _hub.Founder().PostAsJsonAsync(Routes.ConductorSessions, new ConductorSessionsRequest(sessions, from, to, inWindow, clear));
+
+    private static async Task<ConductorStatusDto> ReadStatusAsync(HttpResponseMessage response)
+    {
+        response.EnsureSuccessStatusCode();
+        return (await response.Content.ReadFromJsonAsync(MuthurJsonContext.Default.ConductorStatusDto))!;
+    }
+
+    [Fact]
+    public async Task With_nothing_set_the_ceiling_is_the_number_in_the_configuration_file()
+    {
+        _hub.Settings["Muthur:ConductorMaxSessions"] = "3";
+
+        var status = await Conductor.StatusAsync();
+
+        Assert.Equal(3, status.Ceiling);
+        Assert.Equal(3, status.MaxSessions);
+        Assert.Equal("Muthur:ConductorMaxSessions.", status.CeilingReason);
+    }
+
+    [Fact]
+    public async Task The_number_the_founder_sets_is_the_one_the_pass_obeys()
+    {
+        // Five pairs it could staff, a configuration file that would allow nine, and a founder who said four.
+        // Nobody should have to edit a file and restart the hub to say that.
+        _hub.Settings["Muthur:ConductorMaxSessions"] = "9";
+        await SetUpAsync("win-validator");
+        await DefineAsync(5, "win-validator");
+        _hub.Validators.Block = true;   // the sessions are still running when the pass ends, so the ceiling is what counts
+        var owner = await _hub.RegisterAgentAsync("owner");
+        for (var i = 0; i < 5; i++) await ValidatingTaskAsync(owner, $"Waiting {i}", priority: 5 - i);
+
+        var status = await ReadStatusAsync(await SetCeilingAsync(sessions: 4));
+
+        Assert.Equal(4, status.Ceiling);
+        Assert.Equal("Set by the founder.", status.CeilingReason);
+        Assert.Equal(9, status.MaxSessions);   // what the file asks for, unchanged, so nothing reading it moves
+        Assert.Equal(5, (await Conductor.PlanAsync()).Count);
+        Assert.Equal(4, await Conductor.RunPassAsync());
+        Assert.Equal(4, _hub.Validators.Started.Count);
+        Assert.Equal(4, (await Conductor.StatusAsync()).Ceiling);
+
+        _hub.Validators.Finish(4);
+    }
+
+    [Fact]
+    public async Task The_ceiling_the_founder_set_outlives_the_process_that_heard_it()
+    {
+        // The hub is off for hours at a time, so this lives in the database like the on/off switch. A second hub
+        // over the same data reads it back through a service instance that never heard the founder say it.
+        (await SetCeilingAsync(sessions: 4)).EnsureSuccessStatusCode();
+
+        using var restarted = new HubFactory { DataDir = _hub.DataDir };
+        var status = await restarted.Services.GetRequiredService<ConductorService>().StatusAsync();
+
+        Assert.Equal(4, status.Ceiling);
+        Assert.Equal("Set by the founder.", status.CeilingReason);
+        Assert.Equal(2, status.MaxSessions);   // the configuration default, so the 4 can only have come from Meta
+    }
+
+    [Fact]
+    public async Task While_the_founder_is_asleep_the_window_is_the_ceiling()
+    {
+        // Pinned to UTC so "local" is a fact of this test and not of the machine running it, and driven entirely
+        // by stepping the fake clock.
+        _hub.Clock.SetLocalTimeZone(TimeZoneInfo.Utc);
+        (await SetCeilingAsync(sessions: 4)).EnsureSuccessStatusCode();
+
+        var awake = await ReadStatusAsync(await SetCeilingAsync(from: "22:00", to: "07:00", inWindow: 1));
+        Assert.Equal(4, awake.Ceiling);                          // noon: the window is shut
+        Assert.Equal("Set by the founder.", awake.CeilingReason);
+
+        // 23:00, then 02:00 the next morning: one window, either side of midnight.
+        foreach (var step in new[] { TimeSpan.FromHours(11), TimeSpan.FromHours(3) })
+        {
+            _hub.Clock.Advance(step);
+            var asleep = await Conductor.StatusAsync();
+            Assert.Equal(1, asleep.Ceiling);
+            Assert.Equal("Unattended 22:00-07:00 caps this at 1.", asleep.CeilingReason);
+        }
+
+        _hub.Clock.Advance(TimeSpan.FromHours(10));   // noon again, and the founder's own number is back
+        var morning = await Conductor.StatusAsync();
+        Assert.Equal(4, morning.Ceiling);
+        Assert.Equal("Set by the founder.", morning.CeilingReason);
+    }
+
+    [Fact]
+    public async Task An_open_window_is_a_ceiling_the_pass_keeps_to_and_not_only_a_line_on_a_card()
+    {
+        _hub.Settings["Muthur:ConductorMaxSessions"] = "9";
+        _hub.Clock.SetLocalTimeZone(TimeZoneInfo.Utc);
+        await SetUpAsync("win-validator");
+        await DefineAsync(3, "win-validator");
+        _hub.Validators.Block = true;
+        var owner = await _hub.RegisterAgentAsync("owner");
+        for (var i = 0; i < 3; i++) await ValidatingTaskAsync(owner, $"Waiting {i}", priority: 3 - i);
+        (await SetCeilingAsync(sessions: 4)).EnsureSuccessStatusCode();
+        (await SetCeilingAsync(from: "22:00", to: "07:00", inWindow: 1)).EnsureSuccessStatusCode();
+
+        _hub.Clock.Advance(TimeSpan.FromHours(11));   // 23:00
+
+        Assert.Equal(3, (await Conductor.PlanAsync()).Count);
+        Assert.Equal(1, await Conductor.RunPassAsync());
+        Assert.Single(_hub.Validators.Started);
+
+        _hub.Validators.Finish();
+    }
+
+    [Fact]
+    public async Task The_window_is_the_founders_own_night_and_not_UTC()
+    {
+        // Ten hours east: noon on the hub's clock is ten at night where the founder is asleep.
+        _hub.Clock.SetLocalTimeZone(TimeZoneInfo.CreateCustomTimeZone("muthur-test-east", TimeSpan.FromHours(10), "east", "east"));
+
+        var status = await ReadStatusAsync(await SetCeilingAsync(from: "22:00", to: "07:00", inWindow: 1));
+
+        Assert.Equal(1, status.Ceiling);
+        Assert.Equal("Unattended 22:00-07:00 caps this at 1.", status.CeilingReason);
+    }
+
+    [Fact]
+    public async Task Clear_takes_both_numbers_away_and_the_configuration_file_has_its_say_again()
+    {
+        _hub.Settings["Muthur:ConductorMaxSessions"] = "3";
+        _hub.Clock.SetLocalTimeZone(TimeZoneInfo.Utc);
+        (await SetCeilingAsync(sessions: 4)).EnsureSuccessStatusCode();
+        (await SetCeilingAsync(from: "22:00", to: "07:00", inWindow: 1)).EnsureSuccessStatusCode();
+        _hub.Clock.Advance(TimeSpan.FromHours(11));   // 23:00, so both keys are in force when the clear lands
+        Assert.Equal(1, (await Conductor.StatusAsync()).Ceiling);
+
+        var cleared = await ReadStatusAsync(await SetCeilingAsync(clear: true));
+
+        Assert.Equal(3, cleared.Ceiling);
+        Assert.Equal("Muthur:ConductorMaxSessions.", cleared.CeilingReason);
+        await using var db = await _hub.Services.GetRequiredService<IDbContextFactory<MuthurDb>>().CreateDbContextAsync();
+        Assert.Empty(await db.Meta.Where(e => e.Key == MetaEntry.ConductorSessions || e.Key == MetaEntry.ConductorUnattended).ToListAsync());
+        Assert.Contains(await EventsAsync(), e => e.Type == "conductor.ceiling_cleared");
+    }
+
+    [Theory]
+    [InlineData(0, null)]
+    [InlineData(-1, null)]
+    [InlineData(null, 0)]
+    [InlineData(null, -3)]
+    public async Task A_conductor_allowed_no_sessions_at_all_is_refused(int? sessions, int? inWindow)
+    {
+        var refused = await SetCeilingAsync(sessions, inWindow is null ? null : "22:00", inWindow is null ? null : "07:00", inWindow);
+
+        Assert.Equal(System.Net.HttpStatusCode.UnprocessableEntity, refused.StatusCode);
+        var error = await refused.ReadErrorAsync();
+        Assert.Equal("sessions_invalid", error.Code);
+        Assert.Equal("The conductor needs at least one session to do anything.", error.Message);
+    }
+
+    [Theory]
+    [InlineData("22:00", null, null)]
+    [InlineData(null, "07:00", null)]
+    [InlineData(null, null, 1)]
+    [InlineData("22:00", "07:00", null)]
+    [InlineData("22:00", null, 1)]
+    [InlineData(null, "07:00", 1)]
+    public async Task Half_an_unattended_window_is_refused_rather_than_guessed(string? from, string? to, int? inWindow)
+    {
+        var refused = await SetCeilingAsync(from: from, to: to, inWindow: inWindow);
+
+        Assert.Equal(System.Net.HttpStatusCode.UnprocessableEntity, refused.StatusCode);
+        var error = await refused.ReadErrorAsync();
+        Assert.Equal("unattended_incomplete", error.Code);
+        Assert.Equal("An unattended window needs --from, --to and --sessions.", error.Message);
+    }
+
+    [Theory]
+    [InlineData("9am", "07:00")]
+    [InlineData("7:00", "07:00")]
+    [InlineData("24:00", "07:00")]
+    [InlineData("22:60", "07:00")]
+    [InlineData("22:00:00", "07:00")]
+    [InlineData("22.00", "07:00")]
+    [InlineData("22:00", "7am")]
+    public async Task A_time_that_is_not_HH_mm_is_refused(string from, string to)
+    {
+        var refused = await SetCeilingAsync(from: from, to: to, inWindow: 1);
+
+        Assert.Equal(System.Net.HttpStatusCode.UnprocessableEntity, refused.StatusCode);
+        var error = await refused.ReadErrorAsync();
+        Assert.Equal("time_invalid", error.Code);
+        Assert.Equal("Times are HH:mm, 24-hour.", error.Message);
+    }
+
+    [Fact]
+    public async Task A_window_with_no_width_is_no_window()
+    {
+        // Midnight to midnight would otherwise read as "always" or "never" depending on which way the comparison
+        // was written. A founder who means always says so with `conductor sessions`.
+        _hub.Clock.SetLocalTimeZone(TimeZoneInfo.Utc);
+
+        var status = await ReadStatusAsync(await SetCeilingAsync(from: "12:00", to: "12:00", inWindow: 1));
+
+        Assert.Equal(2, status.Ceiling);
+        Assert.Equal("Muthur:ConductorMaxSessions.", status.CeilingReason);
+    }
+
+    [Fact]
+    public async Task The_ledger_carries_the_numbers_the_founder_chose()
+    {
+        (await SetCeilingAsync(sessions: 4)).EnsureSuccessStatusCode();
+        (await SetCeilingAsync(from: "22:00", to: "07:00", inWindow: 1)).EnsureSuccessStatusCode();
+
+        var events = await EventsAsync();
+        Assert.Equal(4, Assert.Single(events, e => e.Type == "conductor.sessions_set").Payload.GetProperty("sessions").GetInt32());
+        var window = Assert.Single(events, e => e.Type == "conductor.unattended_set").Payload;
+        Assert.Equal("22:00", window.GetProperty("from").GetString());
+        Assert.Equal("07:00", window.GetProperty("to").GetString());
+        Assert.Equal(1, window.GetProperty("sessions").GetInt32());
+    }
+
+    [Fact]
+    public async Task An_agent_may_not_move_the_ceiling()
+    {
+        var agent = await _hub.RegisterAgentAsync("nosy");
+
+        var refused = await agent.PostAsJsonAsync(Routes.ConductorSessions, new ConductorSessionsRequest(99, null, null, null, Clear: false));
+
+        Assert.Equal(System.Net.HttpStatusCode.Unauthorized, refused.StatusCode);
+    }
 }
