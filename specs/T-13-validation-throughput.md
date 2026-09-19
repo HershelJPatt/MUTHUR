@@ -553,3 +553,50 @@ the second time I have made it, and the reason it is spelled out at length here.
 - `muthur role list` output changed shape (`holder` → `holders[]`, plus `capacity`). Any brief in `kit/` or
   prose in `docs/` that quotes the old shape should be swept — check `kit/briefs/validator.md` and
   `kit/core/`. If a sweep is needed beyond one or two lines, file it rather than widening this task.
+
+## Amendment after the first validation round (2026-09-19, top-right)
+
+`conductor-validator` failed this branch at `735937f` with one blocking defect and one observation. Both
+were real, both are fixed here, and both now have a test that fails without the fix.
+
+### The blocking defect: the capacity gate was attached to the argument, not to the role
+
+`role define standing-post --validator false` on a role already sitting at two holders was accepted, and
+the role then admitted two agents to a standing post. Defining the same thing directly
+(`--validator false --holders 2`) was correctly refused with `single_holder` — the gate lived inside
+`if (request.Holders is { } holders)`, so a call that changed only `IsValidator` walked straight past it.
+
+The spec said the invariant ("Letting a non-validator role have more than one holder" is a non-goal, "this
+task enforces it") but wrote the rule as a check on the incoming argument. That was the error. The rule now
+reads the role's state after both fields are applied:
+
+```
+if (role.Holders > 1 && !role.IsValidator) throw Fail.Rule("single_holder", …);
+```
+
+**Refused, not silently narrowed.** The founder converting a two-holder validator into a standing post gets
+exit 2 and writes `--validator false --holders 1`, which is accepted in one call. Quietly setting the
+capacity to 1 while answering a question about `--validator` would make the hub pick a number the founder
+did not say, and how many may hold a post is exactly the sentence this task exists to make explicit.
+
+### The observation: the define response reported an empty role
+
+`DefineAsync` returned `ToDto(role, [])`, so lowering a capacity from 2 to 1 while two agents held the role
+answered with `holders: []` — and the very next `take` answered `full: 2 of 1 held by v1, v2`. One of those
+was lying. `DefineAsync` now reads the live holds inside the same mutation and returns them, so the
+response agrees with `role list` and with the next `take`. Lapsed leases are not holders: the read filters
+on `LeaseExpires > m.Now`, and the test advances the clock two days to prove it.
+
+### Also in this commit
+
+`main` (82 commits) is merged in. Two conflicts, both resolved without a design decision:
+
+- `RoleCommands.cs` — main's `FileProvenance` guard on `--brief-file` plus this branch's `--holders`.
+- `ConductorTests.cs` — both sides added tests. Main's `The_longest_role_key_there_can_be_still_makes_an_agent_name_the_hub_accepts`
+  was written against the old `IdentityFor(string role, …)`; it is kept, adapted to the `(task, role)` pair,
+  and its assertion updated to the `conductor-<role>-t-<n>` name. It is worth keeping beside this branch's
+  `The_longest_identity_the_hub_can_produce_is_a_name_the_hub_accepts` because it *derives* the 48 from
+  `RoleKey`'s own rule instead of quoting it, so raising the key limit without raising the agent-name limit
+  fails here rather than in a staged validator session.
+
+`dotnet build`: clean, 0 warnings. `dotnet test`: 3708 Core, 23 Launch, 60 Cli, 266 Server — all green.

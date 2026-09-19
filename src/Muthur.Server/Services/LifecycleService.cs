@@ -25,7 +25,9 @@ public sealed class LifecycleService(Ledger ledger, LeasePolicy leases, ITaskLan
         }, ct);
         if (branch == project.DefaultBranch)
             throw Fail.Rule("branch_is_default", $"'{branch}' is the default branch. Work happens on a task branch; MUTHUR lands it.");
-        if (!await lander.BranchExistsAsync(project, branch, ct))
+        // The head goes into the event: the conductor's cap asks whether a resubmission actually changed anything.
+        var head = await lander.BranchHeadAsync(project, branch, ct);
+        if (head is null)
             throw Fail.Rule("branch_missing", $"Branch '{branch}' does not exist in {project.RepoPath}.");
 
         return await ledger.MutateAsync(caller, async m =>
@@ -47,7 +49,7 @@ public sealed class LifecycleService(Ledger ledger, LeasePolicy leases, ITaskLan
             task.State = required.Count == 0 ? TaskState.Validated : TaskState.Validating;
             task.ClaimExpires = null;
             task.UpdatedAt = m.Now;
-            m.Record("task.implemented", task.Id, new { branch, spec = specPath, validators = required });
+            m.Record("task.implemented", task.Id, new { branch, head, spec = specPath, validators = required });
             foreach (var validator in required)
                 MessageService.PostFromHub(m, Recipient.Role, validator,
                     $"{Wire.TaskId(task.Id)} \"{task.Title}\" is ready for validation on branch {branch}.", task.Id);

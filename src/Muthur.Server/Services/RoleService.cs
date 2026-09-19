@@ -1,4 +1,3 @@
-using System.Text.RegularExpressions;
 using Microsoft.EntityFrameworkCore;
 using Muthur.Contracts;
 using Muthur.Core;
@@ -7,19 +6,16 @@ using Muthur.Server.Auth;
 
 namespace Muthur.Server.Services;
 
-public sealed partial class RoleService(Ledger ledger, LeasePolicy leases)
+public sealed class RoleService(Ledger ledger, LeasePolicy leases)
 {
-    [GeneratedRegex("^[a-z0-9][a-z0-9-]{0,47}$")]
-    private static partial Regex KeyPattern();
-
     /// <summary>Creates a role or updates its brief. Founder only: a brief is an agent's job description.</summary>
     public Task<RoleDto> DefineAsync(Caller caller, DefineRoleRequest request, CancellationToken ct = default)
     {
         if (!caller.IsFounder)
             throw Fail.Unauthorized("Roles and their briefs are defined by the founder (pass --founder).");
         var key = Normalize(request.Key);
-        if (!KeyPattern().IsMatch(key))
-            throw Fail.Rule("invalid_key", "Role keys are 1-48 chars of a-z, 0-9 or '-'.");
+        if (!RoleKey.IsValid(key))
+            throw Fail.Rule("invalid_key", $"Role keys are {RoleKey.Rule}.");
 
         return ledger.MutateAsync(caller, async m =>
         {
@@ -32,19 +28,26 @@ public sealed partial class RoleService(Ledger ledger, LeasePolicy leases)
             }
             if (request.Brief is not null) role.BriefMd = request.Brief;
             if (request.IsValidator is { } validator) role.IsValidator = validator;
-            // Judged after IsValidator has been applied, so "--validator true --holders 3" works in one call.
             if (request.Holders is { } holders)
             {
                 if (holders < 1)
                     throw Fail.Rule("invalid_holders", "A role needs at least one holder.");
-                if (holders > 1 && !role.IsValidator)
-                    throw Fail.Rule("single_holder", $"Only a validator role may have more than one holder: '{key}' is a standing post, and who holds it has to have one answer.");
                 // Lowering the ceiling evicts nobody: existing holds stand until they lapse or are released.
                 role.Holders = holders;
             }
+            // Judged after both fields have been applied, and whether or not --holders was passed: a capacity
+            // above one on a standing post is the thing that is forbidden, not the argument that sets it.
+            // "--validator true --holders 3" works in one call; "--validator false" alone on a role already at
+            // three is refused rather than silently narrowed, because how many may hold a post is the founder's
+            // sentence to write, not a number the hub picks while answering a different question.
+            if (role.Holders > 1 && !role.IsValidator)
+                throw Fail.Rule("single_holder", $"Only a validator role may have more than one holder: '{key}' is a standing post, and who holds it has to have one answer.");
             role.UpdatedAt = m.Now;
             m.Record(created ? "role.defined" : "role.updated", payload: new { role = key, role.IsValidator, role.Holders, briefChars = role.BriefMd.Length });
-            return ToDto(role, []);
+            // The live holds, not an empty list: a define that lowers a capacity below what is standing must not
+            // answer as though it had emptied the role. The very next take will name those holders back.
+            return ToDto(role, Ordered(await m.Db.RoleHolds.Include(h => h.Agent)
+                .Where(h => h.RoleKey == key && h.LeaseExpires > m.Now).ToListAsync(ct)));
         }, ct);
     }
 

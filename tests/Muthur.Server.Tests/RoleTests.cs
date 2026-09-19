@@ -105,6 +105,69 @@ public sealed class RoleTests : IDisposable
         Assert.Equal(3, (await RoleAsync("platform-checks")).Capacity);
     }
 
+    /// <summary>
+    /// The hole a validator found in the first round of this task: the capacity gate only ran when --holders
+    /// was passed, so converting a two-holder validator into a standing post left a standing post two agents
+    /// could hold. The invariant belongs to the role's state, not to the argument that last touched it.
+    /// </summary>
+    [Fact]
+    public async Task Converting_a_validator_role_into_a_standing_post_cannot_leave_its_capacity_behind()
+    {
+        (await _hub.Founder().PutAsJsonAsync(Routes.Roles, new DefineRoleRequest("platform-checks", IsValidator: true, Holders: 2))).EnsureSuccessStatusCode();
+
+        var converted = await _hub.Founder().PutAsJsonAsync(Routes.Roles, new DefineRoleRequest("platform-checks", IsValidator: false));
+        Assert.Equal(HttpStatusCode.UnprocessableEntity, converted.StatusCode);
+        Assert.Equal("single_holder", (await converted.ReadErrorAsync()).Code);
+
+        // Refused outright, so the role is exactly as it was: still a validator, still at two.
+        var unchanged = await RoleAsync("platform-checks");
+        Assert.True(unchanged.IsValidator);
+        Assert.Equal(2, unchanged.Capacity);
+
+        // Two agents could hold it before, and that is precisely what must not survive the conversion.
+        var one = await _hub.RegisterAgentAsync("one");
+        var two = await _hub.RegisterAgentAsync("two");
+        (await one.PostAsync(Routes.RoleAction("platform-checks", "take"), null)).EnsureSuccessStatusCode();
+        _hub.Clock.Advance(TimeSpan.FromSeconds(1));
+        (await two.PostAsync(Routes.RoleAction("platform-checks", "take"), null)).EnsureSuccessStatusCode();
+
+        // Saying both things in one call is how the founder actually converts it, and that is accepted.
+        (await _hub.Founder().PutAsJsonAsync(Routes.Roles, new DefineRoleRequest("platform-checks", IsValidator: false, Holders: 1))).EnsureSuccessStatusCode();
+        var post = await RoleAsync("platform-checks");
+        Assert.False(post.IsValidator);
+        Assert.Equal(1, post.Capacity);
+        Assert.Equal(["one", "two"], Names(post)); // standing holds are still not evicted by a lower ceiling
+    }
+
+    /// <summary>
+    /// Also found in that round: the define response reported an empty holder list while two agents held the
+    /// role, so the answer to "what did I just do" disagreed with the very next take.
+    /// </summary>
+    [Fact]
+    public async Task Defining_a_role_answers_with_who_holds_it_now_not_with_an_empty_list()
+    {
+        (await _hub.Founder().PutAsJsonAsync(Routes.Roles, new DefineRoleRequest("win-validator", Holders: 2))).EnsureSuccessStatusCode();
+        var one = await _hub.RegisterAgentAsync("one");
+        var two = await _hub.RegisterAgentAsync("two");
+        (await one.PostAsync(Routes.RoleAction("win-validator", "take"), null)).EnsureSuccessStatusCode();
+        _hub.Clock.Advance(TimeSpan.FromSeconds(1));
+        (await two.PostAsync(Routes.RoleAction("win-validator", "take"), null)).EnsureSuccessStatusCode();
+
+        var lowered = await _hub.Founder().PutAsJsonAsync(Routes.Roles, new DefineRoleRequest("win-validator", Holders: 1));
+        lowered.EnsureSuccessStatusCode();
+        var answered = (await lowered.Content.ReadFromJsonAsync(MuthurJsonContext.Default.RoleDto))!;
+
+        Assert.Equal(1, answered.Capacity);
+        Assert.Equal(["one", "two"], Names(answered));
+        Assert.Equal(Names(await RoleAsync("win-validator")), Names(answered)); // and it agrees with the listing
+
+        // A lease that has lapsed is not a holder: the response reads live occupancy, not every row.
+        _hub.Clock.Advance(TimeSpan.FromDays(2));
+        var later = await _hub.Founder().PutAsJsonAsync(Routes.Roles, new DefineRoleRequest("win-validator", Brief: "# win-validator\nDrive it."));
+        later.EnsureSuccessStatusCode();
+        Assert.Empty((await later.Content.ReadFromJsonAsync(MuthurJsonContext.Default.RoleDto))!.Holders);
+    }
+
     [Fact]
     public async Task A_role_needs_at_least_one_holder()
     {

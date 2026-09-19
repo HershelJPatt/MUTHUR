@@ -1,6 +1,7 @@
 using System.Net.Http.Json;
 using Microsoft.AspNetCore.Hosting;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.DependencyInjection.Extensions;
 using Muthur.Contracts;
 using Muthur.Server.Services;
 
@@ -83,12 +84,26 @@ public sealed class DashboardOperationsTests : IDisposable
     [Fact]
     public async Task The_doctor_panel_renders_and_offers_a_re_check_even_when_there_is_nothing_to_check()
     {
-        var page = await _hub.CreateClient().GetStringAsync("/operations");
+        // Every hub now checks its own log file, so the empty state is only reachable with the checks taken away.
+        using var hub = _hub.WithWebHostBuilder(b => b.ConfigureServices(s => s.RemoveAll<IDoctorCheck>()));
+
+        var page = await hub.CreateClient().GetStringAsync("/operations");
 
         Assert.Contains(">Doctor<", page);
         Assert.Contains("all ok", page);
         Assert.Contains(">Re-check<", page);
         Assert.Contains("nothing to check", page);
+    }
+
+    [Fact]
+    public async Task The_doctor_panel_shows_the_one_check_every_hub_can_always_make_of_itself()
+    {
+        var page = await _hub.CreateClient().GetStringAsync("/operations");
+
+        Assert.Contains(">Doctor<", page);
+        Assert.Contains("all ok", page);
+        Assert.Contains(MuthurEnvironment.LogFile, page);
+        Assert.DoesNotContain("nothing to check", page);
     }
 
     [Fact]

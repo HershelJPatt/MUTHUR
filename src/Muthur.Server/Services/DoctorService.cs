@@ -14,7 +14,8 @@ public interface IDoctorCheck
 /// <summary>Asks every check whether the hub can do its job. Mutates nothing and records no ledger event.</summary>
 public sealed class DoctorService(IEnumerable<IDoctorCheck> checks, TimeProvider clock)
 {
-    private static readonly string[] Order = ["secret", "ingest", "outbound", "project", "repo", "role"];
+    // A hub that cannot write its own log is read before anything that depends on reading it.
+    private static readonly string[] Order = ["secret", "logging", "ingest", "outbound", "project", "repo", "role"];
 
     public async Task<DoctorDto> RunAsync(bool probe, CancellationToken ct = default)
     {

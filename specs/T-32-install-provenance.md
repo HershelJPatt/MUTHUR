@@ -1,0 +1,362 @@
+# T-32 — `install.ps1` publishes whatever working tree it is run from
+
+> Frozen spec. An implementer completes this without making design decisions.
+> If something here is wrong or missing, the implementer stops and reports; they do not improvise.
+
+## Goal
+
+After this task, every install says what it published — ref, commit, and the worktree it came from — on
+every run, correct or not. `-Ref` makes publishing a named commit cheap instead of a discipline, and a dirty
+tree is refused, because a binary built from uncommitted work corresponds to no commit and can be named by
+neither the ledger nor a validator's evidence.
+
+## The incident, and the measurement
+
+`install.ps1` publishes `$repo`, the working tree it is run from, and copies `kit/` from the same tree. The
+founder reinstalled the live hub while an orchestrator had that tree on a task branch. The install
+succeeded and silently produced a pre-T-30 CLI, while the live brief — re-served from the same moving tree —
+instructed `muthur validate blocked`. Four conductor-started validator sessions on T-13 then refused
+correctly, tried to record the refusal, and could not: the binary had no such command. T-30's cap bounded
+the loop; the reason never reached the task.
+
+Measured from this checkout's reflog before choosing a fix: **40 branch switches over 20.3 hours, about two
+an hour. The tree sat on `main` 11.5% of the time and on a task branch 88.5%.** So an install at a random
+moment publishes a task branch with roughly 88% probability. Publishing a task branch is not the defect —
+it is usually correct, and `briefs/validator.md` tells validators to do exactly that. Doing it *silently* is
+the defect.
+
+## The decision
+
+Founder request #8, answered 2026-09-18. Option 1, with an addition:
+
+> A line reading "published from task/T-15-worker-run-verdict (54c455d)" would have turned a forty-minute
+> outage into a five-second double-take. Print it on every run, including the ones that are correct — a
+> warning only shown when something looks wrong trains people to skim the normal case, and the normal case
+> here is 88% of runs.
+>
+> `-Ref` then makes the right thing cheap rather than a discipline. Refusing a dirty tree is a separate and
+> real hazard: publishing uncommitted work produces a binary that corresponds to no commit, which is
+> unreproducible and unattributable […]
+>
+> One addition […]: where the script is run from a worktree, say so in the same line. Worktrees are how the
+> agents work now — there were twenty-three of them on this machine an hour ago — and "published from
+> \<ref\> in \<worktree\>" is the sentence that makes an install reproducible by someone else.
+
+Rejected, with reasons, so they are not reopened: **refusing unless the checkout is on the branch being
+installed** (breaks the workflow it protects — a validator installing a task branch to a scratch
+destination is doing the right thing); **`-Ref` alone** (leaves the default silent, which is the defect);
+**no tooling change** (keeps a rule already broken twice by the person who wrote it).
+
+## Non-goals
+
+- Do not refuse because the checkout is on a task branch. That is the common correct case.
+- Do not change what is published by default: still the current working tree, unless `-Ref` names otherwise.
+- Do not add a `-AllowDirty` escape hatch. A dirty tree is never a thing anyone meant to publish, and the
+  remedy — commit first — costs one command. Its absence is deliberate; if an implementer finds a real case
+  that needs it, stop and report rather than adding one.
+- Do not touch the `-RestartRunning` guard or the running-hub check. They are correct and orthogonal.
+- Do not make `muthur doctor` check installs (T-14/T-27 own doctor).
+
+## Design
+
+### Unit A — `scripts/install.ps1` says what it published
+
+All of this happens **before** the first `dotnet publish`, so a refusal costs no build time.
+
+**1. Resolve provenance** of the tree that will be published:
+
+- `git -C $source rev-parse --abbrev-ref HEAD` → the ref. When it returns `HEAD` (detached), use
+  `git -C $source describe --all --always HEAD` instead so something nameable is printed.
+- `git -C $source rev-parse --short HEAD` → the commit.
+- `git -C $source rev-parse --git-common-dir` and `--git-dir`: when they differ, `$source` is a **linked
+  worktree**, and its path is named in the line.
+- If `$source` is not a git repository at all, print `Published from a non-git directory <path>` and carry
+  on. That is unusual but not wrong — it must not fail.
+- **A repository with no commits is not a non-git directory.** When `rev-parse --git-dir` succeeds but
+  `rev-parse --abbrev-ref HEAD` fails (an unborn HEAD), print
+  `Published from <path>, a repository with no commits.` Reported by Unit A's implementer, who found the
+  first version of this spec would call it a non-git directory — wrong, and wrong in the direction this task
+  is about. Practically unreachable, since the script lives in the repository, but a sentence that is wrong
+  when it is finally reached is worse than one that refuses.
+
+**2. Refuse a dirty tree.** `git -C $source status --porcelain --untracked-files=no`. If it returns
+anything, throw:
+
+```
+The working tree at <source> has uncommitted changes, so the build would correspond to no commit.
+Commit them, or pass -Ref <ref> to publish a named commit instead.
+<the first 10 lines of git status --short>
+```
+
+**A blanket untracked check must not be used** — but a narrow one is required. This was refined after Unit
+A's implementer found the gap it leaves.
+
+- Tracked modifications anywhere: `git -C $source status --porcelain --untracked-files=no`, as above.
+- **Plus** untracked files in what actually gets published:
+  `git -C $source status --porcelain --untracked-files=normal -- src kit`.
+
+An untracked `.cs` under `src/` is compiled into the published binary, and an untracked file under `kit/` is
+copied into the install, while the provenance line names a commit containing neither. That is the same
+silently-wrong answer this task exists to remove, and it is squarely within the founder's stated reason for
+refusing a dirty tree at all: *publishing uncommitted work produces a binary that corresponds to no commit,
+which is unreproducible and unattributable.* Uncommitted work is uncommitted whether or not git has been
+told about it yet.
+
+Scoping it to `src` and `kit` is what keeps it safe. `bin/`, `obj/` and `artifacts/` are **gitignored**, and
+an ignored file never appears under `--untracked-files=normal` — proved by Unit A's implementer, whose first
+attempt at this case used a probe file under `artifacts/` and correctly threw the evidence away as worthless
+for exactly that reason. So this check is quiet in normal operation and fires only on genuinely new,
+uncommitted source.
+
+Both results are concatenated into the refusal's tail, which already shows what is wrong.
+
+**3. `-Ref <ref>`** (new `[string]$Ref` parameter). When given:
+
+- `git -C $repo rev-parse --verify --quiet "<ref>^{commit}"`; if it fails, throw
+  `"'<ref>' is not a commit in <repo>."`
+- Create a detached worktree at a temporary directory:
+  `git -C $repo worktree add --detach <temp> <ref>`, and publish from there — `$source` becomes `<temp>`.
+- Remove it in a `finally`, with `git -C $repo worktree remove --force <temp>`, so a failed publish leaves
+  no worktree behind. This cleanup must run even when the publish throws.
+- With `-Ref`, the dirty check is skipped: a fresh detached worktree cannot be dirty.
+
+**4. The line.** Printed **on every successful run**, immediately before the existing
+`Write-Host "Installed to $Destination"`:
+
+```
+Published from main (bc17807).
+Published from task/T-16-collisions (946780f) in worktree C:\WorkSrc\MUTHUR\.worktrees\x.
+Published from a non-git directory C:\somewhere.
+```
+
+Use `Write-Host`. One sentence, ending in a period, naming the ref, the short commit, and the worktree path
+only when the source is a linked worktree.
+
+**`-Ref` prints the ref and commit only, with no `in worktree` clause**, even though its temporary detached
+worktree technically is one. That path is deleted seconds after the publish, and the clause exists — in the
+founder's words — because *"published from \<ref\> in \<worktree\> is the sentence that makes an install
+reproducible by someone else"*. Pointing a reader at a directory that no longer exists does the opposite of
+that, and the ref and commit alone are already enough to reproduce the publish with `-Ref`.
+
+This was Unit A's implementer's judgement, raised explicitly rather than taken. I accepted it **and then
+failed to write it here**, so the frozen spec and the build disagreed, and `conductor-validator` correctly
+failed T-32 against the document: the spec is the contract, and a deviation agreed in a message does not
+exist. The fault was the spec's, not the build's, and not the validator's.
+
+`$repo` stays the script's own parent directory. `$source` is what gets published: `$repo`, or the
+temporary worktree under `-Ref`.
+
+### Unit B — `muthur role define --brief-file` says where the brief came from
+
+`src/Muthur.Cli/Commands/RoleCommands.cs:24` reads the file and sends its bytes. The founder re-served
+`briefs/validator.md` from a moving tree, silently got pre-T-30 text, and caught it only by reading the
+result rather than the exit code.
+
+Add a small helper — new file `src/Muthur.Cli/Infrastructure/FileProvenance.cs`:
+
+```csharp
+/// <summary>Where a file the founder passed on the command line actually came from, since a repository's working tree moves under them.</summary>
+public static class FileProvenance
+{
+    /// <summary>The ref and short commit of the repository holding <paramref name="path"/>, or null when it is not in one.</summary>
+    public static (string Ref, string Commit)? Describe(string path);
+
+    /// <summary>True when that one file has uncommitted changes.</summary>
+    public static bool IsDirty(string path);
+}
+```
+
+Both shell out to `git` through the existing `IProcessRunner` (`Muthur.Launch.ProcessRunner`), with a
+10-second timeout, run in the file's own directory. `Describe` uses `rev-parse --abbrev-ref HEAD` and
+`rev-parse --short HEAD`; `IsDirty` uses `status --porcelain --untracked-files=no -- <file>` and is true
+when the output is non-empty. Any git failure means "not in a repository": `Describe` returns null and
+`IsDirty` returns false. **Never let a git failure stop a role from being defined** — provenance is
+evidence, not a gate.
+
+**An untracked brief matches no commit either, and must be refused the same way.** A file inside a
+repository that was never `git add`ed returns nothing from `status --untracked-files=no`, so `IsDirty` is
+false and it sails through — while `Describe` still prints `Read x.md at main (abc1234)`, naming a commit
+that does not contain that file. **A provenance line that names the wrong commit is worse than none**, and
+this task exists because a silently wrong answer cost forty minutes. So:
+
+```csharp
+/// <summary>True when git cannot name a commit containing this file: modified, staged, or never added.</summary>
+public static bool IsDirty(string path);
+```
+
+`IsDirty` first asks `rev-parse --is-inside-work-tree`. If that is not `true`, the file is not in a
+repository and `IsDirty` is **false** — nothing further is probed. Inside a work tree, `IsDirty` is true
+when *either* `status --porcelain --untracked-files=no -- <file>` is non-empty **or**
+`ls-files --error-unmatch -- <file>` fails.
+
+The membership gate is load-bearing and was added after Unit B's implementer found the conflict: taken
+literally, "`ls-files --error-unmatch` failing means dirty" refuses **every** brief outside a repository,
+because that command fails there too — contradicting both the paragraph above ("any git failure means 'not
+in a repository'… `IsDirty` returns false") and this unit's own acceptance criterion. Gating on membership
+first is the only reading that satisfies all three.
+
+**Inside a work tree, `IsDirty` fails closed**, and that is a deliberate narrowing of the "provenance is
+evidence, not a gate" rule stated above. A transient git failure — an `index.lock` left by another process,
+say — now reads as dirty and refuses. Once we know the file is in a repository, "git could not tell me
+whether this matches a commit" and "this does not match a commit" deserve the same answer, because the
+failure this task exists to prevent is installing a brief whose provenance is unknown. Outside a work tree
+the original rule stands unchanged: no gate, no line. The refusal message covers both cases without naming which:
+`"<file> has no committed version, so the brief you install will match no commit. Commit it, or pass the
+text you mean."` Keep `--untracked-files=no` on the status call — it is what stops `bin/` and `obj/` failing
+every run, and the `ls-files` probe is what closes the gap it leaves.
+
+Pass `--literal-pathspecs` on both git calls. A brief filename containing `*`, `[` or `?` would otherwise be
+read as a glob and silently match the wrong thing — the same class of quiet wrong answer.
+
+In `role define`:
+
+- If `IsDirty(file)` → refuse before sending anything:
+  `Output.Error("brief_file_dirty", "<file> has no committed version, so the brief you install will match no commit. Commit it, or pass the text you mean.", ExitCodes.RuleViolation)`.
+  (This bullet carried the older "has uncommitted changes" wording after the untracked amendment changed it
+  above; the implementer used the amended wording and flagged the stale line rather than letting a validator
+  read it as the contract.)
+- Otherwise send as today, and when `Describe` returns a value, write one line to **stderr** (never stdout,
+  which is the JSON an agent parses):
+  `Read <file> at <ref> (<commit>).`
+
+stderr, not stdout, is the load-bearing detail: `Output.Emit` writes the API's JSON to stdout and agents
+parse it.
+
+## Units of work
+
+The two units share no file and neither depends on the other.
+
+### Unit A — the install says what it published
+- **Files:** modified `scripts/install.ps1`
+- **Does:** the Unit A section above, exactly.
+- **Depends on:** nothing.
+- **Acceptance:** there is no PowerShell test project, so this is verified by running it. All against a
+  scratch `-Destination` under `./artifacts/`, never the default:
+  - On a clean checkout: the line names the current ref and short commit, and the install succeeds.
+  - With a tracked file edited: the script throws the dirty message and **no `dotnet publish` runs** (the
+    refusal must be visible before any build output).
+  - With an untracked file present (e.g. a new file under `artifacts/`): the install succeeds. This is the
+    check that proves `--untracked-files=no` is doing its job.
+  - `-Ref main` from a checkout on another branch: the line names `main` and main's commit, the install
+    succeeds, and `git worktree list` afterwards shows no leftover worktree.
+  - `-Ref does-not-exist`: throws, and leaves no worktree.
+  - Run from a linked worktree under `.claude/worktrees/` or `.worktrees/`: the line includes
+    `in worktree <path>`. A `-Ref` run does **not** include it — see the design note above.
+  - Paste the actual output of each into the report. A line that is merely believed to print is not
+    evidence.
+
+### Unit B — the brief says where it came from
+- **Files:** created `src/Muthur.Cli/Infrastructure/FileProvenance.cs`; modified
+  `src/Muthur.Cli/Commands/RoleCommands.cs`; tests in `tests/Muthur.Cli.Tests/FileProvenanceTests.cs` (new)
+- **Does:** the Unit B section above, exactly.
+- **Depends on:** nothing.
+- **Acceptance:**
+  - `dotnet build` clean, `dotnet test` green.
+  - Tests build a real temporary git repository (as `KitWriteModeTests` builds real temp directories):
+    a committed file reports its ref and short commit and is not dirty; the same file edited is dirty; a
+    file outside any repository returns null from `Describe` and false from `IsDirty`.
+  - AOT-safe: no reflection-based JSON, no new serializer.
+
+## Verification
+
+```
+dotnet build
+dotnet test
+```
+
+Then, end to end, from the repository root with a scratch destination:
+
+```
+pwsh ./scripts/install.ps1 -Destination ./artifacts/t32        # prints the provenance line
+pwsh ./scripts/install.ps1 -Destination ./artifacts/t32 -Ref main
+git worktree list                                               # no leftovers
+```
+
+And for Unit B, against a scratch hub — never the live one:
+
+```
+muthur role define probe --brief-file kit/briefs/validator.md --founder   # stderr names the ref and commit
+# edit that file, then run it again                                        # exit 2, brief_file_dirty
+```
+
+The check a validator should not skip: **edit a tracked file and confirm the install refuses before any
+build output appears.** A refusal that arrives after a two-minute publish has already cost what it was
+meant to save.
+
+## Out of scope / follow-ups
+
+- Recording the installed ref *in the hub*, so `muthur status` can say which commit the running server was
+  built from, is a larger and better idea than printing it locally, and it belongs with T-14's `doctor`
+  work rather than here.
+- Every other founder command that reads a path from the moving tree — there are few today — inherits the
+  same hazard. `FileProvenance` is deliberately general so the next one costs two lines.
+
+## Proof (2026-09-18)
+
+```
+dotnet build   0 warnings, 0 errors
+dotnet test    Launch 19 + Cli 40 (was 32) + Core 3692 + Server 196, all passing
+```
+
+### Unit A, run by the orchestrator on the real checkout
+
+```
+$ pwsh ./scripts/install.ps1 -Destination ./artifacts/t32check
+Published from task/T-32-install-provenance (8f860e6).
+Installed to C:\WorkSrc\MUTHUR\artifacts\t32check
+```
+
+That line **is the incident**: an install from the main checkout while an orchestrator has it on a task
+branch. Silently, it produced the stale CLI that cost four validator sessions. It now says so.
+
+Dirty tree, from the repository root with one tracked file edited:
+
+```
+The working tree at C:\WorkSrc\MUTHUR has uncommitted changes, so the build would correspond to no commit.
+Commit them, or pass -Ref <ref> to publish a named commit instead.
+ M src/Muthur.Core/MuthurException.cs
+```
+
+`destination created? NO` — the refusal lands before any publish, which was the check worth most.
+
+### Unit B, end to end against a scratch hub
+
+The check the spec left open for a validator, because no worker may run `muthur`. Run here instead:
+
+```
+$ muthur role define probe --brief-file kit/briefs/validator.md --founder
+exit=0
+stdout: {"key":"probe","isValidator":false,"hasBrief":true,...}
+stderr: Read kit/briefs/validator.md at task/T-32-install-provenance (8f860e6).
+
+# same brief, one line appended
+$ muthur role define probe2 --brief-file kit/briefs/validator.md --founder
+exit=2
+stdout: []
+stderr: {"code":"brief_file_dirty","message":"kit/briefs/validator.md has no committed version, ..."}
+```
+
+Provenance on stderr with the JSON alone on stdout, and the second case is the founder's own incident —
+re-serving a brief from a tree that had moved — now refused instead of silently installing text that matches
+no commit.
+
+### Two findings recorded so nobody "fixes" them later
+
+- **The unborn-HEAD sentence is now defensive rather than reachable.** The two amendments interact: in any
+  repository with an unborn HEAD that also has something to publish, every file under `src/` and `kit/` is by
+  definition untracked, so the dirty check fires first and refuses. Unit A's implementer could only reach the
+  sentence end to end by constructing a repository whose `.gitignore` is `*`, and said plainly that the
+  fixture was contrived rather than presenting it as a normal case. The refusal is the better answer there;
+  the sentence is correct when it is finally reached; it is not dead code.
+- **On an unborn HEAD, `git rev-parse --abbrev-ref HEAD` prints `HEAD` to stdout and *then* exits 128.** Code
+  trusting the text rather than the exit code would read "detached", call `describe --all --always HEAD`,
+  which also fails, and print `Published from  ().` — a line naming nothing. The implementation checks `.Ok`
+  before looking at the text and probes `rev-parse --git-dir` first to tell "not a repository" from "no
+  commits". Keep that ordering.
+
+### An accepted deviation
+
+The refusal's tail is deduplicated with `Select-Object -Unique`: a tracked modification under `src/` is
+reported by both dirty commands, and a refusal that lists one problem twice invites the reader to wonder
+what the difference is. Two identical porcelain lines are necessarily the same file in the same state, so
+nothing is lost, and `-Unique` preserves first-occurrence order where `Sort-Object -Unique` would not.

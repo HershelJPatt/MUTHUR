@@ -20,7 +20,8 @@ public sealed record LandResult(LandOutcome Outcome, string? Commit = null, stri
 
 public interface ITaskLander
 {
-    Task<bool> BranchExistsAsync(Project project, string branch, CancellationToken ct = default);
+    /// <summary>The commit at the tip of <paramref name="branch"/>, or null when the branch does not exist.</summary>
+    Task<string?> BranchHeadAsync(Project project, string branch, CancellationToken ct = default);
     Task<LandResult> LandAsync(Project project, WorkTask task, string ownerName, CancellationToken ct = default);
 }
 
@@ -38,8 +39,12 @@ public sealed class GitLander(IProcessRunner processes, IPullRequestOpener pullR
 {
     private static readonly TimeSpan GitTimeout = TimeSpan.FromMinutes(2);
 
-    public async Task<bool> BranchExistsAsync(Project project, string branch, CancellationToken ct = default) =>
-        (await GitAsync(project.RepoPath, ct, "rev-parse", "--verify", "--quiet", $"refs/heads/{branch}")).Ok;
+    public async Task<string?> BranchHeadAsync(Project project, string branch, CancellationToken ct = default)
+    {
+        var result = await GitAsync(project.RepoPath, ct, "rev-parse", "--verify", "--quiet", $"refs/heads/{branch}");
+        var head = result.StdOut.Trim();
+        return result.Ok && head.Length > 0 ? head : null;
+    }
 
     public async Task<LandResult> LandAsync(Project project, WorkTask task, string ownerName, CancellationToken ct = default)
     {
@@ -47,7 +52,7 @@ public sealed class GitLander(IProcessRunner processes, IPullRequestOpener pullR
         var branch = task.Branch!;
         if (!Directory.Exists(repo))
             return LandResult.Refuse("repo_missing", $"Repository '{repo}' does not exist.");
-        if (!await BranchExistsAsync(project, branch, ct))
+        if (await BranchHeadAsync(project, branch, ct) is null)
             return LandResult.Refuse("branch_missing", $"Branch '{branch}' does not exist in {repo}.");
 
         return project.LandMode == LandMode.Pr
