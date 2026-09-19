@@ -43,30 +43,43 @@ That is the validation loop working exactly as designed, punished as though it w
 And the punishment lands hardest on the tasks that needed the most care: the only way such a task can ever
 ship is an attended session, which is the opposite of what this organization is for.
 
-## The decision, and why it is not the founder's
+## The founder's decision
 
-The task filed three candidate fixes and chose none. This spec chooses the first, and records why the other
-two lose, because a later reader will want to know:
+Request #11, answered 2026-09-19. Quoted, because the addition is theirs and the reasoning matters:
 
-- **Chosen: count only failures after the task's most recent `task.implemented`.** A resubmission is the
-  owner asserting the fault is fixed; the cap's own comment says it exists for "a task that has failed too
-  many times", and the thing it is actually trying to detect is *a submission that is not progressing*. This
-  restores the stated intent rather than changing policy, which is why it does not need a founder decision.
-  It is also a `Seq >` on a query that already exists.
-- **Rejected: count consecutive failures on the same branch head.** More precise in principle, and the
-  branch head is not recorded per failure, so it would have to be threaded through. More to get wrong for a
-  distinction that "since the last resubmission" already draws.
-- **Rejected: make this cap half-open like the other two.** The other two caps stall on causes fixed
-  *outside* the hub — a missing CLI, a cleared quota — so a timed probe is the only way back. This cap's
-  cause is fixed *inside* the hub, by the owner, deliberately, and that act is already an event. A timed
-  probe would restaff a genuinely stuck task with nobody having changed anything, which is the behaviour the
-  cap exists to prevent.
+> **A, with one addition that gives it the ceiling you are right to want.**
+>
+> A is right because the cap's purpose was "stop spending on a pair that is not progressing", and a
+> resubmission is the owner asserting progress. T-13 is the proof: three failures on three different commits,
+> each finding a different defect, each fixed before the next attempt. That is the loop working, and the cap
+> punished it.
+>
+> Your objection to A - no ceiling on total spend - is the real one, and here is the addition that answers it
+> without giving up convergence. **Record the branch head at each `task implemented`, and only let a
+> resubmission buy a new round if the head actually moved.** An owner who resubmits the identical commit is
+> the pathology the cap was built for, and it is cheap to detect ... Converging tasks are unaffected; a task
+> that spins on one commit stalls immediately rather than after three more sessions.
 
-**The cost implication, stated rather than buried:** after this change a task can consume
-`ConductorMaxAttempts` sessions per resubmission, with no ceiling across rounds. That is bounded by an owner
-choosing to fix and resubmit each time — not a loop — and every exhausted round still messages the founder,
-so the spend stays visible. If that proves too loose, the ceiling belongs in a later task with a number the
-founder picks, not in a silently permanent exclusion.
+They rejected C on the two costs the implementer found (an owner lifting its own stop is not a stop, and
+overloading the attended badge), and B because losing the sentence *"the conductor has stopped restaffing
+it"* costs them the thing that tells them whether to expect more sessions.
+
+They also recorded that the implementer's correction changed how they read their own task: they wrote T-42
+believing three failures could accumulate inside one round. They cannot.
+
+### What the number means now, which is the check that was missing twice
+
+`failures` is still "times this task has ever been failed". The rule reads: **a task failed at least
+`ConductorMaxAttempts` times is retried only when its code actually changed.** Two consequences worth
+stating rather than discovering:
+
+- **A converging task past the cap generates no founder message at all.** The stall is the notification, and
+  the stall now requires an unmoved head. That is a deliberate change from the wording of option A as it was
+  put to the founder ("every failure at or past the cap tells you again"), and it follows from their
+  "converging tasks are unaffected". If they want a per-failure signal as well, that is a separate ask.
+- **The ceiling is real but conditional.** One task can still consume unlimited sessions across rounds - as
+  long as someone keeps changing the code between them. What it can no longer do is consume them while
+  standing still.
 
 ## Context
 
@@ -75,9 +88,16 @@ founder picks, not in a silently permanent exclusion.
   - `EscalateExhaustedAsync` (~line 317): the same count, used to message the founder once.
 - `_escalated` is an in-memory `HashSet<int>` of task ids, so a task is escalated at most once per hub
   process. With per-round counting that is wrong: a second exhausted round must be able to escalate again.
-- `LifecycleService.ImplementedAsync` records `task.implemented`; `VerdictAsync` records `validation.failed`
-  and returns the task to its owner. A failed verdict always leaves `Validating`, so a task only re-enters
-  the conductor's view through a fresh `task.implemented`.
+- `LifecycleService.ImplementedAsync` records `task.implemented` and calls `lander.BranchExistsAsync` first;
+  `VerdictAsync` records `validation.failed` and returns the task to its owner. A failed verdict always
+  leaves `Validating`, so a task only re-enters the conductor's view through a fresh `task.implemented`.
+  **Follow that through before designing anything here:** it means a round can hold at most one failure, so
+  "three failures" has always meant three resubmissions. An earlier draft of this spec counted failures
+  *since* the last `task.implemented` and would have produced a constant zero, turning the cap into dead
+  code. The implementer proved it and refused to build it.
+- `src/Muthur.Server/Services/GitLander.cs` — `ITaskLander`, and `GitAsync`, which is how this codebase
+  shells out to git. `BranchExistsAsync` already runs the `rev-parse` this task needs and throws the answer
+  away.
 - `LedgerEvent.Seq` is the monotonic ordering already used elsewhere in this file
   (`g.OrderByDescending(e => e.Seq).First()`).
 
@@ -104,51 +124,73 @@ Constraints that are not obvious:
 
 ## Design
 
-### One helper, used by both sites
+### Recording the head
 
-In `ConductorService`, a single query giving the failures-this-round count per task, so the two sites cannot
-drift:
+`LifecycleService.ImplementedAsync` already calls `lander.BranchExistsAsync` before it records anything.
+Replace that with a call that returns the head, so one git call does both jobs:
 
 ```csharp
-/// <summary>
-/// Failures since each task's most recent `task.implemented`. The ledger is append-only, so counting a
-/// task's whole history means a task rejected `ConductorMaxAttempts` times could never be staffed again,
-/// however completely it was then fixed. What the cap is for is a submission that is not progressing.
-/// </summary>
-private static async Task<Dictionary<int, int>> FailuresThisRoundAsync(MuthurDb db, IReadOnlyList<int> taskIds, CancellationToken ct)
+// ITaskLander
+/// <summary>The commit at the tip of <paramref name="branch"/>, or null when the branch does not exist.</summary>
+Task<string?> BranchHeadAsync(Project project, string branch, CancellationToken ct = default);
 ```
 
-It resolves, per task, the greatest `Seq` of a `task.implemented` event, then counts `validation.failed`
-events with a greater `Seq`. A task with no `task.implemented` at all counts from zero — it cannot be in
-`Validating` without one, but the query must not throw on it.
+`GitLander` implements it with `rev-parse --verify --quiet refs/heads/{branch}`, which is exactly what
+`BranchExistsAsync` already runs - it only discarded the output. Keep `BranchExistsAsync` if anything else
+uses it; if nothing does, delete it rather than leave two ways to ask the same question.
 
-Two round trips are fine; do not try to make it one at the cost of clarity.
+`ImplementedAsync`'s `branch_missing` rule becomes "head is null". The event gains the head:
 
-`PlanAsync` and `EscalateExhaustedAsync` both call it and drop their own `failures` queries.
+```csharp
+m.Record("task.implemented", task.Id, new { branch, head, spec = specPath, validators = required });
+```
 
-### Escalating again on a later round
+Nothing else stores it. The ledger is the right home: this is per-round history, and a column on the task
+would hold only the latest and lose the comparison the rule needs.
 
-`_escalated` becomes `Dictionary<int, long>`: task id → the `Seq` of the `task.implemented` that opened the
-round in which it was escalated. A task escalates when its round count reaches the cap **and** the recorded
-seq for it is not this round's seq. That way:
+### Reading it back
 
-- the same exhausted round still messages the founder exactly once;
-- a later round that also exhausts messages them again, which is correct — it is new information.
+Both cap sites need, per task: the total `validation.failed` count, and the heads of the two most recent
+`task.implemented` events. One helper so they cannot drift:
+
+```csharp
+/// <param name="Failures">Times this task has ever been failed - the ledger is append-only, so this only rises.</param>
+/// <param name="RoundSeq">Seq of the most recent `task.implemented`: the round this task is in now.</param>
+/// <param name="HeadMoved">Whether that round's branch head differs from the round before it.</param>
+private sealed record CapState(int Failures, long RoundSeq, bool HeadMoved);
+
+private static async Task<Dictionary<int, CapState>> CapStateAsync(MuthurDb db, IReadOnlyList<int> taskIds, CancellationToken ct)
+```
+
+It loads the `task.implemented` events for those tasks, takes the newest two per task, and reads `head` out
+of `PayloadJson` with `JsonDocument` **in memory** - do not try to query into the JSON. The validating set is
+small, and `PlanAsync` already pulls `task.implemented` events and picks the newest per task this way.
+
+`HeadMoved` is **true** when either head is missing or unreadable. Events recorded before this change carry
+no `head`, and a task must never be stalled on the absence of evidence - T-13's own history is exactly that
+case, and it is the task this spec was written alongside.
+
+### The rule
+
+A task is skipped, and its round escalated, when:
+
+```
+state.Failures >= options.ConductorMaxAttempts && !state.HeadMoved
+```
+
+`PlanAsync` skips it. `EscalateExhaustedAsync` messages the founder once per round: `_escalated` becomes
+`Dictionary<int, long>` mapping task id to the `RoundSeq` already announced, so a later unmoved resubmission
+announces again and the same round does not.
 
 ### What the founder is told
 
-The message currently reads *"has failed validation {n} times and the conductor has stopped restaffing it"*.
-`{n}` is now a per-round number, so it must say so, otherwise a founder who remembers six failures reads
-three and distrusts the number:
+The message must name the actual cause, which is no longer "it failed a lot" but "it came back unchanged":
 
-> `{T-n} "{title}"` has failed validation `{n}` times since it was last submitted, and the conductor has
-> stopped restaffing it. Fix it and mark it implemented again, re-spec it, cancel it, or raise
+> `{T-n} "{title}"` has failed validation `{n}` times and came back on the same commit, so the conductor has
+> stopped restaffing it. Change the branch and mark it implemented again, re-spec it, cancel it, or raise
 > `Muthur:ConductorMaxAttempts`.
 
-"Fix it and mark it implemented again" is new and is the point of the task: there is now a way back that
-does not involve the founder changing configuration.
-
-The per-verdict lines below it should list **this round's** failures, for the same reason.
+Keep the per-verdict lines below it as they are.
 
 ## Units of work
 
@@ -157,16 +199,17 @@ The per-verdict lines below it should list **this round's** failures, for the sa
 - **Does:** everything above.
 - **Depends on:** nothing.
 - **Acceptance:** `dotnet build` and `dotnet test` clean, plus:
-  1. **The live case.** A task with `ConductorMaxAttempts` failed verdicts, then fixed and marked implemented
-     again, **is planned**. Build it through the real lifecycle — implemented, fail, implemented, fail,
-     implemented, fail, implemented — rather than by inserting events, so the test would have caught the
-     original defect. Mutation-check it: restore the whole-history count and confirm it fails.
-  2. A task with `ConductorMaxAttempts` failures **in the current round** is not planned. The cap still works.
-  3. The founder is messaged once for an exhausted round, and **again** for a later exhausted round after a
-     resubmission — two messages, not one, and the second names the later round's count.
-  4. The message says "since it was last submitted" and offers marking it implemented again.
-  5. The launch-failure and no-verdict caps still behave exactly as they did; their existing tests pass
-     untouched.
+  1. **The live case.** A task failed `ConductorMaxAttempts` times, then fixed and marked implemented again
+     **on a moved branch head**, is planned. Build it through the real lifecycle - implemented, fail,
+     implemented, fail, implemented, fail, implemented - with a real commit on the branch between rounds, not
+     by inserting events. Mutation-check it: restore the unconditional whole-history skip and confirm it fails.
+  2. **The ceiling.** The same task resubmitted on the **same** head is not planned, and the founder is told,
+     once, with the "came back on the same commit" wording.
+  3. A second unmoved resubmission announces again; the same round does not announce twice.
+  4. A task whose `task.implemented` events carry no `head` - recorded before this change - is planned, not
+     stalled. Absence of evidence is not evidence of standing still.
+  5. `ImplementedAsync` still refuses a branch that does not exist, with `branch_missing`.
+  6. The launch-failure and no-verdict caps behave as they did; their existing tests pass untouched.
 
 ## Verification
 
