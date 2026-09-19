@@ -173,3 +173,55 @@ No browser is needed and none should be used.
   technique for when an *orchestrator* asks, which is what happens in practice. Whether the contract should
   require it for any test that guards a production change is a real question about how much this organization
   wants to pay for mutation evidence, and it belongs in its own task.
+
+## Amendment 1 — the Verification script's ordering, and a rewrap (2026-09-19)
+
+Two things the build surfaced, neither changing what was written.
+
+**1. The script in Verification installs before committing, and `install.ps1` refuses a dirty tree** — *"the
+working tree has uncommitted changes, so the build would correspond to no commit."* So the install proof
+necessarily runs after the commit, which is also the stronger proof: it measures a named commit rather than
+whatever happened to be on disk. Anyone reusing that script should commit first. Left as a note rather than
+rewritten, because the ordering it implies is the right one and only the prose was misleading.
+
+**2. The replacements changed where the surrounding prose wraps.** Inserting them left a 60-character line
+stranded mid-paragraph in bullet 2, so the implementer re-filled the affected paragraphs to the file's
+existing ~110-column width. That touched the tail of bullet 1 and the `git log --oneline <base>..HEAD`
+sentence — which this spec said stays exactly as it is. **Its words and its position after the new text are
+untouched**; only the line breaks moved. That is the right call: a spec that says "leave this sentence alone"
+means the sentence, not its accidental line endings, and leaving the file ragged to honour the letter of it
+would have been worse.
+
+## Proof (2026-09-19)
+
+```
+dotnet build   →  0 Warning(s), 0 Error(s)
+dotnet test
+  Muthur.Launch.Tests    23/23
+  Muthur.Core.Tests      3708/3708
+  Muthur.Cli.Tests       65/65
+  Muthur.Server.Tests    280/280
+```
+
+`git diff --stat origin/main..HEAD` — `kit/core/implementer.md` and this spec, nothing else.
+
+The install proof, with a CLI built from this branch installing into three scratch repositories:
+
+```
+'the commits it drops off your branch are not yours'   files: 4
+'discards no commit at all'                            files: 4
+'reads that as removing a security check'              files: 4
+
+      \claude\.claude\agents\muthur-implementer.md
+      \claude\.claude\agents\muthur-specialist.md
+      \codex\.muthur\procedures\implementer.md
+      \generic\.muthur\procedures\implementer.md
+
+unexpanded {{core: tokens: none
+```
+
+Four, not three: `kit/claude/agents/muthur-specialist.md` includes the same `{{core:implementer.md}}` as the
+implementer agent, so a mastermind-tier specialist gets the contract too. Worth knowing for any future edit to
+a core procedure — the count of files an edit reaches is not the count of harnesses.
+
+No browser was used.
