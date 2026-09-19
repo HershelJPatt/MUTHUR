@@ -279,6 +279,51 @@ public sealed class KitManifestTests : IDisposable
     }
 
     /// <summary>
+    /// Rule 19's other spellings of the same thing. "docs/." and "docs/x.md/.." name a directory exactly as
+    /// "docs/" does, and the rule as first written — ends in a separator — was narrower than its own name:
+    /// both resolved cleanly, passed every other rule, and died in the write phase with the directory created.
+    /// </summary>
+    [Theory]
+    // A "to" of "." or "briefs/.." resolves to the repository root itself, which rule 14 refuses one step
+    // earlier and with a better sentence; these are the spellings that stay inside it.
+    [InlineData("docs/.")]
+    [InlineData("docs/x.md/..")]
+    [InlineData("docs/x.md/.")]
+    [InlineData("a/b/c/..")]
+    public Task A_last_component_of_dot_or_dotdot_names_a_directory_too(string to) =>
+        Rejects(
+            $$"""{"files":[{"from":"source.md","to":"{{to}}"}]}""",
+            $": entry 0 writes \"{to}\", which names a directory, not a file.");
+
+    /// <summary>
+    /// Rule 20's seed. `Install` writes .gitignore and muthur.project.json whether or not the manifest asks
+    /// for them, so an entry writing *underneath* one turns it into a directory — a collision with a file no
+    /// entry names, which comparing entries against each other could never see.
+    /// </summary>
+    [Theory]
+    [InlineData(".gitignore/x.md", ".gitignore")]
+    [InlineData(".gitignore/deeper/x.md", ".gitignore")]
+    [InlineData("muthur.project.json/x.md", "muthur.project.json")]
+    public Task A_destination_under_a_file_the_installer_writes_itself_is_refused(string to, string own) =>
+        Rejects(
+            $$"""{"files":[{"from":"source.md","to":"{{to}}"}]}""",
+            $": entry 0 writes \"{to}\", which collides with \"{own}\", a file kit install writes itself.");
+
+    /// <summary>
+    /// The other half of the seed: writing one of those files *itself* is not a collision. The installer
+    /// leaves muthur.project.json alone when it already exists and appends to .gitignore, so both are
+    /// last-one-wins like any other repeated destination.
+    /// </summary>
+    [Fact]
+    public async Task A_destination_that_is_one_of_the_installers_own_files_is_not_a_collision()
+    {
+        File.WriteAllText(ManifestPath, """{"files":[{"from":"source.md","to":".gitignore"}]}""");
+
+        Assert.Equal(ExitCodes.Ok, await Invoke("kit", "install", "--harness", Harness, "--repo", Repository));
+        Assert.Contains(".worktrees/", File.ReadAllText(Path.Combine(Repository, ".gitignore")));
+    }
+
+    /// <summary>
     /// Rule 20, and the first rule that reads the manifest as a whole. Each entry below is valid on its own;
     /// the fault is the pair, so the write loop used to meet it with the earlier entry already on disk.
     /// </summary>
@@ -318,6 +363,65 @@ public sealed class KitManifestTests : IDisposable
 
         Assert.Equal(ExitCodes.Ok, await Invoke("kit", "install", "--harness", Harness, "--repo", Repository));
         Assert.Equal("the second one", File.ReadAllText(Path.Combine(Repository, "docs", "x.md")));
+    }
+
+    /// <summary>
+    /// A "to" naming a directory that is already there. Decided by the repository rather than by the manifest,
+    /// which is the question rule 13 already asks one directory over — it calls File.Exists on the source — and
+    /// reachable by re-running an install after a "to" changed from a file to a directory name.
+    /// </summary>
+    [Theory]
+    [InlineData("docs")]
+    [InlineData("docs/x.md")]
+    public async Task A_destination_that_is_already_a_directory_is_refused_before_the_write(string to)
+    {
+        Directory.CreateDirectory(Path.Combine(Repository, "docs", "x.md"));
+
+        var (exit, code, message) = await Rejected($$"""{"files":[{"from":"source.md","to":"{{to}}"}]}""");
+
+        Assert.Equal(ExitCodes.RuleViolation, exit);
+        Assert.Equal("invalid_manifest", code);
+        Assert.Equal($"{ManifestPath}: entry 0 writes \"{to}\", which is an existing directory in the repository.", message);
+        // The directory the test made and nothing else: no .gitignore, no muthur.project.json.
+        Assert.Equal(Path.Combine(Repository, "docs"), Assert.Single(Directory.GetFileSystemEntries(Repository)));
+        Assert.Empty(Directory.GetFileSystemEntries(Outside));
+    }
+
+    /// <summary>
+    /// A reserved device name as a *directory* component, one level above rule 18: it holds no forbidden
+    /// character, resolves cleanly, and then Windows follows it into the device namespace rather than creating
+    /// a directory. Measured on this platform: only NUL actually kills Directory.CreateDirectory, but the whole
+    /// device namespace is refused rather than the one name that happens to fail on this build of Windows.
+    /// </summary>
+    [Fact]
+    public async Task A_reserved_device_name_used_as_a_directory_is_refused()
+    {
+        // These names mean nothing to a filesystem that does not reserve them, where "NUL/x.md" is an ordinary
+        // path and refusing it would be this validator inventing a rule the platform does not have.
+        if (!OperatingSystem.IsWindows()) return;
+
+        foreach (var name in new[] { "NUL", "CON", "PRN", "AUX", "COM1", "LPT9", "nul", "Com1" })
+            await Rejects(
+                $$"""{"files":[{"from":"source.md","to":"{{name}}/x.md"}]}""",
+                $": entry 0 writes \"{name}/x.md\", whose component \"{name}\" is a reserved device name on this platform.");
+    }
+
+    /// <summary>
+    /// The behaviour Amendment 3 measured and this rule must not take away: a reserved name as a *file* name
+    /// installs as an ordinary file inside the repository, so the check asks only about the components before
+    /// the last one. COM0 is not reserved and is a directory like any other.
+    /// </summary>
+    [Theory]
+    [InlineData("docs/CON")]
+    [InlineData("COM1")]
+    [InlineData("docs/NUL.md")]
+    [InlineData("COM0/x.md")]
+    public async Task A_reserved_name_as_a_file_name_still_installs(string to)
+    {
+        File.WriteAllText(ManifestPath, $$"""{"files":[{"from":"source.md","to":"{{to}}"}]}""");
+
+        Assert.Equal(ExitCodes.Ok, await Invoke("kit", "install", "--harness", Harness, "--repo", Repository));
+        Assert.Equal("a procedure", File.ReadAllText(Path.Combine(Repository, to)));
     }
 
     /// <summary>

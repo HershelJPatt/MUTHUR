@@ -16,6 +16,9 @@ public static partial class KitCommands
 {
     public const string KitVariable = "MUTHUR_KIT";
 
+    /// <summary>Written by every install, named here because rule 20 has to know the installer writes it.</summary>
+    private const string IgnoreFile = ".gitignore";
+
     [GeneratedRegex(@"\{\{core:([A-Za-z0-9._-]+)\}\}")]
     private static partial Regex IncludePattern();
 
@@ -88,13 +91,13 @@ public static partial class KitCommands
             }
 
             // Worker and validator worktrees live under .worktrees/ and must never show up as untracked files.
-            var ignore = Path.Combine(repo, ".gitignore");
+            var ignore = Path.Combine(repo, IgnoreFile);
             var ignored = File.Exists(ignore) ? File.ReadAllText(ignore) : "";
             if (!ignored.Split('\n').Any(line => line.Trim() is ".worktrees/" or ".worktrees"))
             {
                 File.WriteAllText(ignore, (ignored.Length > 0 ? ignored.TrimEnd() + "\n" : "") + ".worktrees/\n");
                 json.WriteStartObject();
-                json.WriteString("path", ".gitignore");
+                json.WriteString("path", IgnoreFile);
                 json.WriteString("status", "updated");
                 json.WriteEndObject();
             }
@@ -216,22 +219,25 @@ public static partial class KitCommands
 
             var kitRoot = Path.GetFullPath(kitDir);
             var repoRoot = Path.GetFullPath(repo);
-            var index = 0;
             var validated = new List<KitEntry>();
-            var destinations = new List<string>();
+            var destinations = new List<Destination>();
             foreach (var file in files.EnumerateArray())
             {
-                if (!TryReadEntry(manifestPath, harnessDir, kitRoot, repoRoot, file, index++, out var entry, out var destination, out problem))
+                var index = validated.Count;
+                if (!TryReadEntry(manifestPath, harnessDir, kitRoot, repoRoot, file, index, out var entry, out var destination, out problem))
                     return false;
                 validated.Add(entry);
-                destinations.Add(destination);
+                destinations.Add(new Destination(index, entry.To, destination));
             }
+
+            // Seeded with the files Install writes whether or not the manifest asks for them: an entry writing
+            // under one turns it into a directory, and no entry names it, so no comparison of entries sees it.
+            foreach (var own in InstallerFiles)
+                destinations.Add(new Destination(null, own, Path.Combine(repoRoot, own)));
 
             if (Collision(destinations) is { } collision)
             {
-                var (a, b) = collision;
-                problem = $"{manifestPath}: entry {a} writes \"{validated[a].To}\" and entry {b} writes "
-                    + $"\"{validated[b].To}\"; one cannot be both a file and a directory.";
+                problem = Collided(manifestPath, collision.A, collision.B);
                 return false;
             }
 
@@ -240,18 +246,41 @@ public static partial class KitCommands
         return true;
     }
 
+    /// <summary>A resolved destination: an entry's, or one of the files <c>Install</c> writes of its own accord.</summary>
+    /// <param name="Entry">The entry's index in <c>files</c>, or null for one of the installer's own files.</param>
+    private readonly record struct Destination(int? Entry, string Spelled, string Resolved);
+
+    /// <summary>The files <c>Install</c> writes whatever the manifest says, which rule 20 is seeded with.</summary>
+    private static readonly string[] InstallerFiles = [IgnoreFile, ProjectContext.FileName];
+
     /// <summary>
     /// Rule 20, and the first rule here that reads the manifest as a whole: each entry below is valid on its
     /// own, and it is the pair that cannot be honoured. Two entries naming the same path are not a collision —
     /// that is last-one-wins, which the format has always allowed — so only file-versus-directory counts.
     /// </summary>
-    private static (int A, int B)? Collision(List<string> destinations)
+    private static (Destination A, Destination B)? Collision(List<Destination> destinations)
     {
         for (var a = 0; a < destinations.Count; a++)
             for (var b = a + 1; b < destinations.Count; b++)
-                if (IsInside(destinations[a], destinations[b]) || IsInside(destinations[b], destinations[a]))
-                    return (a, b);
+                if (IsInside(destinations[a].Resolved, destinations[b].Resolved)
+                    || IsInside(destinations[b].Resolved, destinations[a].Resolved))
+                    return (destinations[a], destinations[b]);
         return null;
+    }
+
+    /// <summary>
+    /// Rule 20's message. A collision with one of the installer's own files is named as such rather than as
+    /// "entry <c>n</c>": the founder cannot find the other half of it by reading their manifest.
+    /// </summary>
+    private static string Collided(string manifestPath, Destination a, Destination b)
+    {
+        if (a.Entry is { } first && b.Entry is { } second)
+            return $"{manifestPath}: entry {first} writes \"{a.Spelled}\" and entry {second} writes "
+                + $"\"{b.Spelled}\"; one cannot be both a file and a directory.";
+
+        var (entry, installer) = a.Entry is null ? (b, a) : (a, b);
+        return $"{manifestPath}: entry {entry.Entry} writes \"{entry.Spelled}\", which collides with "
+            + $"\"{installer.Spelled}\", a file kit install writes itself.";
     }
 
     /// <summary>One entry of <c>files</c>, checked field by field so the message can name the field that is wrong.</summary>
@@ -386,12 +415,28 @@ public static partial class KitCommands
             return false;
         }
 
-        // Rule 19. A "to" ending in a separator has an empty last component, so it names the directory above it
-        // and not a file in it. WriteFile creates that directory and then hands File.WriteAllText a path with
-        // nothing on the end of it, which threw after the directory existed: half an install for no entry at all.
-        if (to.EndsWith(Path.DirectorySeparatorChar) || to.EndsWith(Path.AltDirectorySeparatorChar))
+        // Rule 19. A last component that is empty, "." or ".." names the directory above it and not a file in
+        // it. WriteFile creates that directory and then hands File.WriteAllText a path with nothing on the end
+        // of it, which threw after the directory existed: half an install for no entry at all.
+        if (Components(to)[^1] is "" or "." or "..")
         {
             problem = $"{manifestPath}: entry {index} writes \"{to}\", which names a directory, not a file.";
+            return false;
+        }
+        if (ReservedComponent(to) is { } reserved)
+        {
+            problem = $"{manifestPath}: entry {index} writes \"{to}\", whose component \"{reserved}\" "
+                + "is a reserved device name on this platform.";
+            return false;
+        }
+
+        // Decided by the repository rather than by the manifest, which is the question rule 13 already asks one
+        // directory over: it calls File.Exists on the source. WriteFile would ask File.WriteAllText to overwrite
+        // a directory, and it throws — reachable by re-running an install after a "to" changed from a file to a
+        // directory name.
+        if (Directory.Exists(destination))
+        {
+            problem = $"{manifestPath}: entry {index} writes \"{to}\", which is an existing directory in the repository.";
             return false;
         }
 
@@ -463,10 +508,13 @@ public static partial class KitCommands
     /// but cannot be created, so the manifest is refused here instead of halfway through the write loop.</summary>
     private const int MaxPathComponent = 255;
 
+    /// <summary>The path as the platform separates it; both separators, because a manifest may spell it either way.</summary>
+    private static string[] Components(string value) =>
+        value.Split(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
+
     /// <summary>Rule 17. The first component of <paramref name="value"/> that is over the limit, or null.</summary>
     private static string? TooLongComponent(string value) =>
-        value.Split(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar)
-            .FirstOrDefault(part => part.Length > MaxPathComponent);
+        Components(value).FirstOrDefault(part => part.Length > MaxPathComponent);
 
     /// <summary>The tail of rule 17's message: the component is by definition too long to print whole.</summary>
     private static string Overlong(string component) =>
@@ -484,11 +532,41 @@ public static partial class KitCommands
     /// </summary>
     private static char? UnusableCharacter(string value)
     {
-        foreach (var part in value.Split(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar))
+        foreach (var part in Components(value))
         {
             var at = part.AsSpan().IndexOfAny(NotInAFileName);
             if (at >= 0) return part[at];
         }
+        return null;
+    }
+
+    /// <summary>
+    /// The Windows device namespace. Rule 18 asks the platform which characters a name may not hold; there is
+    /// no equivalent API for these names, so they are written down: the console, printer and auxiliary
+    /// devices, the null device, and the numbered serial and printer ports.
+    /// </summary>
+    private static readonly string[] ReservedDeviceNames =
+    [
+        "CON", "PRN", "AUX", "NUL",
+        "COM1", "COM2", "COM3", "COM4", "COM5", "COM6", "COM7", "COM8", "COM9",
+        "LPT1", "LPT2", "LPT3", "LPT4", "LPT5", "LPT6", "LPT7", "LPT8", "LPT9",
+    ];
+
+    /// <summary>
+    /// A reserved name used as a *directory* component, which is one level above rule 18: the name holds no
+    /// forbidden character and resolves cleanly, and then Windows follows it into the device namespace instead
+    /// of creating a directory. Amendment 3 measured these as file names — they install as ordinary files
+    /// inside the repository — so only the components before the last are asked about. Trailing dots and
+    /// spaces come off first, because Win32 takes them off before it looks the name up.
+    /// </summary>
+    private static string? ReservedComponent(string value)
+    {
+        if (!OperatingSystem.IsWindows()) return null;
+
+        var components = Components(value);
+        for (var i = 0; i < components.Length - 1; i++)
+            if (ReservedDeviceNames.Contains(components[i].TrimEnd(' ', '.'), StringComparer.OrdinalIgnoreCase))
+                return components[i];
         return null;
     }
 
