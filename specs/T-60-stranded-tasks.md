@@ -295,3 +295,21 @@ It becomes "the task already has work on it: a frozen spec, a branch, or both."
 
 A resumption is invisible to the founder: `conductor.staffing` records only `{ role }` and `_lastAction`
 says "staffed an orchestrator for T-1" either way. Its own task rather than a wider diff here.
+
+## Amendment 3 — accepted as built
+
+The em dash instead of a second colon is right: "This is a resumption, not a fresh start — the task already
+has work on it: a frozen spec, a branch, or both." Changing the separator rather than the replacement clause
+was the correct instinct about whose words to touch.
+
+Two notes from the implementer worth keeping in the record:
+
+**The opening still says "The branch on the task is the work so far"**, one sentence after the clause
+Amendment 2 fixed, and on a spec-only resumption that names something the task may not have. Left as it is:
+it degrades quietly, because the session has already run `muthur task show` two lines earlier and can see
+there is no branch. Worth tidying the next time this prompt is opened, not worth a round of its own.
+
+**The sweep preserves `Priority`** along with the spec and the branch. With Amendment 2's ordering that now
+carries weight it did not have before: a task the founder ranked urgent keeps that ranking through being
+abandoned and swept, so urgent work resumes ahead of ordinary work rather than merely ahead of untouched
+work. That is the behaviour Amendment 2 wanted and it falls out of the sweeper rather than needing code.
