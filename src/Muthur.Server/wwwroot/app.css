@@ -148,7 +148,7 @@ b { font-weight: 600; }
 .select, .input, .textarea { background: var(--bg); color: var(--text); border: 1px solid var(--line-strong); border-radius: 6px; padding: 5px 8px; font: 12px var(--mono); }
 .textarea { width: 100%; min-height: 70px; resize: vertical; font-family: var(--sans); font-size: 13px; }
 .input:focus, .textarea:focus, .select:focus { outline: 1px solid var(--accent); border-color: var(--accent); }
-.btn { font: 700 10.5px var(--mono); letter-spacing: .12em; text-transform: uppercase; padding: 6px 12px; border-radius: 6px; border: 1px solid var(--line-strong); background: var(--panel-2); color: var(--text); cursor: pointer; }
+.btn { display: inline-block; font: 700 10.5px var(--mono); letter-spacing: .12em; text-transform: uppercase; padding: 6px 12px; border-radius: 6px; border: 1px solid var(--line-strong); background: var(--panel-2); color: var(--text); text-decoration: none; cursor: pointer; }
 .btn:hover { border-color: var(--dim); }
 .btn-go { color: var(--accent); border-color: rgba(95, 211, 141, .45); background: var(--accent-bg); }
 .btn-on { color: var(--text); border-color: var(--accent); background: var(--accent-bg); }

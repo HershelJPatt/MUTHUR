@@ -211,6 +211,36 @@ public sealed class DashboardReceiptsTests : IDisposable
     }
 
     /// <summary>
+    /// The window selector is a link, not a script. The window already lives in the query string, so each control
+    /// is the URL that holds it — which means anything that can fetch the page can follow it, and the window a
+    /// founder is reading is one they can send. A button renders identically to a browser and is invisible to
+    /// everything else, which is how a green suite once missed that these were buttons.
+    /// </summary>
+    [Fact]
+    public async Task Every_window_is_an_anchor_to_its_own_url_and_the_row_holds_no_button()
+    {
+        foreach (var requested in new int?[] { null, 24, 168, 720 })
+        {
+            var row = WindowRow(await PageAsync(requested));
+
+            foreach (var (hours, label) in new[] { (24, "24h"), (168, "7d"), (720, "30d") })
+                Assert.Matches($"<a [^>]*href=\"/receipts\\?hours={hours}\"[^>]*>{label}</a>", row);
+            Assert.DoesNotContain("<button", row, StringComparison.OrdinalIgnoreCase);
+
+            // And the window in force is marked on the anchor that leads back to it, not on some other control.
+            Assert.Matches($"<a class=\"btn btn-on\"[^>]*href=\"/receipts\\?hours={requested ?? 24}\"", row);
+        }
+    }
+
+    /// <summary>The selector row alone, so "no button here" means in the selector and not elsewhere on the page.</summary>
+    private static string WindowRow(string page)
+    {
+        var row = Regex.Match(page, "<div class=\"btn-row\">.*?</div>", RegexOptions.Singleline);
+        Assert.True(row.Success, "the page renders no window selector at all");
+        return row.Value;
+    }
+
+    /// <summary>
     /// Founder request #13, on the page. Cost sits on the worker-run row that reported it, that row names the
     /// harness so a blank reads as claude rather than as a bug, the section says out loud what it is not counting,
     /// and there is no total anywhere — which is what the second currency figure would be.

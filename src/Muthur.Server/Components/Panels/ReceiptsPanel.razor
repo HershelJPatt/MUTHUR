@@ -1,7 +1,6 @@
 @using System.Globalization
 @inherits LivePanel
 @inject ReceiptsService Receipts
-@inject NavigationManager Navigation
 
 <section class="panel">
     <div class="panel-head">
@@ -10,9 +9,12 @@
     </div>
     <div class="panel-body">
         <div class="btn-row">
+            @* A link, not a script: the window already lives in the query string, so the control is the URL it
+               leads to. That keeps middle-click and copy-link working, and keeps the page followable by anything
+               that only fetches markup. *@
             @foreach (var (hours, label) in Windows)
             {
-                <button class="btn @(Window == hours ? "btn-on" : "")" @onclick="() => Select(hours)">@label</button>
+                <a class="btn @(Window == hours ? "btn-on" : "")" href="/receipts?hours=@hours">@label</a>
             }
         </div>
         <div class="stats">
@@ -151,9 +153,6 @@
     {
         if (_loaded != Window) await ReloadNowAsync();
     }
-
-    // Through the URL rather than a field, so the window a founder is looking at is the one they can send.
-    private void Select(int hours) => Navigation.NavigateTo(Navigation.GetUriWithQueryParameter("hours", (int?)hours));
 
     private bool Nothing =>
         _report.ByAccount.Count == 0 && _report.Tasks.Count == 0 && _report.StateTime.Count == 0
