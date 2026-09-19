@@ -630,3 +630,42 @@ child with nobody left to cancel it — the shutdown creating the very orphan it
 Accepted without change: `ConductorService` is deliberately **not** `IDisposable`. Cancelling a disposed
 source throws, the class already holds an undisposed `SemaphoreSlim`, and disposing here would add a class
 of shutdown-ordering bug rather than remove one.
+
+## Amendment 7 — the acceptance said the wrong thing, and the validator was right not to reinterpret it
+
+Amendment 5's acceptance closed with: "`down` and `up` with a stand-in harness holding a session must leave
+no surviving child, **and must not produce two `conductor.staffing` events for one task**."
+
+The second clause is wrong, and it contradicts the rest of the same amendment. Once the old session has been
+killed, its task is unclaimed and sitting in the backlog — so the conductor staffing a replacement is not the
+defect, it is the recovery. Amendment 5 itself argues for exactly that: "the killed session's task claim
+lapses, `LeaseSweeper` returns the task to the backlog … and T-60 then plans it with `Resuming: true`". A
+blanket ban on a second staffing event forbids the behaviour the amendment was written to produce.
+
+The validator reproduced it precisely and refused to reinterpret the contract on its own authority:
+
+```
+seq 16  conductor.staffing            T-1 / #orchestrator      hub 81352, child cmd.exe 70428
+seq 18  conductor.sessions_terminated {count:1}                child 70428 gone
+seq 19  conductor.staffing            T-1 / #orchestrator      hub 71360
+```
+
+Two staffing events, no overlapping children. That is the system working. Declining to pass it against the
+words as written, and saying so, is the right call — a validator that quietly decides the spec must have
+meant something else is a validator whose passes mean nothing.
+
+### The requirement, corrected
+
+What the original defect was about, and all this has ever been about, is **two live sessions for one task at
+the same time**. The acceptance is therefore:
+
+> `down` and `up` with a stand-in harness holding a session must leave **no surviving child**, and at no
+> point may two live sessions exist for the same task. A second `conductor.staffing` event after the first
+> session has been terminated is **correct** — the task is unclaimed and waiting, and staffing it again is
+> the recovery, not a duplicate.
+
+The evidence that distinguishes the two is process liveness, not event count: in the original failing run
+both children were alive at once (PIDs 71032 and 26832, both holding prompts for `orchestrator-t-9`); in this
+run the first child was gone before the second was started.
+
+No implementation change. The code already does the right thing; the sentence describing it did not.
