@@ -122,6 +122,23 @@ stops and asks you instead. If it cannot *start* a session at all — no candida
 that task after the same three attempts and tells you why, then quietly tries once more every half hour: the cause is
 usually something you fixed outside the hub, and you should not have to remember an incantation to resume.
 
+It also **lands the work nobody is left to land**. A task that passed validation after its owner's session had
+ended used to sit in `validated` for ever: nothing sweeps that state and nothing plans it. That is the ordinary
+ending rather than an edge, because a session is capped at forty-five minutes and validation takes ten to thirty.
+So each pass the hub merges every validated task whose owner has gone quiet and which it is running no session
+for. A live owner still lands its own work — this is only the backstop — and landing is not a session, so it takes
+no slot and every such task lands in one pass.
+
+**What the hub checks before it merges: that every required validator said yes, and that the branch still merges
+cleanly. Nothing else.** The hub has no test runner and must not grow one, so the validator's pass is the whole
+gate — which is a real change, because until now a human looked at the default branch before work reached it and
+now nobody need have. A merge conflict sends the task back to its owner; an environment that refuses (a dirty
+checkout, a branch that is gone, `gh` missing) leaves it `validated` and is retried once every
+`Muthur:ConductorStallProbeMinutes` rather than every pass — half-open, like a wedged validator, because the cause
+is something you fix outside the hub and a new commit on the branch resumes it at once. Either way you are told
+once per branch head, not once a minute, and `conductor.landed` in the ledger is what tells a hub land from a
+human one.
+
 Workers have their hub credentials scrubbed because they have no authority; a validator is given an identity
 because its verdict decides whether work ships. Those are two launchers on purpose.
 
