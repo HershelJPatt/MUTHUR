@@ -10,7 +10,9 @@ namespace Muthur.Server.Tests;
 
 public sealed class TaskLeaseTests : IDisposable
 {
-    private readonly HubFactory _hub = new();
+    // The_ledger_cannot_be_rewritten asks the database to do what the append-only triggers refuse, and EF
+    // logs each refused command at Error. Those two lines are the assertion, not a finding.
+    private readonly HubFactory _hub = new() { ExpectsLoggedErrors = true };
 
     public void Dispose() => _hub.Dispose();
 
