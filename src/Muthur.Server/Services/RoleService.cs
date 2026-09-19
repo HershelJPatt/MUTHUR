@@ -1,4 +1,3 @@
-using System.Text.RegularExpressions;
 using Microsoft.EntityFrameworkCore;
 using Muthur.Contracts;
 using Muthur.Core;
@@ -7,19 +6,16 @@ using Muthur.Server.Auth;
 
 namespace Muthur.Server.Services;
 
-public sealed partial class RoleService(Ledger ledger, LeasePolicy leases)
+public sealed class RoleService(Ledger ledger, LeasePolicy leases)
 {
-    [GeneratedRegex("^[a-z0-9][a-z0-9-]{0,47}$")]
-    private static partial Regex KeyPattern();
-
     /// <summary>Creates a role or updates its brief. Founder only: a brief is an agent's job description.</summary>
     public Task<RoleDto> DefineAsync(Caller caller, DefineRoleRequest request, CancellationToken ct = default)
     {
         if (!caller.IsFounder)
             throw Fail.Unauthorized("Roles and their briefs are defined by the founder (pass --founder).");
         var key = Normalize(request.Key);
-        if (!KeyPattern().IsMatch(key))
-            throw Fail.Rule("invalid_key", "Role keys are 1-48 chars of a-z, 0-9 or '-'.");
+        if (!RoleKey.IsValid(key))
+            throw Fail.Rule("invalid_key", $"Role keys are {RoleKey.Rule}.");
 
         return ledger.MutateAsync(caller, async m =>
         {

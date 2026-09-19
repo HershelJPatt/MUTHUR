@@ -2,6 +2,7 @@ using System.Net.Http.Json;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.DependencyInjection;
 using Muthur.Contracts;
+using Muthur.Core;
 using Muthur.Core.Entities;
 using Muthur.Data;
 using Muthur.Server.Services;
@@ -895,6 +896,31 @@ public sealed class ConductorTests : IDisposable
         var registered = Assert.Single(agents!, a => a.Name == "conductor-win-validator");
         Assert.Equal("codex", registered.Harness);
         Assert.Equal(recorded, registered.Model);
+    }
+
+    /// <summary>
+    /// A role key and an agent name are one relationship, not two constants: the conductor's identity is built
+    /// out of a key, so the key limit has to leave room for the form. Both limits are read here rather than
+    /// written down — a test that restates their numbers passes happily on the day someone changes one of them,
+    /// which is the drift it exists to catch.
+    /// </summary>
+    [Fact]
+    public async Task The_longest_role_key_there_can_be_still_makes_an_agent_name_the_hub_accepts()
+    {
+        // The key limit, asked of the rule instead of quoted from it.
+        var length = 1;
+        while (length < 1000 && RoleKey.IsValid(new string('a', length + 1))) length++;
+        var longest = new string('a', length);
+        Assert.Equal(RoleKey.MaxLength, length);    // the number callers budget against is the pattern's own
+
+        var launcher = ActivatorUtilities.CreateInstance<ValidatorSessionLauncher>(_hub.Services);
+
+        // IdentityFor builds the name the tree actually uses and registers it, so the name limit is asked of
+        // AgentService the same way: one character too long comes back as invalid_name and fails this test.
+        var identity = await launcher.IdentityFor(longest, new Muthur.Launch.HarnessCandidate("codex", "opus", "acct"), default);
+
+        Assert.EndsWith(longest, identity.Name, StringComparison.Ordinal);
+        Assert.NotEmpty(identity.Token);
     }
 
     private static Muthur.Launch.WorkerAttempt Attempt(string harness, bool success, string report, bool started = true) =>
