@@ -47,7 +47,9 @@ internal static class DatabaseBackup
 
             // SQLite's online backup API, not File.Copy: the hub runs in WAL mode, so the most recent
             // commits can still be in the -wal file and muthur.db alone is not the database.
-            using (var destination = new SqliteConnection($"Data Source={path}"))
+            // Pooling=False, as the hub's own connection string already sets: a pooled connection goes back to
+            // Microsoft.Data.Sqlite's process-global pool on Dispose and keeps the copy's file handle open.
+            using (var destination = new SqliteConnection($"Data Source={path};Pooling=False"))
             {
                 destination.Open();
                 source.BackupDatabase(destination);
