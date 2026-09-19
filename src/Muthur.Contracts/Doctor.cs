@@ -10,7 +10,7 @@ public enum CheckStatus
     [JsonStringEnumMemberName("fail")] Fail,
 }
 
-/// <param name="Category">"secret", "ingest", "outbound", "project", "repo" or "role".</param>
+/// <param name="Category">"secret", "logging", "ingest", "outbound", "project", "repo" or "role".</param>
 /// <param name="Subject">What was checked, safe to show: a source, a target key, a project key, a role key.</param>
 /// <param name="Detail">One sentence: what is true, and what to do about it.</param>
 public sealed record CheckDto(

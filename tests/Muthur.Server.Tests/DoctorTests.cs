@@ -12,14 +12,18 @@ public sealed class DoctorTests : IDisposable
     public void Dispose() => _hub.Dispose();
 
     [Fact]
-    public async Task A_hub_with_nothing_to_check_answers_anyone_with_an_empty_report()
+    public async Task A_hub_with_nothing_configured_answers_anyone_with_only_what_it_knows_of_itself()
     {
         var response = await _hub.CreateClient().GetAsync(Routes.Doctor);
         Assert.Equal(HttpStatusCode.OK, response.StatusCode);
 
         var report = await response.Content.ReadFromJsonAsync(MuthurJsonContext.Default.DoctorDto);
-        Assert.Empty(report!.Checks);
-        Assert.Equal(0, report.Ok);
+        // Nothing is configured, so every check that reads the database has nothing to say. The hub's own log
+        // is not configuration — it exists from the moment the hub does — so that one line is the whole report.
+        var logging = Assert.Single(report!.Checks);
+        Assert.Equal("logging", logging.Category);
+        Assert.Equal(CheckStatus.Ok, logging.Status);
+        Assert.Equal(1, report.Ok);
         Assert.Equal(0, report.Warn);
         Assert.Equal(0, report.Fail);
         Assert.Equal(_hub.Clock.GetUtcNow(), report.At);
