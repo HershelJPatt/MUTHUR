@@ -195,6 +195,34 @@ With a project requiring **two** validator roles and one task marked implemented
 - Repeat three times. There is no `conductor.stalled`, and `muthur msg inbox --founder` carries no message
   about validators that "ran and exited cleanly" — which is the misdiagnosis this task removes.
 
+## What the end-to-end actually showed
+
+Run on an installed build (`artifacts/t43`) against a scratch home on port 7461, never the live hub, with a
+project requiring **two** validator roles and one task marked implemented.
+
+It was not the scripted run this section describes, and the difference is worth recording. A stand-in
+`claude` was placed first on PATH, but `avoidHarness: claude` moved claude to the back of the tier and the
+conductor staffed **codex** for both roles — so two real validator sessions ran, and they produced the exact
+production case the defect section predicts rather than a simulation of it:
+
+```
+12  conductor.staffing        {"role":"web-validator","avoidHarness":"claude"}
+14  conductor.staffing        {"role":"win-validator","avoidHarness":"claude"}
+18  validation.blocked        win-validator  (real evidence, real worktree)
+19  task.validation_blocked   -> T-1 leaves Validating
+25  message.sent  conductor-web-validator -> builder:
+      "Correction: the web-validator blocked verdict command was rejected with not_validating
+       because T-1 had concurrently returned to in_progress."
+27  conductor.round_closed    {"role":"web-validator"}
+```
+
+The sibling did its work, tried to post, was refused 422 `not_validating`, and said so itself on the bus.
+Across the whole ledger: `conductor.round_closed` 1, `conductor.no_verdict` **0**, `conductor.stalled` **0**,
+and no founder message containing "ran and exited cleanly". On main that session would have taken a strike.
+
+One practical note for whoever next reaches for the stand-in-harness technique: it only bites if the harness
+you shimmed is the one the tier actually selects, and `avoidHarness` can send the selection elsewhere.
+
 ## Out of scope / follow-ups
 
 - **Cancelling siblings when the round closes.** Today a sibling keeps running, does its work, and is
