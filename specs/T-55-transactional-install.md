@@ -562,3 +562,39 @@ The spec asserted a rollback mechanism it had not measured, one paragraph after 
 measured everything else — including the two rows that disprove it. T-8's closing note says a spec that states
 a mechanism it has not measured is a spec that will cost a round. This one did, and it was caught the same way:
 an implementer traced the frozen Design against the spec's own table before building.
+
+## Amendment 2 — which failure is load-bearing, once T-56 lands (2026-09-19)
+
+Read off `task/T-56-preflight` while Unit A was building, and it changes the tests rather than the code.
+
+T-56 adds an `Unwritable(…)` pass to `ReadManifest` that refuses, at validation with `invalid_manifest` and
+exit 2, exactly the three repository-state families it was filed for — including **F3, a read-only
+destination**. That is right for T-56. It also means that once T-56 lands, a read-only destination never
+reaches the write phase, and this spec's clearest demonstration stops demonstrating anything.
+
+So the two tasks are separated along the line that actually divides them:
+
+> **T-56 closes what is decidable from the repository before a byte is written. T-55 covers the remainder that
+> is not decidable at all** — and the exclusive `FileShare.None` lock is the canonical member of that
+> remainder, because a pre-flight for "is this file locked" is a TOCTOU race by construction. Nothing can
+> check it; only an undo can survive it.
+
+### What changes
+
+- **The lock is the load-bearing end-to-end case.** `KitInstallRollbackTests` keeps both, but the lock is the
+  one that must still pass after T-56 integrates, and the one a validator should weigh. Say so in the class's
+  doc comment, naming T-56, so the next person to see the read-only test fail knows it is integration and not
+  regression.
+- **The read-only test is true today and dies honestly.** Until T-56 lands it exercises the write phase exactly
+  as the Context table measured. After T-56 lands it becomes an `invalid_manifest` refusal at exit 2 — still
+  "nothing was left behind", by a different mechanism. Whoever integrates second re-points it at T-56's
+  sentence rather than deleting it.
+- **`measure.ps1 -Fail readonly` will read `exit : 2`, `install_failed` → `invalid_manifest`, after T-56.**
+  `-Fail lock` is unaffected and stays the verification that matters. A validator seeing exit 2 on the
+  read-only run against a tree that contains T-56 is seeing the two tasks compose, not a failure.
+- **Nothing about `InstallTransaction` changes.** Its unit tests drive the type directly and are untouched by
+  what validation does or does not refuse, which is the point of testing it on its own.
+
+Amendment 1's second motivating case — a directory named `.gitignore` — is likewise pre-flighted away by T-56.
+Amendment 1's fix stays: it is reachable today, the unit tests pin it directly, and "report the claim, not the
+call" was wrong code regardless of which inputs happen to reach it.
