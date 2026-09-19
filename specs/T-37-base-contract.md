@@ -458,3 +458,41 @@ question git was not being asked. The earlier two were presence-instead-of-ident
 commits-instead-of-working-tree; this is history-instead-of-authorship. The pattern is worth the next
 author's attention: each time, the command answered a nearby question convincingly enough that the
 substitution went unnoticed until someone ran it on a real repository.
+
+## Amendment 6 — "round" is undefined, and one reading loses work (2026-09-18)
+
+Amendment 5's implementer applied it as frozen and then found that the word **"round"** is load-bearing and
+nowhere defined, and that the two resumed cases pull it in opposite directions:
+
+- **Integrated worker** needs `round` = *this invocation*. It has committed nothing in it, resets, and
+  Amendment 4's benign-integration outcome holds.
+- **Worker carrying a predecessor's unintegrated commits** needs `round` = *work on this unit*. Otherwise it
+  answers truthfully "I have committed nothing in this invocation" and **resets that work away** — beneath a
+  sentence promising *"nothing of yours can be lost, because you have made nothing"*, which is false there.
+
+Latent today, because this organization resumes an implementer by messaging the running agent, so the two
+readings coincide. Live the first time a resumed unit is handed to a fresh one.
+
+This is the sixth defect in this step and the fourth of the same shape: `have you committed` measures
+**authorship by this process**, which is near to, but not, the question that matters — **does this branch
+carry work that exists nowhere else.** The series now reads: presence-instead-of-identity,
+commits-instead-of-working-tree, history-instead-of-authorship, authorship-instead-of-unintegrated-work.
+
+### The fix: ask containment, and drop the word
+
+Authorship is the wrong axis and "round" can be deleted rather than defined. What matters is whether
+anything on this branch exists only here, which git answers exactly:
+
+- **If `git merge-base --is-ancestor HEAD <base>` succeeds** — everything here is already in the base —
+  reset. This covers the fresh worker on the right base and the integrated worker.
+- **Otherwise, if `git merge-base --is-ancestor HEAD <default branch>` succeeds** — everything here is
+  already landed, so the extra commits are inherited from another lineage and belong to nobody in this unit
+  — reset, and report it as a divergent reset. This is the case the whole task was filed for.
+- **Otherwise** this branch carries commits that are in neither the base nor the default branch: real work
+  that exists only here. Do not reset, do not merge, do not rebase. Follow the resumed path — re-read the
+  spec from the base, check what the base moved — and if you did not write those commits yourself, stop and
+  report `blocked`.
+
+No question about who wrote anything, no "round", and the conservative direction is the safe one: anything
+not already contained somewhere is preserved. The default branch is named in the prompt alongside the base,
+or is `main` where a project has not said otherwise.
