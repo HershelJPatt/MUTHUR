@@ -28,3 +28,5 @@ Control plane for an organization of coding agents. Design and milestones: `docs
 ## Commands
 
 `dotnet build` · `dotnet test` · `pwsh ./scripts/install.ps1 -Destination ./artifacts/muthur`
+
+`Muthur.Server.Tests` writes a `muthur-tests:` line naming every hub directory it kept or could not remove, on stderr at process exit — so it prints at `dotnet test -v n` and not at plain `dotnet test`, and a cleanup failure does not redden the run. Run `pwsh ./scripts/clean-test-temp.ps1` periodically: it is how you find a leak that a run did not shout about.

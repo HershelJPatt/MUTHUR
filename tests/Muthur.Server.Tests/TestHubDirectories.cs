@@ -139,24 +139,14 @@ internal static class TestHubDirectories
         }
     }
 
-    /// <summary>
-    /// The process exit code this run has earned. A directory the suite could not remove is not a clean run —
-    /// the same reasoning as "warnings are errors" — while a kept directory is evidence the retention rule
-    /// preserved on purpose and reddens nothing.
-    /// </summary>
-    internal static int ExitCode()
-    {
-        lock (Gate) return Outcomes.Values.Any(o => o.What is Disposition.Failed) ? 1 : 0;
-    }
-
     // A module initializer runs before any test in the assembly, so no test class has to opt in and none can
     // forget. The summary itself waits for process exit, when every hub has been disposed.
     [ModuleInitializer]
     internal static void ReportAtExit() => AppDomain.CurrentDomain.ProcessExit += (_, _) =>
     {
-        // The summary goes out first, so an operator reading a failed run already has the lines that explain
-        // it. Nothing sets a zero here: another component may have earned a failure code of its own.
+        // Reporting is all this does. dotnet test derives its exit code from the test results and ignores the
+        // host's, so a failure code set here would never reach the shell — measured, and the reason CLAUDE.md
+        // says to read these lines at -v n rather than wait for the run to redden.
         foreach (var line in Summary()) Console.Error.WriteLine(line);
-        if (ExitCode() is not 0) Environment.ExitCode = ExitCode();
     };
 }

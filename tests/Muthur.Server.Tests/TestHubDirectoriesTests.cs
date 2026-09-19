@@ -141,12 +141,9 @@ public sealed class TestHubDirectoriesTests
     }
 
     [Fact]
-    public void A_directory_held_open_for_the_whole_retry_budget_is_failed_and_reddens_the_run()
+    public void A_directory_held_open_for_the_whole_retry_budget_is_recorded_failed()
     {
-        // ExitCode() answers for the whole run, so these tests pin the causal claim — this outcome reddens
-        // the run, that one leaves it alone — rather than a literal zero. Other classes are releasing
-        // directories in parallel, and the hand proof of the exit hook leaks one on purpose.
-        var before = TestHubDirectories.ExitCode();
+        // The summary is where an outcome is readable from outside, and only kept and failed are named there.
         var dir = NewHeldDir(out var held);
         try
         {
@@ -154,25 +151,23 @@ public sealed class TestHubDirectoriesTests
 
             var reported = Assert.Single(TestHubDirectories.Summary(), line => line.Contains(dir, StringComparison.Ordinal));
             Assert.StartsWith("  failed  ", reported, StringComparison.Ordinal);
-            Assert.NotEqual(0, TestHubDirectories.ExitCode());
         }
         finally
         {
             held.Dispose();
         }
 
-        // Put the run back where it was: this suite must not redden itself proving that a real leak would.
+        // Leave nothing behind, and the failure stops being named once the directory is actually gone.
         TestHubDirectories.Release(dir);
 
         Assert.False(Directory.Exists(dir));
-        Assert.Equal(before, TestHubDirectories.ExitCode());
+        Assert.DoesNotContain(TestHubDirectories.Summary(), line => line.Contains(dir, StringComparison.Ordinal));
     }
 
     [Fact]
     public void A_handle_released_within_the_retry_budget_ends_removed()
     {
         // The case the retry exists for: a scanner lets go a moment after the first delete lost to it.
-        var before = TestHubDirectories.ExitCode();
         var dir = NewHeldDir(out var held);
         var swept = Path.Combine(dir, "swept.marker");
         File.WriteAllText(swept, "");
@@ -198,7 +193,6 @@ public sealed class TestHubDirectoriesTests
             Assert.True(watcher.Join(Eventually.Budget), "the watcher never let go of the handle");
             Assert.False(Directory.Exists(dir));
             Assert.DoesNotContain(TestHubDirectories.Summary(), line => line.Contains(dir, StringComparison.Ordinal));
-            Assert.Equal(before, TestHubDirectories.ExitCode());
 
             // Without a backoff paid, the handle was gone before the first attempt reached it and this test
             // would be the happy path in disguise. The retry removed the directory only if it waited first.
@@ -207,11 +201,10 @@ public sealed class TestHubDirectoriesTests
     }
 
     [Fact]
-    public void Removing_and_keeping_directories_leaves_the_exit_code_alone()
+    public void Removing_and_keeping_directories_are_not_failures()
     {
-        // A kept directory is evidence the retention rule preserved on purpose, not a leak, so neither it nor
-        // a removed one reddens the run. Only Failed does, which the test above pins.
-        var before = TestHubDirectories.ExitCode();
+        // A kept directory is evidence the retention rule preserved on purpose, not a leak, and a removed one
+        // is only counted. Neither is ever reported as failed, which is the outcome the test above pins.
         var kept = NewDataDir(Information, Error);
         var removed = NewDataDir(Information);
 
@@ -220,7 +213,9 @@ public sealed class TestHubDirectoriesTests
 
         Assert.True(Directory.Exists(kept));
         Assert.False(Directory.Exists(removed));
-        Assert.Equal(before, TestHubDirectories.ExitCode());
+        var reported = Assert.Single(TestHubDirectories.Summary(), line => line.Contains(kept, StringComparison.Ordinal));
+        Assert.StartsWith("  kept    ", reported, StringComparison.Ordinal);
+        Assert.DoesNotContain(TestHubDirectories.Summary(), line => line.Contains(removed, StringComparison.Ordinal));
 
         TestHubDirectories.Release(kept, expectsLoggedErrors: true);
     }
