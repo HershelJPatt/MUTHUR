@@ -43,8 +43,13 @@ dotnet test
 Plus anything a validator should exercise end to end (the user-visible behavior, not the unit tests).
 
 Every command here runs with no browser, no GUI and no human — the sessions that validate this are started by
-a conductor. If the change can only be seen by eye, mark the task
-`muthur task attended <id> --reason "…"` and say so here.
+a conductor. If the change can only be seen by eye, say so here on a line of its own:
+
+    needs: browser
+
+The hub reads that when the spec is frozen, flags the task for a human validator, and the conductor never
+staffs it — so nobody spends a session finding out. `muthur task attended <id> --clear` lifts it if the
+reason stops being true.
 
 ## Out of scope / follow-ups
 

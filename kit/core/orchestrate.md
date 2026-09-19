@@ -90,9 +90,10 @@ those specs was wrong.
 - **Know what no fetch can check.** `<Virtualize>` renders nothing during prerender, so virtualized rows — and
   anything that depends on them — are not assertable from fetched HTML at all. That is settled; do not
   re-derive it, and do not redesign a component to make a two-word badge testable.
-- **A task that genuinely needs eyes is marked, not shipped and hoped over.** Run
-  `muthur task attended T-n --reason "…"` before you hand it to validation. The reason is the founder's signal
-  that a human must look, and it stops the conductor spending a session to find out.
+- **A task that genuinely needs eyes says so in its spec, on a line of its own:** `needs: browser`. The hub
+  reads that when you freeze the spec, flags the task for a human validator and the conductor never staffs
+  it — so nobody spends a session finding out. `muthur task attended T-n --reason "…"` still works for a need
+  you discover after freezing, and `--clear` lifts either when the reason stops being true.
 
 ## Rules
 

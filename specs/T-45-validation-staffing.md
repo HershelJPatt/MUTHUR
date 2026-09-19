@@ -131,3 +131,59 @@ HTTP API that `HubFactory` drives, so there is nothing here a conductor-started 
 The rest of T-45 — whether the conductor can know in advance that it cannot run a spec — is waiting on the
 founder. This spec is deliberately complete without it and does not prejudge it: nothing here reads or
 writes a capability, and option A, B or C can be built on top without undoing any of it.
+
+## Founder request #15, answered: option C
+
+> C: both halves of A, but the capability lives on the spec and the attended flag only. No harness model
+> change: a spec declaring 'needs: browser' is set attended at freeze time and the conductor never staffs it,
+> because today no candidate has a browser. If a browser-capable harness ever exists, A is the upgrade path.
+
+Built. The half already on this branch — a second block flags the task, and the founder hears it once — is
+what catches a need nobody predicted; this is what catches the one somebody did.
+
+### The declaration
+
+A line of its own, anywhere in the spec: `needs: browser`. Leading list markers, quote markers and emphasis
+are allowed, so `- needs: browser` and `**needs:** browser` are the same declaration, and the match is
+case-insensitive. Prose *about* a browser is not a declaration — only a line whose whole content is one.
+
+**The value is not interpreted.** Nothing the conductor can staff has a browser, a GUI or hands, so
+`needs: gui` and `needs: hands` mean what `needs: browser` means today. Matching a declared capability
+against a harness that has it is option A, and is deliberately not built: there is nothing to match against.
+
+### What happens at freeze time
+
+`SetSpecAsync` already resolves the spec's content — T-50 made it read from the branch, the task's own
+branch, or the working tree. That same content is now scanned, and a declared need sets `AttendedReason`:
+
+```
+The spec declares 'needs: browser'. No unattended session has one, so this waits for a human validator.
+```
+
+with `task.attended` recorded carrying `source = "spec_needs"`. The conductor already leaves an attended task
+alone (T-31), so that is the whole mechanism — no second way to skip a task, and `muthur task attended <id>
+--clear` still lifts it.
+
+A reason somebody wrote by hand is never overwritten. A human's own sentence says more than the generated
+one, and the generated one would replace *why* a human is needed with *that* one is.
+
+### One thing the read had to change
+
+The heading check reads the first 8KB on purpose — its question is about the first non-blank line, and a
+mistaken path to something enormous should stay cheap to reject. A declared need can be anywhere in the
+document, and one the hub silently failed to see would be the worst of both worlds: the orchestrator believes
+it declared, and a session gets spent anyway. So the resolver now returns the whole spec (bounded at 1MB) and
+the heading check takes its own 8KB window out of it. The existing cap test is untouched and still passes.
+
+### The procedure and the templates
+
+`kit/core/orchestrate.md` and both spec templates now name the declaration where T-46's headless bar already
+lives. That is where an orchestrator meets the rule, and the rule was previously "mark it attended
+afterwards" — which is exactly the step that kept being skipped.
+
+`dotnet build`: clean, 0 warnings. `dotnet test`: 3736 Core, 23 Launch, 159 Cli, 379 Server — all green.
+
+### Tests
+
+Six declaration spellings, prose that is not a declaration, a declaration 20,000 characters in (past the
+heading window), and a hand-written reason surviving a freeze that declares a need.
