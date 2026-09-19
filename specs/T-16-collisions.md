@@ -379,3 +379,69 @@ asserts no collision and no `pill-collision` on `/`.
 Unit B's specialist did not take a passing test as proof of the `validated` fix: it reverted the filter to
 the two original states, confirmed the new test fails with `The collection was empty` and nothing else in
 the class does, then restored it. The test is precisely load-bearing for that regression.
+
+## State at handover (2026-09-19)
+
+**Feature-complete and building clean. Eleven tests fail, for a known and precedented reason that is not
+this task's defect.** Branch `task/T-16-collisions`, merged up to `main` as of this note, pushed.
+
+### What is done
+
+Both units, integrated and reviewed:
+
+- **Unit A** — a conflicting land is countable. `LandResult` gained `Files` (uncapped) and `LandedSince`
+  (best-effort task ids landed on the target since the branch diverged), populated in both conflict paths of
+  `GitLander`; `LifecycleService` records `branch`, `target`, `files` and `landedSince` in
+  `task.land_failed`. `ConflictMessage`'s prose is byte-identical and still caps its list at 12.
+- **Unit B** — `CollisionService` finds pairs of in-flight tasks whose branches genuinely fail to merge
+  (`git merge-tree --write-tree --name-only`, **exit 1 only**), cached 60s on the injected clock,
+  single-flight semaphore, 12-branch ceiling, 10s budget, failures cached so a repeatable failure costs one
+  attempt a minute rather than one per render. `TaskCard` renders a red `pill-collision`.
+
+Both were proven end to end on a scratch hub before main moved: a real bounce produced
+`files: ["shared.txt"], landedSince: ["T-1"]`, and `GET /` grew the project repo's loose-object count,
+which only `merge-tree --write-tree` does.
+
+### Why eleven tests fail right now
+
+All eleven fail with **HTTP 422**, and it is the T-38 defect exactly, one branch later.
+
+T-25 landed `TaskService.RequireSpecBelongsToTask`, which refuses a spec path that does not exist on disk in
+the project's checkout. `LandConflictTests` and `CollisionTests` were written before that guard and call the
+`spec` action with a hardcoded path to a file nobody wrote. They were green when written; they are red now
+because the guard is beside them.
+
+**The guard is correct and must not be relaxed.** This is the same semantic collision T-38 fixed for
+`TaskAttendedTests` and `DoctorRoleTests` — and it is, incidentally, the exact failure class this task's own
+spec records as invisible to its board indicator.
+
+### The fix, which is mechanical and has a precedent
+
+Do what T-38 did, in `tests/Muthur.Server.Tests/LandConflictTests.cs` and
+`tests/Muthur.Server.Tests/CollisionTests.cs`: replace each hardcoded spec path with
+`_repo.WriteSpec(task.Id)`. `TestRepo.WriteSpec` already exists and writes `specs/<id>.md` with a heading
+naming that task — **pass the id**, because the guard checks the heading too and `WriteSpec()`'s `T-1`
+default would only half-fix it. See `git show <T-38's land commit> -- tests/` for the two-line shape.
+
+Nothing under `src/` should change.
+
+### One thing already done for you
+
+Main replaced `ITaskLander.BranchExistsAsync` with `BranchHeadAsync` while this branch was out.
+`CollisionService`'s single call site is adapted (`... is not null`) and the build is clean. That was a
+mechanical merge fix, not a design change.
+
+### What is still unverifiable, and is not the fix above
+
+The `pill-collision` has never been seen on a live `/` by anyone. `BoardPanel` renders inside `<Virtualize>`,
+which emits nothing during a prerender, so no test can assert it and `curl` shows nothing. The markup is
+covered via `HtmlRenderer` and the wiring by the loose-object evidence. **This task needs a browser-capable
+validator**, the same as T-5 — and `muthur task attended` cannot be set because the running hub is still the
+`54c455d` build and returns 404 for that route. Reinstalling the live hub is a founder action.
+
+### What I would do next
+
+1. Apply the `WriteSpec(task.Id)` fix to the two test files; expect all eleven to go green.
+2. `dotnet build` and `dotnet test`; the rest of the suite was green before this merge.
+3. `muthur task implemented T-16 --branch task/T-16-collisions`.
+4. Flag it attended once the hub is upgraded, for the same reason as T-5.
