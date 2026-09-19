@@ -367,3 +367,85 @@ them — the guard doing exactly the job it was added for.
 tests. The options offered were (A) a cleanup failure fails the run, (B) leave it at `-v n` and document that,
 (C) `VSTestVerbosity=normal` for the server test project. The branch implements B's behavior, which is the
 status quo of the three and the only one that needs no further change. A and C are each a small follow-up.
+
+## Amendment 4 — the validator was right: the script reproduces this task's own defect (2026-09-19)
+
+`conductor-validator` failed T-29 and the verdict is accepted in full. The leak is fixed and was measured at
+zero four times, both revert checks behave as Amendment 1 says, and the retention rule was driven end to end
+through a real hub. The task fails on `scripts/clean-test-temp.ps1`.
+
+**The defect.** `Test-LoggedAnError` calls `[IO.File]::ReadLines` at line 35, outside any `try`/`catch`, under
+`$ErrorActionPreference = 'Stop'` (line 24). A `muthur.log` it cannot read therefore **terminates the whole
+script**: no summary line, the directories after it never examined, exit 1. Eleven of twelve runs against a
+live test root aborted that way.
+
+That is this task's own defect class, rebuilt in the fix for it. T-29 was opened because a cleanup failure was
+swallowed; the script now loses the entire count instead. The spec wrote the right rule for the C# half —
+*"Reading `muthur.log` must not throw: if the read fails for any reason, treat it as 'logged an error' and
+keep the directory"* — and `TestHubDirectories.Evidence` implements it. The script half never got it. The
+asymmetry was an oversight, not a decision.
+
+### The measurement that reframes the fix
+
+An unreadable log is not an error condition to route around. It is the signal.
+
+`FileLoggerProvider` opens `muthur.log` with `FileShare.ReadWrite`, but `[IO.File]::ReadLines` requests
+`FileShare.Read` — which conflicts with the live writer's own write access. Measured:
+
+```
+readable while a writer holds it: False
+  "The process cannot access the file '...\muthur.log' because it is being used by another process."
+```
+
+So a log that cannot be read means **another process owns this directory**. The C# half reads its own hub's
+log after disposal and needs `FileShare.ReadWrite` to do it; the script reads *other processes'* logs, where an
+open handle is exactly the thing that should stop it. **The script must not copy the C# half's share mode.**
+It must catch the failure and keep the directory.
+
+### The age guard's stated reason is false, and it matters
+
+The comment claims "a live hub writes its log, and writing a file touches the directory that holds it".
+Measured — 200 appends to an existing `muthur.log`:
+
+```
+dir LastWriteTimeUtc before : 2026-09-19T06:40:06.1562385Z
+dir LastWriteTimeUtc after  : 2026-09-19T06:40:06.1562385Z
+unchanged                   : True
+log LastWriteTimeUtc        : 2026-09-19T06:40:08.1743490Z
+```
+
+NTFS updates a directory's write time when an entry is created, renamed or removed — not when a file inside it
+is appended to. The guard works today only because a live hub churns entries. It does not cover a hub that has
+been quiet longer than the cutoff while still holding its log, which is the case Amendment 3 exists to
+prevent.
+
+The unreadable-log rule above covers that case for a default run. It does **not** cover `-All`, which skips the
+log check entirely — so `-All` against a quiet live hub is the corruption Amendment 3 was written to stop. The
+guard has to be true on its own.
+
+### What the fix is
+
+1. **`Test-LoggedAnError` must not throw.** Wrap the read. A read that fails for any reason returns "keep
+   this", and the caller records it as *held*, not *kept* — an operator reads those numbers and "someone has
+   it open" is a different fact from "it recorded an error".
+2. **The age guard reads the newest write inside the directory,** not the directory's own timestamp: the
+   maximum of the directory's `LastWriteTimeUtc` and that of every file beneath it
+   (`[IO.Directory]::EnumerateFiles($dir, '*', 'AllDirectories')` with `[IO.File]::GetLastWriteTimeUtc`).
+   A hub directory holds a handful of files; this is one cheap stat each, not the per-file walk the original
+   spec warned off. Replace the false sentence in the comment with what was measured.
+3. **A directory that vanished mid-walk is `gone`, not `failed`.** `EnumerateDirectories` yields a path the
+   owning test run then removes; `GetLastWriteTimeUtc` returns 1601-01-01, which no cutoff skips, and
+   `Remove-Item` raises `ItemNotFoundException`. `failed` is the number an operator acts on and must not
+   carry the routine case. Mirror the C# half, which returns without recording when the directory is gone.
+4. **Name the paths.** The summary prints one line per *held* and per *failed* directory, as
+   `TestHubDirectories` does. A count nobody can investigate is halfway back to a silent catch.
+5. **The summary always prints.** Whatever happens to an individual directory, the run ends with its counts:
+   `examined N, deleted N, kept N, held N, skipped (too recent) N, gone N, failed N.`
+
+### Also fixed: three behaviors of `Release` that nothing asserts
+
+The validator proved each with a temporary probe and reported the gap rather than resting the verdict on it.
+`TestHubDirectoriesTests` covers `LoggedAnError`, the already-gone path and the failed-then-succeeded path, but
+nothing pins that `Release` **keeps** a directory whose log recorded an error, that `ExpectsLoggedErrors: true`
+removes it anyway, or that an unreadable log keeps it. All three work; a regression in any would be silent,
+which is the failure mode this task exists to end. They get tests.
