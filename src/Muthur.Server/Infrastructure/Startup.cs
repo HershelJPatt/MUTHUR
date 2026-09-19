@@ -69,6 +69,7 @@ public static class Startup
         builder.Services.AddSingleton<IOutboundChannel, DiscordWebhookChannel>();
         builder.Services.AddSingleton<IOutboundChannel, GitHubIssueChannel>();
         builder.Services.AddSingleton<IngestService>();
+        builder.Services.AddSingleton<PushService>();
         builder.Services.AddSingleton<IInboundSource, GitHubIssuesSource>();
         builder.Services.AddSingleton<IInboundSource, DiscordChannelSource>();
         builder.Services.AddSingleton<IProcessRunner, ProcessRunner>();
@@ -86,10 +87,12 @@ public static class Startup
         builder.Services.AddSingleton<IDoctorCheck, DoctorOutboundCheck>();
         builder.Services.AddSingleton<IDoctorCheck, DoctorProjectCheck>();
         builder.Services.AddSingleton<IDoctorCheck, DoctorRepoCheck>();
+        builder.Services.AddSingleton<IDoctorCheck, DoctorPushCheck>();
         builder.Services.AddSingleton<IDoctorCheck, DoctorRoleCheck>();
         if (options.BackgroundServices)
         {
             builder.Services.AddHostedService<LeaseSweeper>();
+            builder.Services.AddHostedService<PushWorker>();
             builder.Services.AddHostedService<IngestWorker>();
             builder.Services.AddHostedService<ConductorWorker>();
         }
