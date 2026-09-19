@@ -1,0 +1,217 @@
+# T-49 — A hub disposed mid-request still logs an unhandled error at shutdown
+
+> Frozen spec. An implementer completes this without making design decisions.
+> If something here is wrong or missing, the implementer stops and reports; they do not improvise.
+
+## Goal
+
+After this task the hub's answer to "a request was in flight when I was disposed" is settled by a rule rather
+than by which exception happened to be on top of the stack, and there is a test that produces that situation
+with the host **actually disposed underneath the request** — which no test in the suite does today. T-41's
+whole test surface holds disposal off with a `StopGate`, deliberately: its own amendment says holding
+disposal off is what makes those tests deterministic. That leaves the case T-49 is named for — disposal
+really happening — unexercised, and the middleware's guard for it unproven.
+
+## What the measurement says, and why the task is still worth doing
+
+T-49's premise was that after T-29 every retained hub directory is one instance of this defect, so the way to
+work it is to run the suite and read what the cleanup kept. That has now been done three times, twice by me:
+
+| Run | Tests | Directories released | Kept (logged an error) | Could not be removed |
+|---|---|---|---|---|
+| Previous holder, main at `a2474a2` (`35ed2f3`) | 349 | 3 | 0 | 0 |
+| Mine, main at `15cad7a` | 508 | 415 | 0 | 0 |
+| Mine, main at `15cad7a`, again | 508 | 415 | 0 | 0 |
+
+**The detection method works and finds nothing.** The previous holder went further — 480 requests racing
+disposal across twelve fresh hubs, zero errors — and released the task rather than change error handling on
+the strength of a stack trace from an earlier build. That judgement was right, and this spec does not undo
+it: nothing here widens a catch on a guess.
+
+What a fourth run of the same measurement would add is nothing. What is missing is different, and it is
+visible by reading rather than by sampling:
+
+1. **No test disposes a hub with a request in flight.** Every T-41 test parks the hub in *asked to stop,
+   nothing disposed yet*. The `ObjectDisposedException` in those tests is thrown by a fake channel, not by a
+   disposed connection. So the guard that this whole task rests on has never met the thing it guards against.
+   `HubDisposalTests` disposes hubs, but only after every request has been awaited.
+2. **The guard matches the exception on top, not the cause underneath.**
+   `catch (ObjectDisposedException) when (… ApplicationStopping.IsCancellationRequested)` does not match a
+   `DbUpdateException` whose `InnerException` is an `ObjectDisposedException`, and EF Core wraps store
+   failures that way inside `SaveChangesAsync` — which is where `Ledger.MutateAsync` spends most of a write.
+   The rule the middleware's own comment states ("an `ObjectDisposedException` on a hub that is *not*
+   stopping is a real defect") is about a *cause*; the code tests a *type*.
+
+Item 2 is a hypothesis about a shape, not a sighting. This task does not act on it as a hypothesis: it builds
+the harness from item 1 and then acts on what that harness actually produces. See **Design**.
+
+## Context
+
+- `src/Muthur.Server/Infrastructure/ErrorMiddleware.cs` — the only production file this task may change. Read
+  all of it, including the comments: they are T-41's reasoning and this task is bound by it.
+- `tests/Muthur.Server.Tests/SystemTests.cs` — T-41's tests, the `StopGate`, `DisposedChannel`, `Gated`,
+  `Founder`, `ReadHubLog`. This is the file the new tests belong in and the style to copy. Note
+  `ExpectsLoggedErrors = true` on its `HubFactory`: this class provokes logged errors on purpose, so its data
+  directory is removed rather than kept as evidence.
+- `tests/Muthur.Server.Tests/HubFactory.cs` and `TestHubDirectories.cs` — T-29's cleanup. A hub whose log has
+  an `Error` or `Critical` line is kept, and the `muthur-tests:` line at process exit counts what was kept.
+  That is the detection method; it is also an assertion available to a test.
+- `tests/Muthur.Server.Tests/HubDisposalTests.cs` — the existing "dispose the hub and look at what survives"
+  tests. Short, and the right size.
+- `src/Muthur.Server/Services/OutboundService.cs` `DefineTargetAsync` — `channel.Validate(...)` runs
+  **before** `ledger.MutateAsync`, so a test-registered `IOutboundChannel` is a seam that can hold a request
+  still inside the pipeline while something else happens, and then let it walk into real database work.
+- `src/Muthur.Server/Services/Ledger.cs` — `MutateAsync` is `CreateDbContextAsync` → `BeginTransactionAsync`
+  → work → `SaveChangesAsync` → `CommitAsync`. Each of those four is a different place for a disposed
+  connection to surface, and they do not all throw the same thing.
+- Commit `35ed2f3` (on no branch now; `git show 35ed2f3`) — the previous holder's measurement and their
+  `ShutdownRaceTests.cs`. Read it. Its one test is the closest thing to the harness this task needs.
+- `specs/T-41-hub-stopping.md` — the decision this task extends, and the reason a blanket catch is forbidden.
+
+Constraints that are not obvious:
+
+- Warnings are errors. Tests never sleep to synchronize: real time is only ever a hang-detector budget
+  (`Eventually.Budget`), and anything a test waits for is a condition it can observe or a step of the fake
+  clock.
+- `TestServer` does not drain in-flight requests when the host stops the way Kestrel does. That is not a bug
+  to fix here; it is what makes a deterministic reproduction possible at all.
+- A test must never leave a hub directory behind for a human to read unless it means to.
+
+## Non-goals
+
+- **Draining.** Letting in-flight requests finish before disposing anything is T-41's named follow-up and
+  stays one. Kestrel already drains for the real hub up to the host's shutdown timeout; the race this task is
+  about is what happens at the end of that window, and a drain does not remove it.
+- **Changing the test suite so hubs are only disposed when idle.** Nothing in the suite currently leaks a
+  directory, so there is nothing to fix, and T-41 already settled that the hub must answer correctly whoever
+  made the request.
+- **Any change to `MessageService.InboxAsync`,** the long-poll contract, the CLI, or the 503/exit-4 mapping.
+  Those are T-41's and they work.
+- **A blanket `catch (Exception) when (stopping)`.** Explicitly forbidden — see the rule below.
+- Re-running the suite-wide measurement again. It has been run three times and it is recorded here.
+
+## Design
+
+### The rule (decided here; do not re-open it)
+
+> When the response has not started and `ApplicationStopping` is signalled, a failure **whose cause is the
+> hub's own teardown** is answered `503 hub_stopping` and is not logged as an error. "Cause is teardown"
+> means the exception **is** an `ObjectDisposedException`, **or any exception in its `InnerException` chain
+> is**. Every other exception keeps exactly today's behaviour — `500 internal_error`, logged at `Error` with
+> its stack — whether the hub is stopping or not.
+
+This is T-41's decision applied to a cause rather than to a type. It is deliberately not "anything that
+fails during shutdown is forgiven": an `InvalidOperationException` from a real defect that happens to land
+during shutdown still arrives as a 500 with its stack in the log, and `A_disposed_object_on_a_hub_that_is_not_stopping_is_still_an_internal_error`
+still passes unchanged.
+
+### What gets built, in order
+
+**Step 1 — the harness, before any production change.** A test that:
+
+- brings up a hub through `_hub.WithWebHostBuilder(...)` the way `Gated` does,
+- gets a request **past** `ErrorMiddleware`'s front guard and holds it there, using a test-registered
+  `IOutboundChannel` whose `Validate` blocks on a `TaskCompletionSource` (the request is then inside
+  `DefineTargetAsync`, before `ledger.MutateAsync`),
+- disposes that hub **for real** from another thread — no `StopGate`, nothing held off, so
+  `ApplicationStopping` fires, hosted services stop, the server stops and the container is disposed,
+- then releases the parked request, so it walks into `Ledger.MutateAsync` against a disposed factory,
+  connection and service provider,
+- and records what the request was answered and what the hub's log says.
+
+Synchronisation is by observation, never by sleeping: the test knows the request is parked because the
+channel says so (a `TaskCompletionSource` the channel completes on entry), and knows disposal finished
+because `Dispose` returned. `Eventually` is the only real-time budget.
+
+**Step 2 — catalogue what that produces.** Which exception reaches the middleware, from which of
+`Ledger.MutateAsync`'s four steps, and what the client and the log get. Park in more than one place if the
+first lands somewhere uninteresting: the seam can also be made to return normally and let the request reach
+`SaveChangesAsync`, which is the step the rule's `InnerException` clause is about.
+
+**Step 3 — act on what step 2 found, and only on that.**
+
+- **If some shape escapes as a 500 / an `Error` line** — apply the rule. In `ErrorMiddleware`, replace the
+  type-matched catch with a cause-matched one, e.g. a `private static bool IsTeardown(Exception ex)` that
+  walks `InnerException` for an `ObjectDisposedException`, used in the existing `when` clause beside the two
+  conditions that are already there. Keep the comment's argument intact and extend it to say why the cause
+  and not the type. The test from step 1 then asserts 503 `hub_stopping` and no `Error` line, **and must fail
+  without the production change** — say so in the report, having run it both ways.
+- **If nothing escapes** — change no production code. Keep the harness as a regression test that asserts what
+  it found (a request that met a fully disposed hub was not told the hub broke, and the hub's log has no
+  `Error` line), and report that the rule needed no code because the code already satisfies it. That is a
+  complete and acceptable outcome for this unit; a green harness over a real disposal is the thing T-49 is
+  missing either way.
+- **If a shape escapes that the rule does not cover** — for example an exception with no
+  `ObjectDisposedException` anywhere in its chain, or a request answered before the middleware sees anything
+  — **stop and report**. Do not widen the rule. That is the one case that comes back to me.
+
+### Tests to end with
+
+In `SystemTests.cs`, beside T-41's, named so the file reads as one argument:
+
+1. **The real disposal.** Step 1's harness. Whatever the answer is, it is not `500 internal_error` and the
+   hub's log has no `Error` line for it. If the fix was needed, assert 503 `hub_stopping` exactly.
+2. **The cause, not the type** — *only if step 3 produced a production change.* On a hub that is stopping, a
+   dependency that throws an exception **wrapping** an `ObjectDisposedException` (the shape EF Core produces
+   from `SaveChangesAsync`) is answered 503 `hub_stopping`, deterministically, with the `DisposedChannel` +
+   `StopGate` pattern T-41 already uses for the unwrapped case. Its mutation is a 500.
+3. **Still not a silencer** — *only if step 3 produced a production change.* The mirror of test 2 on a hub
+   that is **not** stopping: the same wrapped exception is `500 internal_error` **and logged**. Write it next
+   to `A_disposed_object_on_a_hub_that_is_not_stopping_is_still_an_internal_error` so the pair reads as the
+   rule.
+
+No test may leave a hub data directory behind. `SystemTests`'s own `HubFactory` already sets
+`ExpectsLoggedErrors`; if a new test needs its own hub, it decides that flag deliberately and says why.
+
+## Units of work
+
+### Unit A — the whole task
+- **Files:** `tests/Muthur.Server.Tests/SystemTests.cs`; `src/Muthur.Server/Infrastructure/ErrorMiddleware.cs`
+  **only if step 3 calls for it**. No other production file changes. Do not add a new test file unless the
+  harness genuinely does not belong beside T-41's tests — say which you chose and why.
+- **Does:** steps 1–3 above.
+- **Depends on:** nothing.
+- **Acceptance:**
+  1. `dotnet build` clean (warnings are errors) and `dotnet test` clean — the whole suite, not just the new
+     tests.
+  2. The step-1 harness exists and really disposes the host while a request is inside the pipeline. Prove it
+     in the report: say which exception the request met and from which line of `Ledger.MutateAsync`.
+  3. Every new assertion that claims the fix works has been run with the production change reverted, and the
+     report says what it did then. An assertion that passes both ways is not evidence and must be rewritten
+     or dropped.
+  4. The run's `muthur-tests:` line reports `0 kept` and `0 could not be removed`
+     (`dotnet test tests/Muthur.Server.Tests -v n` prints it at process exit; a kept directory means a hub
+     logged an error nobody expected — possibly yours).
+  5. No sleep is used to synchronise anything.
+
+## Verification
+
+```
+dotnet build
+dotnet test
+```
+
+Both clean, and the `muthur-tests:` line at the end of a `-v n` run says `0 kept, 0 could not be removed`.
+
+End to end, against an installed build and a scratch home, never the live hub:
+
+```
+pwsh ./scripts/install.ps1 -Destination ./artifacts/t49
+$env:MUTHUR_HOME = "$PWD/artifacts/t49-home"; $env:MUTHUR_URL = "http://127.0.0.1:7492"
+./artifacts/t49/muthur.exe up
+```
+
+- Register an agent, park it in `muthur msg inbox --wait 900`, and run `muthur down` in another shell.
+  The waiting call returns promptly, with exit 0 (empty, timed out) or exit 4 (`hub_stopping`). Neither
+  `internal_error` nor exit 1 is acceptable, on any round.
+- Afterwards `artifacts/t49-home/muthur.log` contains no `Error` line.
+
+This is T-41's end-to-end repeated, because the behaviour under test is the one T-41 established and this
+task must not have regressed it. It is not expected to reproduce the defect: the window is milliseconds and
+Kestrel drains.
+
+## Out of scope / follow-ups
+
+- **Draining**, still. T-41 named it; this task's rule is what a drain's own deadline needs behind it.
+- If step 3 finds a shape the rule does not cover, that becomes its own ledger task with the evidence
+  attached — not a widening of this one.
