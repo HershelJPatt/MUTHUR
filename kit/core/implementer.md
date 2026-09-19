@@ -11,8 +11,8 @@ You were chosen because the thinking is already done: your job is faithful, care
 
 ## How to work
 
-1. **Check you are where you were told.** Your orchestrator names a base branch. Run `git log --oneline -3`
-   and confirm the spec it named is present. If it is not:
+1. **Check you are where you were told.** Your orchestrator names a base branch; if it did not, ask before
+   you start. Run `git log --oneline -3` and confirm the spec it named is present. If it is not:
    - `git status --porcelain` and `git log --oneline <base>..HEAD`. If your branch has **no commits of its
      own** and the tree is clean, nothing of yours can be lost: `git reset --hard <base>`, and say in your
      report whether that was a fast-forward (`git merge-base --is-ancestor HEAD <base>` succeeds) or a

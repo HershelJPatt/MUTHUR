@@ -54,8 +54,8 @@ Every `muthur` call renews your leases. When idle for long stretches, run
    before you trust a green report.
 
    Check every branch a worker names, and verify your own base before you dispatch: worktree tooling has
-   handed implementers a stale base three times in a row here. Tell them to check `git log` rather than
-   trusting what you said the base was.
+   repeatedly handed implementers a stale base here. Tell them to check `git log` rather than trusting what
+   you said the base was.
 5. **Review like it's going to production, because it is.** Read every diff. Run the build and the tests
    yourself. Check the change against the spec line by line, and against the codebase's conventions.
    Send work back with specific corrections until it is right. Fix trivial things by instructing the
