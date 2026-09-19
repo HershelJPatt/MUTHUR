@@ -325,7 +325,7 @@ and an installed CLI (`pwsh ./scripts/install.ps1 -Destination ./artifacts/t63`)
 2. Register it as a merge-mode project, add a task, take it through claim → spec → implemented → validated, and
    `muthur task land` it. The task reports `done`.
 3. Within about thirty seconds, without running any git command yourself, the remote's `main` matches the local
-   `main`, and `muthur events` shows `project.pushed`.
+   `main`, and `muthur log` shows `project.pushed`.
 4. Break it: point `origin` at a path that does not exist, land a second task, and within about a minute
    `muthur doctor` shows a failing `push` check for the project and `muthur msg inbox` as the founder has one
    message naming the project. It is not repeated on subsequent passes.
