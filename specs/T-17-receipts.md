@@ -88,7 +88,8 @@ moment any test path exercises it.
 
 ## Non-goals
 
-- **Money.** See below: it is the subject of open founder request **#13** and belongs to Unit D alone.
+- **Totalling money.** Settled by founder request #13: `costUsd` appears on the worker-run row and is
+  never summed, anywhere, by anything.
 - Any new ledger event, any change to what any service records, any migration. This is a read.
 - Attributing a conductor validator session to a harness or an account, or giving it a duration. Named above
   and in the follow-ups; it needs instrumentation this task does not add.
@@ -219,7 +220,8 @@ public sealed record ReceiptsDto(
     IReadOnlyList<SessionGroupDto> ByAccount,
     IReadOnlyList<TaskReceiptDto> Tasks,
     IReadOnlyList<StateTimeDto> StateTime,
-    IReadOnlyList<AccountReceiptDto> Accounts);
+    IReadOnlyList<AccountReceiptDto> Accounts,
+    IReadOnlyList<WorkerRunDto> Runs);
 ```
 
 - `Sessions` is the count of `agent.registered` + `agent.reregistered` in the window: identities taken.
@@ -276,12 +278,41 @@ prefixes. `ClockInterval` is 60s: the window's edge moves with time alone.
 Any class this needs that `app.css` does not have is **added to `app.css`**, with a token, in the style of the
 rows already there. Nothing inline.
 
-### Money
+### Money — settled by founder request #13
 
-Open founder request **#13** asks whether receipts may show the `costUsd` that `worker.finished` already
-carries, given that it covers only worker runs and would be the only money in MUTHUR. **Unit D does not start
-until it is answered**, and the answer decides one field and one row. Nothing in Units A, B or C depends on
-it — do not add a cost field to `ReceiptsDto` ahead of the answer.
+**Show `costUsd` on the worker-run row where it is exact, and nowhere else. Never total it.**
+
+The founder's reasoning, because it decides more than one field: a total would be incomplete *in a biased
+direction nobody can correct for*. The sessions with no cost are not a random sample — they are every claude
+session and every conductor-started validator, and validators are the heaviest spend now that the
+organization runs itself. "A figure that omits the largest category is not a partial answer to 'what did this
+cost', it is a confident answer to a different question." A caveat beside the number does not save it: the
+number is read and the caveat is skimmed, and the error moves with the harness rotation.
+
+Two consequences that are requirements, not decoration:
+
+- **The row names its harness.** A reader seeing a blank cost must be able to see that the blank is claude
+  rather than a bug.
+- **Where a column would naturally total, say what is not counted.** The panel prints
+  "conductor validator sessions report no cost" rather than leaving an empty cell. That absence is a fact
+  about the data, and making the organization's spending legible is what T-17 is for.
+
+This adds one list to the read, in Unit B, and one section to the panel, in Unit D. Money is a field on the
+rows that have it; it is not what the page is about.
+
+#### `WorkerRunDto`
+
+```csharp
+/// <param name="Worker">"harness/model", exactly as the event records it — the row must name its harness.</param>
+/// <param name="CostUsd">What the harness reported, or null when it reports none. Never summed.</param>
+public sealed record WorkerRunDto(
+    string? Task, string Tier, string Worker, string? Account, string? Unit,
+    int Seconds, decimal? CostUsd, bool Success, DateTimeOffset At);
+```
+
+`ReceiptsDto` gains one property, `Runs`: one entry per `worker.finished`/`worker.failed` event in the
+window, newest first. The existing `WorkerRuns` keeps its name and stays the count of them. There is **no**
+cost field anywhere else in `ReceiptsDto`, and nothing sums `CostUsd`.
 
 ## Units of work
 
@@ -333,6 +364,11 @@ it — do not add a cost field to `ReceiptsDto` ahead of the answer.
      still answers 200.
   9. `GET /api/v1/receipts` answers without a token, and round-trips through `MuthurJsonContext` — assert by
      deserializing the response body with the generated context, not with reflection.
+  10. **Money is on the row and nowhere else.** Report two worker runs through `POST /api/v1/workers/runs`,
+     one with a `costUsd` and one without: both appear in `Runs`, newest first, each naming its `worker` as
+     `harness/model`; the one that reported nothing has `CostUsd` null; and no other property of
+     `ReceiptsDto` carries a cost. Assert the last part by reflecting over `ReceiptsDto`'s own properties in
+     the test — a future hand adding a total should fail here rather than in review.
 
 ### Unit C — the CLI
 - **Files:** `src/Muthur.Cli/Commands/SystemCommands.cs`; `tests/Muthur.Server.Tests/SystemTests.cs`.
@@ -347,12 +383,16 @@ it — do not add a cost field to `ReceiptsDto` ahead of the answer.
   `src/Muthur.Server/Components/Layout/MainLayout.razor`; `src/Muthur.Server/wwwroot/app.css`;
   new `tests/Muthur.Server.Tests/DashboardReceiptsTests.cs`.
 - **Does:** the tab, the page, the panel.
-- **Depends on:** Unit B, **and on founder request #13 being answered** (see "Money").
+- **Depends on:** Unit B. Founder request #13 is answered; the decision is in "Money" above.
 - **Acceptance:** `dotnet build` and `dotnet test` clean, plus:
   1. `GET /receipts` renders, and the tab is present on every page.
   2. A hub with nothing in it renders the empty state, not an exception.
   3. A hub with the Unit B fixture renders the task rows in spend order, the state-time rows, and the account
      groups; assert on the rendered markup the way `DashboardOperationsTests` does.
+  6. **Money reads as the founder asked.** The worker-run section renders one row per run, each naming its
+     harness; a run that reported no cost renders an em dash rather than a zero; the section carries the line
+     "conductor validator sessions report no cost"; and no total appears anywhere on the page. Assert the
+     last by searching the rendered markup for a second currency-formatted figure.
   4. Switching the window to 7d re-reads and changes the numbers.
   5. Every class the panel uses exists in `app.css` — assert by reading the file, as no test can catch a
      missing class at runtime.
