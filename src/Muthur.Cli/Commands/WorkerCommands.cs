@@ -91,6 +91,21 @@ public static class WorkerCommands
             conductor.Subcommands.Add(command);
         }
 
+        // The half that begins new work rather than finishing it, and its own switch because turning it on starts spending.
+        var orchestrators = new Command("orchestrators", "Whether the conductor also starts orchestrator sessions for backlog tasks. Off until the founder turns it on.");
+        conductor.Subcommands.Add(orchestrators);
+        foreach (var (name, enabled, description) in new[]
+                 {
+                     ("on", true, "Let the conductor start an orchestrator for a task nobody has claimed. Needs --founder; recorded in the ledger."),
+                     ("off", false, "Stop starting orchestrators. Sessions already running are left to finish. Needs --founder."),
+                 })
+        {
+            var command = new Command(name, description);
+            command.SetAction(async (parse, ct) => Output.Emit(parse, await HubClient.For(parse).PostAsync(
+                Routes.ConductorOrchestrators, new ConductorOrchestratorSwitch(enabled), MuthurJsonContext.Default.ConductorOrchestratorSwitch, ct)));
+            orchestrators.Subcommands.Add(command);
+        }
+
         var count = new Argument<int>("count") { Description = "Sessions the conductor may run at once." };
         var sessions = new Command("sessions", "Raise or lower how many sessions the conductor may run at once. Needs --founder.") { count };
         sessions.SetAction(async (parse, ct) => Output.Emit(parse, await HubClient.For(parse).PostAsync(

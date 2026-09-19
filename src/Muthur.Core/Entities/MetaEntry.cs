@@ -14,4 +14,9 @@ public sealed class MetaEntry
     public const string ConductorSessions = "conductor_sessions";
     /// <summary>A lower ceiling for the hours nobody is watching, as "22:00-07:00@1" in local time. Absent means none.</summary>
     public const string ConductorUnattended = "conductor_unattended";
+    /// <summary>
+    /// Whether the conductor also starts orchestrator sessions from the backlog. Absent means no, so a hub that
+    /// upgrades into this build begins spending nothing it was not spending yesterday.
+    /// </summary>
+    public const string ConductorOrchestrators = "conductor_orchestrators";
 }
