@@ -97,6 +97,13 @@ All four are nullable, need no explicit EF configuration, and take a migration:
 dotnet ef migrations add ProjectPushState -p src/Muthur.Data -s src/Muthur.Data -o Migrations
 ```
 
+**Amendment 1 — generate the migration on a branch that is up to date with `main`.** A migration records
+the one before it, and the model snapshot describes the whole chain, so a migration generated on a stale
+base lands with the wrong predecessor and a snapshot that disagrees with the migrations beside it. The task
+branch was rebased onto `main` before this unit started, and it must stay that way: if `main` gains another
+migration while this task is in flight, rebase again and regenerate `ProjectPushState` rather than merging
+the two chains by hand.
+
 `ProjectDto` does **not** gain these. Nothing that crosses HTTP changes.
 
 ### `ITaskLander` gains a push
