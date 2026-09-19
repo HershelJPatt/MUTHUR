@@ -39,6 +39,13 @@ public sealed class MuthurOptions
     public int ConductorStallProbeMinutes { get; set; } = 30;
 
     /// <summary>
+    /// The ceiling on one `doctor` run, whatever its checks do. Under the CLI's 180s client timeout, so a
+    /// bounded hub still answers before the caller gives up, and above two of T-14's 60s probes, so an
+    /// ordinary two-source hub that is merely slow is not reported as one that did not answer.
+    /// </summary>
+    public int DoctorBudgetSeconds { get; set; } = 120;
+
+    /// <summary>
     /// Bot token for <c>discord:</c> ingest, in practice set as the environment variable
     /// <c>Muthur__DiscordBotToken</c>. It is never recorded in the ledger, logged, or returned by an endpoint.
     /// </summary>

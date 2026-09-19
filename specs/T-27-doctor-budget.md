@@ -140,3 +140,21 @@ dotnet test
 Passing is 0 warnings, 0 errors, every test green. `DoctorService` is reachable from the test suite directly,
 and `GET /doctor` is driven through `HubFactory` like any other route, so there is nothing here a
 conductor-started session cannot check.
+
+## Proof
+
+`dotnet build`: clean, 0 warnings. `dotnet test`: 3708 Core, 23 Launch, 60 Cli, 280 Server — all green.
+
+With the budget reverted, three of the five new tests fail, and they fail by **hanging**: 30 seconds each,
+stopped only by the test's own hang-detector. That is the defect exactly — nothing ended the run — and it is
+why those three are worth having. The suite's rule holds: real time is only ever a hang-detector budget here,
+and the budget itself is a timer on the injected clock that the test steps.
+
+### One thing the tests found
+
+The first cut raced each check against the budget's own token. `The_caller_giving_up_is_not_a_timeout`
+failed with a `TimeoutException`: a caller who walked away was still left waiting, because the check ignored
+its token and only the budget could end the race. The race is now against the **linked** token, and which of
+the two ended it is decided afterwards — `ct.ThrowIfCancellationRequested()` before the row is written, so a
+cancelled request throws and a spent budget reports. Without that, a hub could have honestly reported "this
+check did not answer in 120s" to a caller who had given up ten seconds in.
