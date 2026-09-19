@@ -389,13 +389,13 @@ cost field anywhere else in `ReceiptsDto`, and nothing sums `CostUsd`.
   2. A hub with nothing in it renders the empty state, not an exception.
   3. A hub with the Unit B fixture renders the task rows in spend order, the state-time rows, and the account
      groups; assert on the rendered markup the way `DashboardOperationsTests` does.
+  4. Switching the window to 7d re-reads and changes the numbers.
+  5. Every class the panel uses exists in `app.css` — assert by reading the file, as no test can catch a
+     missing class at runtime.
   6. **Money reads as the founder asked.** The worker-run section renders one row per run, each naming its
      harness; a run that reported no cost renders an em dash rather than a zero; the section carries the line
      "conductor validator sessions report no cost"; and no total appears anywhere on the page. Assert the
      last by searching the rendered markup for a second currency-formatted figure.
-  4. Switching the window to 7d re-reads and changes the numbers.
-  5. Every class the panel uses exists in `app.css` — assert by reading the file, as no test can catch a
-     missing class at runtime.
 
 ## Verification
 
