@@ -55,13 +55,19 @@ public interface IOrchestratorSessionLauncher
 /// already lives, and a claim is how a task stops being unstarted — and validation is staffed first out of the one
 /// shared ceiling, because a task in validation is closer to done than a task nobody has begun.
 /// </para>
+/// <para>
+/// And it finishes work nobody is left to finish: a validated task whose owner has gone is landed by the hub. That
+/// is not a session and takes no slot — see <see cref="LandOrphanedAsync"/>.
+/// </para>
 /// </summary>
 public sealed class ConductorService(
     Ledger ledger,
     MuthurOptions options,
     TimeProvider clock,
     IValidatorSessionLauncher launcher,
-    IOrchestratorSessionLauncher orchestrators)
+    IOrchestratorSessionLauncher orchestrators,
+    LifecycleService lifecycle,
+    ITaskLander lander)
 {
     private readonly SemaphoreSlim _pass = new(1, 1);
     private readonly HashSet<string> _running = [];
@@ -108,6 +114,37 @@ public sealed class ConductorService(
     /// <summary>Task id → the <see cref="CapState.RoundSeq"/> already announced, so a later round can announce again.</summary>
     private readonly Dictionary<int, long> _escalated = [];
 
+    /// <summary>
+    /// Task id → what the conductor has already done about a land it could not perform.
+    /// <para>
+    /// <see cref="Stall"/>'s shape, for <see cref="Stall"/>'s reason, minus its count: a land refused once has
+    /// told you everything a land refused three times would. The conductor passes every minute and a refusal
+    /// leaves the task <see cref="TaskState.Validated"/>, so unbounded this would retry for ever — writing
+    /// <c>task.land_refused</c> and <c>conductor.land_refused</c> some fourteen hundred times a day for a fault
+    /// only a human can clear, which is the noise this whole mechanism exists to prevent, moved from the inbox
+    /// into the ledger.
+    /// </para>
+    /// </summary>
+    private readonly Dictionary<int, LandStall> _landStalls = [];
+
+    /// <summary>
+    /// A land that did not happen, and what follows from it.
+    /// <para>
+    /// Keyed on the task, but decided on the head: a commit the conductor has not tried before is new
+    /// information, so it both earns the founder another message and clears the cooldown outright.
+    /// </para>
+    /// </summary>
+    /// <param name="Head">
+    /// The branch's head, as git had it, when this task was refused or bounced and the founder was told. Read
+    /// from the repository rather than from the ledger, so that somebody committing a fix is what moves it.
+    /// </param>
+    /// <param name="RefusedAt">
+    /// When the environment last refused, which holds the half-open cooldown open for
+    /// <c>ConductorStallProbeMinutes</c>. Null for a conflict: that returns the task to its owner and out of the
+    /// state this plan looks at, so there is nothing for a cooldown to hold back.
+    /// </param>
+    private sealed record LandStall(string Head, DateTimeOffset? RefusedAt);
+
     // F3: "what it last did" - a founder who turned this on overnight needs to know it ran at all.
     private DateTimeOffset? _lastPass;
     private string? _lastAction;
@@ -147,6 +184,21 @@ public sealed class ConductorService(
     /// <param name="RoundSeq">Seq of the most recent <c>task.implemented</c>: the round this task is in now.</param>
     /// <param name="HeadMoved">Whether that round's branch head differs from the round before it.</param>
     private sealed record CapState(int Failures, long RoundSeq, bool HeadMoved);
+
+    /// <summary>
+    /// A validated task with nobody left to land it, as the database knows it and before git has been asked
+    /// anything. <see cref="Project"/> travels with it because reading the branch's head happens outside the
+    /// ledger read, where a subprocess belongs.
+    /// </summary>
+    private sealed record Candidate(int TaskId, string TaskKey, string Title, string Owner, string Branch, Project Project);
+
+    /// <summary>A validated task the hub will land, because the session that should have landed it has gone.</summary>
+    /// <param name="Owner">Who it is still recorded against, for the ledger and for what the founder is told.</param>
+    /// <param name="Head">
+    /// The branch's head as git has it, which is what <see cref="_landStalls"/> is keyed by. Empty when there is
+    /// no such branch — itself a fact worth keying on, since that is what refused the land.
+    /// </param>
+    private sealed record Orphaned(int TaskId, string TaskKey, string Title, string Owner, string Branch, string Head);
 
     /// <summary>
     /// Whether staffing is on. The hub is a local process that is off for hours, so this lives in the database:
@@ -262,7 +314,12 @@ public sealed class ConductorService(
             if (was != enabled)
                 m.Record(enabled ? "conductor.on" : "conductor.off", payload: new { maxSessions = options.ConductorMaxSessions });
             // Turning it on is the founder saying "try again"; a stall from before that is not their answer.
-            if (enabled) lock (_stalls) _stalls.Clear();
+            // The land cooldowns go with them, because the message that arms one says this is how to skip it.
+            if (enabled)
+            {
+                lock (_stalls) _stalls.Clear();
+                lock (_landStalls) _landStalls.Clear();
+            }
         }, ct);
         return await StatusAsync(ct);
     }
@@ -644,6 +701,187 @@ public sealed class ConductorService(
         }, ct);
     }
 
+    /// <summary>
+    /// Validated tasks nobody is left to land, most urgent first.
+    /// <para>
+    /// The hole this closes: <c>TaskService.SweepExpiredClaimsAsync</c> sweeps only <see cref="TaskState.InProgress"/>
+    /// and <see cref="PlanOrchestratorsAsync"/> plans only <see cref="TaskState.Backlog"/>, so a task that passed
+    /// validation after its owner's session had ended was in a state nothing swept and nothing planned, and sat
+    /// there for ever. That is the ordinary ending rather than an edge: a session is capped at
+    /// <c>ConductorSessionMinutes</c> and must otherwise survive claim, spec, delegation, review and a validator
+    /// that takes ten to thirty minutes.
+    /// </para>
+    /// <para>
+    /// A stale owner alone is not enough to take a task off it, which is why <see cref="_running"/> is asked as
+    /// well. An orchestrator mid-build is quiet for minutes at a time and may be seconds from landing its own
+    /// work; the heartbeat cannot tell that apart from a session that has exited, and <see cref="_running"/> is
+    /// what this hub actually knows about its own children. Any role at all counts: whatever the conductor has on
+    /// this task, the task is not orphaned.
+    /// </para>
+    /// </summary>
+    private async Task<IReadOnlyList<Orphaned>> PlanOrphanedAsync(CancellationToken ct)
+    {
+        var now = clock.GetUtcNow();
+        var stale = now - TimeSpan.FromSeconds(options.AgentStaleSeconds);
+
+        var waiting = await ledger.ReadAsync<IReadOnlyList<Candidate>>(async (db, _) =>
+        {
+            // A project with no repository on record has nothing to merge into, and asking git about it only
+            // produces a refusal to tell the founder about.
+            var validated = await db.Tasks.Include(t => t.Project).Include(t => t.Owner)
+                .Where(t => t.State == TaskState.Validated &&
+                            t.Owner != null && t.Owner.LastHeartbeat < stale &&
+                            t.Project != null && t.Project.RepoPath != "")
+                .OrderByDescending(t => t.Priority).ThenBy(t => t.Id)
+                .ToListAsync(ct);
+
+            var candidates = new List<Candidate>();
+            foreach (var task in validated)
+            {
+                var key = Wire.TaskId(task.Id);
+                // "T-n/", never "T-n": the keys are "T-n/role" and a bare prefix would read T-11's session as T-1's.
+                var prefix = key + "/";
+                lock (_running)
+                    if (_running.Any(session => session.StartsWith(prefix, StringComparison.Ordinal))) continue;
+
+                candidates.Add(new Candidate(task.Id, key, task.Title, task.Owner!.Name, task.Branch ?? "", task.Project!));
+            }
+            return candidates;
+        }, ct);
+        if (waiting.Count == 0) return [];
+
+        var orphaned = new List<Orphaned>();
+        foreach (var candidate in waiting)
+        {
+            // Git's answer this moment, never the head the last `task implemented` recorded. That value moves
+            // when somebody calls the CLI again, and the recovery this cooldown promises is somebody fixing the
+            // cause and committing — so keyed on the ledger's head, a genuine new commit earned neither an
+            // immediate retry nor a fresh notification, and even the timed probe recorded a commit that was no
+            // longer the branch's.
+            //
+            // A branch that is gone answers null, which is the same condition that produced most refusals in the
+            // first place: a branch still missing keeps its cooldown, and a restored one clears it. The one
+            // `rev-parse` this costs is per orphaned-validated task per pass, which in the steady state means
+            // only the ones already cooling down — the rest land and stop being orphaned.
+            var head = await lander.BranchHeadAsync(candidate.Project, candidate.Branch, ct) ?? "";
+
+            // Half-open on that head, exactly as a wedged pair is: an environment that refused this commit will
+            // refuse it again a minute later, and whatever was wrong is put right outside the hub, so one probe
+            // a cooldown finds out by itself.
+            lock (_landStalls)
+                if (_landStalls.GetValueOrDefault(candidate.TaskId) is { RefusedAt: { } refused } stall &&
+                    stall.Head == head &&
+                    refused + TimeSpan.FromMinutes(options.ConductorStallProbeMinutes) > now)
+                    continue;
+
+            orphaned.Add(new Orphaned(candidate.TaskId, candidate.TaskKey, candidate.Title, candidate.Owner,
+                candidate.Branch, head));
+        }
+        return orphaned;
+    }
+
+    /// <summary>
+    /// Lands every validated task whose owner did not survive to land it, through the same
+    /// <see cref="LifecycleService.LandAsync"/> the CLI calls.
+    /// <para>
+    /// All of them in one pass, and none of them counted against the ceiling: landing is a hub operation of a
+    /// second or two rather than a session, so a full ceiling has nothing to say about it. A forty-five-minute
+    /// harness session started to run one merge would be the wrong shape entirely.
+    /// </para>
+    /// </summary>
+    private async Task LandOrphanedAsync(CancellationToken ct)
+    {
+        foreach (var orphan in await PlanOrphanedAsync(ct))
+        {
+            try
+            {
+                await lifecycle.LandAsync(Caller.Founder, orphan.TaskKey, ct);
+            }
+            catch (MuthurException gone) when (gone.Code == "not_validated")
+            {
+                // Between the plan and here its owner came back and landed its own work, or the founder did.
+                // Nothing was refused - there was nothing left to land - and raising an alarm about a task that
+                // has already shipped would send the founder looking for a fault that does not exist.
+                continue;
+            }
+            catch (MuthurException failed)
+            {
+                await AnnounceLandFailureAsync(orphan, failed, ct);
+                continue;
+            }
+
+            await ledger.MutateAsync(Caller.Founder, m =>
+            {
+                // The land path has already recorded task.landed. This is the same land from the other side -
+                // that no human and no session asked for it - and it is the only thing telling a hub land from a
+                // human one on the founder's card.
+                //
+                // What the hub checked before merging: that every required validator said yes, and that the
+                // branch still merges cleanly. Nothing else. The hub has no test runner and must not grow one, so
+                // the validator's pass is the whole gate - which is a real change, because until now a human
+                // looked at the default branch before work reached it and now nobody need have.
+                m.Record("conductor.landed", orphan.TaskId, new { task = orphan.TaskKey, owner = orphan.Owner });
+                return Task.CompletedTask;
+            }, ct);
+
+            _lastAction = $"landed {orphan.TaskKey}, which {orphan.Owner} did not survive to land";
+        }
+    }
+
+    /// <summary>
+    /// A land the hub could not perform: recorded every attempt it was allowed to make, told to the founder once
+    /// per branch head.
+    /// <para>
+    /// A conflict sends the task back to its owner exactly as the CLI's land does, so for a dead owner the sweeper
+    /// returns it to the backlog and the next orchestrator resumes it — and it needs no cooldown, because the task
+    /// has left the state <see cref="PlanOrphanedAsync"/> looks at. A refusal — a dirty checkout, a branch that is
+    /// gone, <c>gh</c> missing — leaves it validated, so it arms one: the environment is wrong, only a human can
+    /// put it right, and a pass a minute would retry it all night for nothing.
+    /// </para>
+    /// </summary>
+    private Task AnnounceLandFailureAsync(Orphaned orphan, MuthurException failure, CancellationToken ct)
+    {
+        var conflict = failure.Kind == ErrorKind.Conflict;
+        return ledger.MutateAsync(Caller.Founder, m =>
+        {
+            // The branch and, for a conflict, the files that clashed: the lander names them in its message, which
+            // is the only place LandResult carries them.
+            m.Record(conflict ? "conductor.land_conflict" : "conductor.land_refused", orphan.TaskId,
+                new { task = orphan.TaskKey, owner = orphan.Owner, orphan.Branch, orphan.Head, code = failure.Code, message = failure.Message });
+
+            bool announced;
+            lock (_landStalls)
+            {
+                announced = _landStalls.GetValueOrDefault(orphan.TaskId)?.Head == orphan.Head;
+                // Re-armed on every refusal, including a probe's: a probe that failed again is the cooldown
+                // starting over, and it is not news.
+                _landStalls[orphan.TaskId] = new LandStall(orphan.Head, conflict ? null : m.Now);
+            }
+            if (announced) return Task.CompletedTask;
+
+            var probe = options.ConductorStallProbeMinutes;
+            MessageService.PostFromHub(m, Recipient.Founder, null,
+                conflict
+                    ? $"{orphan.TaskKey} \"{orphan.Title}\" passed validation with nobody left to land it, and the hub " +
+                      $"could not land it: {failure.Message}" + Environment.NewLine +
+                      $"It is back in progress with {orphan.Owner}, whose session has gone, so it returns to the backlog " +
+                      "to be resumed." + Environment.NewLine +
+                      $"The conductor lands this by itself once {orphan.Branch} moves, and will not say this again until it does."
+                    : $"{orphan.TaskKey} \"{orphan.Title}\" is validated with nobody left to land it, and the hub could " +
+                      $"not land it: {failure.Message}" + Environment.NewLine +
+                      $"It stays validated on {orphan.Branch} until that is put right." + Environment.NewLine +
+                      $"Fix the cause and it lands by itself within {probe} " + (probe == 1 ? "minute" : "minutes") +
+                      ", and will not say this again meanwhile; " +
+                      "`muthur conductor off --founder && muthur conductor on --founder` retries at once.",
+                orphan.TaskId);
+
+            _lastAction = conflict
+                ? $"could not land {orphan.TaskKey}: it no longer merges, and it is back with {orphan.Owner}"
+                : $"could not land {orphan.TaskKey}: {failure.Code}";
+            return Task.CompletedTask;
+        }, ct);
+    }
+
     /// <summary>One pass: start what the plan asks for, up to the session budget. Returns how many it started.</summary>
     public async Task<int> RunPassAsync(CancellationToken ct = default)
     {
@@ -656,6 +894,11 @@ public sealed class ConductorService(
         {
             _lastPass = clock.GetUtcNow();
             await EscalateExhaustedAsync(ct);
+
+            // Before any staffing, and deliberately not behind the orchestrator switch: a task validated before
+            // that switch was ever thrown is in exactly the same position, and this is recovery rather than
+            // spending. It starts nothing, so it is not counted in what the pass returns.
+            await LandOrphanedAsync(ct);
 
             // Read once per pass: the founder may move it mid-pass, and a ceiling that changes under the loop
             // would let a pass start more sessions than either number allows.
