@@ -1,0 +1,75 @@
+@inherits LivePanel
+@inject LifecycleService Lifecycle
+@inject TimeProvider Clock
+
+<section class="panel">
+    <div class="panel-head">
+        <span class="panel-title">Waiting on a person</span>
+        <span class="panel-sub">@(_attended.Count == 1 ? "1 task" : $"{_attended.Count} tasks")</span>
+    </div>
+    <div class="panel-body">
+        @if (_attended.Count == 0)
+        {
+            <div class="empty">nothing is waiting on a person</div>
+        }
+        else
+        {
+            @* The two exits, stated rather than offered: a verdict is a claim that somebody exercised the
+               work, and a button on a queue page makes one without the substance. *@
+            <div class="section-note">take the role and give the verdict, or lift the flag: muthur task attended T-n --clear</div>
+        }
+        @foreach (var task in _attended)
+        {
+            <div class="request">
+                <div class="request-head">
+                    <span class="tag tag-open">needs a person</span>
+                    <a class="event-task" href="/tasks/@task.Id">@task.Id</a>
+                    <span>@task.Title</span>
+                    <span class="card-age">@Format.Age(LifecycleService.WaitingSince(task), _now)</span>
+                </div>
+                <div class="request-question">@task.AttendedReason</div>
+                <div class="agent-meta">
+                    @if (task.Branch is { } branch)
+                    {
+                        <span class="pill">@branch</span>
+                    }
+                    @foreach (var validator in Pending(task))
+                    {
+                        <span class="pill pill-role">@validator</span>
+                    }
+                </div>
+            </div>
+        }
+    </div>
+</section>
+
+@code {
+    private IReadOnlyList<TaskDto> _attended = [];
+    private DateTimeOffset _now;
+
+    // These rows age without anything being written, so refresh on the clock too.
+    protected override TimeSpan? ClockInterval => TimeSpan.FromSeconds(30);
+
+    protected override bool IsRelevant(Muthur.Core.Entities.LedgerEvent e) => Watches(e.Type);
+
+    /// <summary>
+    /// Whether an event can move this list: the state changes, the flag and the verdicts all do. A plain
+    /// function of the type, and tested as one, because the panel itself lives behind a SignalR circuit no
+    /// test can reach and a narrowing of this would otherwise be silent.
+    /// </summary>
+    internal static bool Watches(string type) =>
+        type.StartsWith("task.", StringComparison.Ordinal)
+        || type.StartsWith("validation.", StringComparison.Ordinal);
+
+    protected override async Task LoadAsync()
+    {
+        // One instant for the whole render, so every age on it is measured from the same moment.
+        _now = Clock.GetUtcNow();
+        _attended = await Lifecycle.AttendedAsync();
+    }
+
+    /// <summary>The roles the task is still waiting on, which is the difference between "somebody should look
+    /// at this" and "I need to hold win-validator to give it a verdict".</summary>
+    private static IEnumerable<string> Pending(TaskDto task) =>
+        task.Validations.Where(LifecycleService.IsPending).Select(v => v.Validator).Order(StringComparer.Ordinal);
+}

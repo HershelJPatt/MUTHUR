@@ -14,8 +14,13 @@ namespace Muthur.Server.Services;
 /// everything that is waiting rather than across the shown page, for the same reason the counts are.
 /// <para>
 /// Unread messages count towards <see cref="Total"/> but deliberately not towards this: a message blocks
-/// nobody, and letting one set the headline age would report the queue as older than it is.
+/// nobody, and letting one set the headline age would report the queue as older than it is. An attended task
+/// is included for exactly the opposite reason — work is genuinely stopped behind it.
 /// </para>
+/// </param>
+/// <param name="Attended">
+/// Tasks in 'validating' that a human has said need them. Uncapped by construction, so unlike
+/// <see cref="Requests"/> this list is also the count — see LifecycleService.AttendedAsync.
 /// </param>
 public sealed record FounderAttentionDto(
     IReadOnlyList<FounderRequestDto> Requests,
@@ -23,16 +28,17 @@ public sealed record FounderAttentionDto(
     int Unread,
     int RequestsWaiting,
     int OutboundWaiting,
-    DateTimeOffset? OldestWaitingSince)
+    DateTimeOffset? OldestWaitingSince,
+    IReadOnlyList<TaskDto> Attended)
 {
     /// <summary>
     /// Counted from what is waiting, never from the lists above: a badge reading 200 while 210 wait is worse
     /// than no badge at all, because it is believable.
     /// </summary>
-    public int Total => RequestsWaiting + OutboundWaiting + Unread;
+    public int Total => RequestsWaiting + OutboundWaiting + Unread + Attended.Count;
 }
 
-public sealed class FounderAttention(RequestService requests, OutboundService outbound, MessageService messages)
+public sealed class FounderAttention(RequestService requests, OutboundService outbound, MessageService messages, LifecycleService lifecycle)
 {
     public const string AwaitingFounder = "awaiting_founder";
 
@@ -42,17 +48,14 @@ public sealed class FounderAttention(RequestService requests, OutboundService ou
         var awaiting = await outbound.ListAsync(AwaitingFounder, 500, ct);
         var requestSummary = await requests.OpenSummaryAsync(ct);
         var outboundSummary = await outbound.SummaryAsync(OutboundStatus.AwaitingFounder, ct);
+        var attended = await lifecycle.AttendedAsync(ct);
 
-        DateTimeOffset? oldest = (requestSummary.Oldest, outboundSummary.Oldest) switch
-        {
-            ({ } r, { } o) => r < o ? r : o,
-            ({ } r, null) => r,
-            (null, { } o) => o,
-            _ => null,
-        };
+        DateTimeOffset? attendedOldest = attended.Count == 0 ? null : attended.Min(LifecycleService.WaitingSince);
+        var waiting = new[] { requestSummary.Oldest, outboundSummary.Oldest, attendedOldest }.OfType<DateTimeOffset>().ToList();
 
         return new FounderAttentionDto(
             openRequests, awaiting, await messages.UnreadForFounderAsync(ct),
-            requestSummary.Count, outboundSummary.Count, oldest);
+            requestSummary.Count, outboundSummary.Count,
+            waiting.Count == 0 ? null : waiting.Min(), attended);
     }
 }
