@@ -30,6 +30,10 @@
         {
             <span class="pill pill-verdict-@v.Verdict">@v.Validator @(v.Verdict == "pending" ? "···" : v.Verdict)</span>
         }
+        @if (CollidesWith is { Count: > 0 })
+        {
+            <span class="pill pill-collision" title="Branches conflict: rebase before landing">collides: @string.Join(", ", CollidesWith)</span>
+        }
         <span class="card-age">@Format.Age(Task.UpdatedAt, Now)</span>
     </div>
 </a>
@@ -40,4 +44,6 @@
     /// <summary>The hold window, so the card can say when a hold was placed from when it expires.</summary>
     [Parameter] public int HoldMinutes { get; set; } = 120;
     [Parameter] public bool ShowProject { get; set; }
+    /// <summary>Ids of in-flight tasks whose branches no longer merge with this one's. Advisory: it gates nothing.</summary>
+    [Parameter] public IReadOnlyList<string>? CollidesWith { get; set; }
 }
