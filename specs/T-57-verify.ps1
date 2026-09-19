@@ -55,7 +55,7 @@ function RunCase([string]$Name, [string]$To, [int]$Expected, [string]$Shape = 'o
     $stderr = Join-Path $case 'stderr.json'
     & $Cli kit install --harness probe --repo $repoArg 1> $stdout 2> $stderr
     $exit = $LASTEXITCODE
-    $err = Get-Content -LiteralPath $stderr -Raw
+    $err = [string](Get-Content -LiteralPath $stderr -Raw)
     $outsideFiles = @([IO.Directory]::GetFiles($outside, '*', [IO.SearchOption]::AllDirectories))
     $expectedOutside = if ($Shape -eq 'source') {1} else {0}
     Write-Output "MEASURE $Name exit=$exit new-outside-files=$($outsideFiles.Count - $expectedOutside)"
