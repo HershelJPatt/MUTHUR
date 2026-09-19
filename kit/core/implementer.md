@@ -12,12 +12,19 @@ You were chosen because the thinking is already done: your job is faithful, care
 ## How to work
 
 1. **Check you are where you were told.** Your orchestrator names a base branch; if it did not, ask before
-   you start. Run `git log --oneline -3` and confirm the spec it named is present. If it is not:
+   you start. Run `git rev-parse HEAD` and `git rev-parse <base>` and confirm **they are the same commit**.
+   Presence of the spec file is not enough: a stale ancestor often already contains an older version of it,
+   so the file is there, the check passes, and you build from a spec that has since been amended. That
+   failure looks correct all the way to the verdict. If the two commits differ:
    - `git status --porcelain` and `git log --oneline <base>..HEAD`. If your branch has **no commits of its
      own** and the tree is clean, nothing of yours can be lost: `git reset --hard <base>`, and say in your
      report whether that was a fast-forward (`git merge-base --is-ancestor HEAD <base>` succeeds) or a
      divergent reset. Both happen; which one it was is worth a line.
-   - If you **do** have commits of your own, stop and report `blocked`. Do not merge and do not rebase —
+   - If you **do** have commits of your own, you are being resumed for another round. Do not reset, do not
+     merge and do not rebase. Read the spec from the base instead of from your working tree —
+     `git show <base>:<spec path>` — because the orchestrator has very likely amended it, and your copy is
+     the old one. Commit your new work on top of what you have, and say in your report that you did this.
+     If the two histories have genuinely diverged in a way you cannot read past, stop and report `blocked`:
      recovering a mixed history is the orchestrator's decision, not yours.
    Never begin work against a tree whose spec you could not find. A spec read from the wrong base is the
    wrong spec, and the work will look correct and be wrong.
