@@ -195,6 +195,45 @@ public sealed class KitManifestTests : IDisposable
     }
 
     /// <summary>
+    /// Rule 16. System.Text.Json hands back a string with a NUL in it quite happily; Path.GetFullPath refuses
+    /// it, and rules 12 and 14 called that unguarded, so validation crashed before it could refuse anything.
+    /// The rule is the class — "the platform will not take this as a path" — not the two strings that found it.
+    /// </summary>
+    [Theory]
+    [InlineData("""{"files":[{"from":"source.md","to":"docs/x\u0000.md"}]}""", "to")]
+    [InlineData("""{"files":[{"from":"go\u0000od.md","to":"docs/x.md"}]}""", "from")]
+    public async Task A_string_the_platform_will_not_take_as_a_path_is_refused_rather_than_thrown(string manifest, string field)
+    {
+        var (exit, code, message) = await Rejected(manifest);
+
+        Assert.Equal(ExitCodes.RuleViolation, exit);
+        Assert.Equal("invalid_manifest", code);
+        Assert.StartsWith($"{ManifestPath}: entry 0 has a \"{field}\" that is not a usable path: ", message, StringComparison.Ordinal);
+        Assert.Empty(Directory.GetFileSystemEntries(Repository));
+        Assert.Empty(Directory.GetFileSystemEntries(Outside));
+    }
+
+    /// <summary>
+    /// Rule 17. A 300-character component resolves without complaint and then kills Directory.CreateDirectory,
+    /// so this was the one shape that passed validation entirely and died in the write phase.
+    /// </summary>
+    [Theory]
+    [InlineData("to", "writes")]
+    [InlineData("from", "reads")]
+    public Task A_path_component_no_filesystem_accepts_is_refused_with_its_length(string field, string verb)
+    {
+        var component = new string('a', 300);
+        var spelled = $"{component}/x.md";
+        var manifest = field == "to"
+            ? $$"""{"files":[{"from":"source.md","to":"{{spelled}}"}]}"""
+            : $$"""{"files":[{"from":"{{spelled}}","to":"docs/x.md"}]}""";
+
+        return Rejects(
+            manifest,
+            $": entry 0 {verb} \"{spelled}\", whose path component \"{new string('a', 40)}…\" is 300 characters; the limit is 255.");
+    }
+
+    /// <summary>
     /// The defect behind the whole task: entries were written as the loop walked them, so a manifest whose
     /// ninth entry was wrong had already written eight. Validation is a separate pass for exactly this.
     /// </summary>

@@ -269,9 +269,21 @@ public static partial class KitCommands
             validator = validatorField.GetBoolean();
         }
 
+        // A component longer than the filesystem allows resolves happily and then kills Directory.CreateDirectory
+        // in the write phase, which is the one shape that used to escape validation altogether.
+        if (TooLongComponent(from) is { } longFrom)
+        {
+            problem = $"{manifestPath}: entry {index} reads \"{from}\", {Overlong(longFrom)}";
+            return false;
+        }
+
         // Path.Combine hands back an absolute 'from' unchanged and follows '..' when it is relative, so a
         // manifest picks its own source unless the resolved path is required to be under the kit.
-        var source = Path.GetFullPath(Path.Combine(harnessDir, from));
+        if (!TryResolve(harnessDir, from, out var source, out var refusal))
+        {
+            problem = $"{manifestPath}: entry {index} has a \"from\" that is not a usable path: {refusal}";
+            return false;
+        }
         if (!IsInside(source, kitRoot))
         {
             problem = $"{manifestPath}: entry {index} ({to}) reads \"{from}\", which is outside the kit directory.";
@@ -283,9 +295,20 @@ public static partial class KitCommands
             return false;
         }
 
+        if (TooLongComponent(to) is { } longTo)
+        {
+            problem = $"{manifestPath}: entry {index} writes \"{to}\", {Overlong(longTo)}";
+            return false;
+        }
+
         // The same for the destination, plus the rooted case: Path.Combine(repo, to) is just 'to' when 'to' is
         // absolute, which is how a manifest can write to C:\Windows while --repo says otherwise.
-        if (Path.IsPathRooted(to) || !IsInside(Path.GetFullPath(Path.Combine(repoRoot, to)), repoRoot))
+        if (!TryResolve(repoRoot, to, out var destination, out refusal))
+        {
+            problem = $"{manifestPath}: entry {index} has a \"to\" that is not a usable path: {refusal}";
+            return false;
+        }
+        if (Path.IsPathRooted(to) || !IsInside(destination, repoRoot))
         {
             problem = $"{manifestPath}: entry {index} writes \"{to}\", which is outside the repository.";
             return false;
@@ -310,6 +333,41 @@ public static partial class KitCommands
     /// <summary>Containment by full path, which a string test on the manifest's own spelling cannot give.</summary>
     private static bool IsInside(string path, string root) =>
         path.StartsWith(root.TrimEnd(Path.DirectorySeparatorChar) + Path.DirectorySeparatorChar, StringComparison.OrdinalIgnoreCase);
+
+    /// <summary>
+    /// Rule 16. Resolution is where manifest text meets the platform's own idea of a path, and a string the
+    /// platform will not accept at all — a NUL, a shape it has no syntax for — must refuse here rather than
+    /// escape as an unhandled exception. The three types named are the class of "this is not a path"; catching
+    /// <c>Exception</c> instead would also swallow a bug in the validator, which is the opposite of the point.
+    /// </summary>
+    private static bool TryResolve(string baseDir, string value, out string resolved, out string refusal)
+    {
+        try
+        {
+            resolved = Path.GetFullPath(Path.Combine(baseDir, value));
+            refusal = "";
+            return true;
+        }
+        catch (Exception ex) when (ex is ArgumentException or NotSupportedException or PathTooLongException)
+        {
+            resolved = "";
+            refusal = ex.Message;
+            return false;
+        }
+    }
+
+    /// <summary>NTFS's per-component limit, and most Linux filesystems'. Longer than this and the path resolves
+    /// but cannot be created, so the manifest is refused here instead of halfway through the write loop.</summary>
+    private const int MaxPathComponent = 255;
+
+    /// <summary>Rule 17. The first component of <paramref name="value"/> that no filesystem would accept, or null.</summary>
+    private static string? TooLongComponent(string value) =>
+        value.Split(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar)
+            .FirstOrDefault(part => part.Length > MaxPathComponent);
+
+    /// <summary>The tail of rule 17's message: the component is by definition too long to print whole.</summary>
+    private static string Overlong(string component) =>
+        $"whose path component \"{component[..40]}…\" is {component.Length} characters; the limit is {MaxPathComponent}.";
 
     private static string Expand(string template, string kitDir) =>
         IncludePattern().Replace(template, match => File.ReadAllText(Path.Combine(kitDir, "core", match.Groups[1].Value)).Trim());
