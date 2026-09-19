@@ -195,7 +195,9 @@ Keep the per-verdict lines below it as they are.
 ## Units of work
 
 ### Unit A — the whole task
-- **Files:** `src/Muthur.Server/Services/ConductorService.cs`; `tests/Muthur.Server.Tests/ConductorTests.cs`.
+- **Files:** `src/Muthur.Server/Services/ConductorService.cs`; `src/Muthur.Server/Services/GitLander.cs`
+  (`ITaskLander.BranchHeadAsync` and its implementation); `src/Muthur.Server/Services/LifecycleService.cs`
+  (`ImplementedAsync` reads the head once and records it); `tests/Muthur.Server.Tests/ConductorTests.cs`.
 - **Does:** everything above.
 - **Depends on:** nothing.
 - **Acceptance:** `dotnet build` and `dotnet test` clean, plus:
@@ -224,11 +226,21 @@ End to end, against an installed build and a scratch home, never the live hub. A
 that prints `{"result":"ok","is_error":false}` exercises the launch path without spending anything; the
 validator brief documents the technique.
 
-- Drive a task through implemented → fail → implemented → fail → implemented → fail, with
-  `Muthur:ConductorMaxAttempts` at 3. Confirm the founder is told once and `conductor status` stops staffing it.
-- Mark it implemented a fourth time. **`muthur conductor status` staffs it again** — this is the behaviour
-  the whole task is for, and it is the step to see fail on `main`.
-- Let that round fail three times too: the founder is told a second time, and the count reads 3, not 6.
+Remember while reading these steps that **a round holds at most one failure** - a failed verdict returns the
+task to its owner immediately. So each "fail" below is a separate submission.
+
+With `Muthur:ConductorMaxAttempts` at 3, an owner and a validator, and a task on a real branch:
+
+- Drive implemented -> fail three times, **making a real commit on the branch before each resubmission**.
+  Mark it implemented a fourth time. The conductor **staffs it**, and no founder message appears. This is the
+  behaviour the whole task is for, and it is the step to see fail on `main`.
+- Now resubmit **without** committing anything - mark implemented again on the same head. The conductor
+  staffs nothing, one `conductor.exhausted` is recorded, and the founder is told the task "came back on the
+  same commit".
+- Reject it once more and resubmit unmoved again: a second message, naming the higher count. The same round
+  announced twice would be the bug.
+- `muthur task show` on a task implemented since this change carries the head in its `task.implemented`
+  payload; one implemented before it does not, and that task is staffed rather than stalled.
 
 ## Out of scope / follow-ups
 
