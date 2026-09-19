@@ -162,8 +162,20 @@ project reports `"ungated": false`. Unit A's worker caught it. Keeping it a plai
 `bool?` that the `WhenWritingNull` policy would omit is deliberate: a two-valued fact should not be typed
 as three-valued to save sixteen bytes, and a reader of the JSON gets an answer either way.)
 
-Then open `/projects` on the scratch hub: `solo` shows an amber `ungated` pill and the sentence about
-`implemented` going straight to `validated`; `gated` shows neither and lists its validator.
+Then **fetch** `/projects` from the scratch hub — no browser, and see **Amendment 1**, which retracts an
+earlier claim that one was needed. The page is a plain `@foreach`, not a `<Virtualize>`, so the prerendered
+HTML carries everything:
+
+```powershell
+$html = (Invoke-WebRequest "$env:MUTHUR_URL/projects" -UseBasicParsing).Content
+[regex]::Matches($html, 'pill-ungated').Count          # 1 - the ungated project, and only it
+$html -match 'none required &#8212; implemented goes straight to validated'
+```
+
+`solo` carries `<span class="pill pill-ungated">ungated</span>` and the sentence about `implemented` going
+straight to `validated`; `gated` carries neither and lists its validator instead. `DashboardProjectsTests`
+asserts the same two facts against the same fetched page, so a failure here and a red suite mean the same
+thing.
 
 A validator should also confirm the negative: `muthur task land` behaves exactly as before on an ungated
 project, because the founder settled that it must.
@@ -267,3 +279,52 @@ anybody — I could not see it either, and said so rather than implying coverage
 Do not re-implement anything to make the pill assertable in a test. That path was investigated and is
 closed by `<Virtualize>`; the cost would be redesigning how the dashboard renders, for a task about a
 two-word pill.
+
+## Amendment 1 — no browser is needed, and the claim that one was is retracted (2026-09-19)
+
+This task was blocked by a validator **three times**, each on the same thing: the verification asked for a
+browser and a conductor-started session has none. It was re-submitted unchanged after the first two, then
+released. The handover section below tells the next owner:
+
+> **Asserting the pill through `GET /projects` in a test.** It does not work and will not: `BoardPanel` and
+> the projects page render inside `<Virtualize>` … `curl` of `/projects` on a scratch hub returns neither the
+> pill nor the task ids. **Confirmed directly; do not spend time re-deriving it.**
+
+**That is wrong, and this amendment retracts it.** It is left in place rather than deleted, because a claim
+that cost three validator sessions should stay visible next to its correction.
+
+Two measurements, either of which settles it:
+
+1. `src/Muthur.Server/Components/Pages/Projects.razor` contains **no `<Virtualize>`**. It is a plain
+   `@foreach (var p in _projects)`. The board at `/` does virtualize — that is where the belief came from —
+   but `/projects` never has.
+2. Fetched from a scratch hub built from this branch, one ungated project and one gated one:
+
+```
+pill-ungated occurrences : 1
+Virtualize in markup     : False
+
+nogate: <span class="agent-name">nogate</span> … <span class="pill pill-ungated">ungated</span>
+        <dt>Validators</dt><dd><span class="panel-sub">none required — implemented goes straight to validated</span></dd>
+
+gated:  <span class="agent-name">gated</span> … (no ungated pill)
+        <dt>Validators</dt><dd><span class="pill pill-role">validator</span></dd>
+```
+
+The pill is in the prerendered HTML, exactly once, on exactly the right project, with the consequence
+sentence beside it.
+
+`tests/Muthur.Server.Tests/DashboardProjectsTests.cs` — already on this branch — asserts precisely this
+through `GetStringAsync("/projects")`, one test for the pill's presence and one for its absence. The branch's
+own suite contradicted its handover, and the suite was right.
+
+### What follows
+
+- The `attended` route in "What I would do next" is **dropped**. This task does not need human eyes, so it
+  must not take a founder's. Nothing here requires a GUI.
+- Nothing is re-implemented to make the pill assertable. It already was. The handover's closing warning — *do
+  not redesign the dashboard for a two-word pill* — is good advice that was aimed at a problem that did not
+  exist.
+- The Verification section above now says **fetch**, not "open". That one word is what three sessions read as
+  a browser requirement, and correcting it only in an amendment would leave the next validator reading the
+  same instruction. This is T-46's rule applied to the spec that motivated it.
