@@ -351,3 +351,41 @@ being worth doing at all.
 - **Reaching the founder off the screen.** This makes the queue visible to somebody looking at the dashboard.
   A push — mail, chat — for a task that has waited a long time is the next thing after this, and it is exactly
   the escalation this task declined to invent on its own.
+
+## Amendment while building: the badge needed a change after all
+
+*Design* says above, in the badge section, that `NeedsYouBadge` needs no change because it renders `Total` and
+the age and both now include this. That is true of what it renders and false of when it renders it, and the
+implementer caught the difference.
+
+`NeedsYouBadge.IsRelevant` tested three prefixes — `request.`, `message.`, `outbound.` — so a task the founder
+had just flagged moved the number only on the panel's 30-second `ClockInterval`, while every other thing the
+badge counts moves it at once. A badge that is late about the one queue nobody is watching is this task's own
+defect in miniature, arrived at through the subscription rather than through the count.
+
+So `IsRelevant` gains `task.` and `validation.`, the same pair `AttendedPanel` watches: the flag moves on
+`task.attended` and `task.attended_cleared`, and a task enters and leaves `validating` on `task.` and
+`validation.` events. `task.` is much broader than the three that were there, and it is affordable because
+`LivePanel` coalesces to at most one reload per `RefreshInterval` however many events arrive.
+
+Both predicates are now `internal static bool Watches(string type)`, with `IsRelevant` one line over them, and
+`The_badge_and_the_panel_wake_on_the_events_that_move_them` asserts both over eleven event types that this
+codebase really records — checked against the `m.Record` calls, because a subscription watching a word nothing
+writes is the same defect as watching nothing. `Console.InfersValidator` is the existing precedent for lifting
+a decision out of a circuit no test can click.
+
+## Proof
+
+`dotnet build`: clean, 0 warnings, 0 errors. `dotnet test`: 3736 Core, 28 Launch, 212 Cli, 516 Server — all
+green, run by the orchestrator on the integrated branch, not only by the implementer.
+
+Three mutation checks, each reverted:
+
+- `&& t.AttendedReason != null` removed from `AttendedAsync`: `The_queue_is_what_nothing_advances…` fails with
+  two tasks where it asserts one.
+- the `Priority` key removed from the order: `Priority_orders_the_queue…` fails with `["T-1","T-2","T-3"]`
+  where it expects `["T-2","T-3","T-1"]` — and the wrong answer is wait order rather than a reversal, so the
+  priority key is genuinely what the assertion bites on.
+- `task.` and `validation.` removed from `NeedsYouBadge.Watches`:
+  `The_badge_and_the_panel_wake_on_the_events_that_move_them` fails, 7 of 8 passing. Run by the orchestrator,
+  on the line the orchestrator asked for.
