@@ -161,3 +161,40 @@ made by any test.
 - **Role and channel tokens stay raw.** Resolving them needs names Discord does not send with the message —
   a guild roles call and a channels call, both cacheable, both an extra API call from a parser that is
   currently pure. Worth its own task if the raw ids ever actually bother anyone.
+
+## Proof (2026-09-19)
+
+```
+dotnet build   →  0 Warning(s), 0 Error(s)
+dotnet test
+  Muthur.Launch.Tests    23/23
+  Muthur.Core.Tests      3736/3736
+  Muthur.Cli.Tests       77/77
+  Muthur.Server.Tests    348/348
+
+DiscordChannelSourceTests alone: 21/21   (13 before this task)
+```
+
+The payload from the task report, run through the real `DiscordChannelSource.Parse` by the orchestrator:
+
+```json
+{"id":"100","content":"<@1550341615472746526> Hi there!","author":{"username":"hersh","bot":false},
+ "mentions":[{"id":"1550341615472746526","username":"MUTHUR"}]}
+```
+
+```
+Title: @MUTHUR Hi there!
+Body:  @MUTHUR Hi there!
+```
+
+**No existing test was edited**, shown mechanically rather than by eye: `git diff --numstat` on
+`DiscordChannelSourceTests.cs` is `85  0` — eighty-five lines added, zero deleted or changed — and the whole
+commit has no deletions in either file. The no-mentions shape and the bot/webhook skips pass untouched.
+
+No browser, no scratch hub, no network call: `Parse` is a pure static and the tests call it directly.
+
+### One property, named because it is silent
+
+Substitution runs in payload order with ordinal replace, so a username containing a literal `<@id>` token
+could in principle be re-substituted by a later mention. Discord usernames cannot contain `<`, so it is
+unreachable, and guarding it would add a branch nothing can take. Recorded rather than defended against.
