@@ -42,6 +42,11 @@ public sealed class CodexAdapter(string name, string? openSourceProvider) : IHar
             arguments.Add("--model");
             arguments.Add(request.Model);
         }
+        if (request.ReasoningEffort is { Length: > 0 } effort)
+        {
+            arguments.Add("-c");
+            arguments.Add($"model_reasoning_effort=\"{effort}\"");
+        }
         arguments.Add("-"); // prompt on stdin
         return new HarnessInvocation("codex", arguments, request.Prompt);
     }
