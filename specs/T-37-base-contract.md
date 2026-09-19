@@ -164,7 +164,61 @@ A validator should also confirm the negative: `git diff --stat main..<branch> --
 - If the harness's worktree base is ever worth reporting upstream, the eight-case table above is the
   evidence. Nothing in MUTHUR can fix it.
 
-## Proof (2026-09-18)
+## Proof (2026-09-18, after seven rounds)
+
+```
+dotnet build   0 warnings, 0 errors
+dotnet test    Launch 23 + Cli 40 + Core 3692 + Server 196 = 3951, all passing
+git diff --stat main...HEAD -- src/ tests/   empty
+```
+
+### Seven rounds, seven defects, none found by reading
+
+| # | Found by | Defect |
+|---|---|---|
+| 1-2 | implementer, reviewing its own diff | "stop and report" named no status; the agent card asserted the base *was* the task branch, below the include, so it was the document's last word; then the fix for that landed only in the less-read file |
+| 3 | `conductor-validator`, installing the kit and driving it against real git | a stale ancestor already contains an older spec, so presence passes and the implementer builds from a superseded one |
+| 4 | implementer, building a counterexample | identity passes on a dirty tree; and `git show` secures the spec while every other file is read from disk, so an edit silently reverts the base's change |
+| 5 | implementer, **by obeying the step** | the moved-files clause blocked on routine integration — the common resumed case |
+| 6 | `conductor-validator` | `git log <base>..HEAD` measures history, not authorship: a fresh worker on a divergent base inherits landed commits, concludes it is resumed, and proceeds on the wrong lineage having obeyed the contract |
+| 7 | implementer, **by being the case** | "round" was undefined and one reading reset a predecessor's unintegrated work away, under a sentence promising nothing could be lost |
+| 7b | implementer | `<default branch>`, introduced in round 6's fix, is named in no list of what an orchestrator supplies — round 2's shape, recurring |
+
+**Four of the seven were the same mistake**: reaching for a measurement that sits *near* the question instead
+of the question. Presence-instead-of-identity, commits-instead-of-working-tree, history-instead-of-authorship,
+authorship-instead-of-unintegrated-work. The final test asks containment, which is the question.
+
+**Two of the seven were the same mistake too**: fixing the file that *uses* an input and leaving the files
+that *provide* it. That is now written down as a rule — when a step gains an input, the two enumerations
+(`orchestrate.md` step 4 and the agent card's frontmatter) are part of the change, not a follow-up.
+
+### The method that worked, and its limit
+
+The last three defects came from the implementer **running the step on itself** rather than probing it. Its
+own account of why, which qualifies the lesson rather than selling it:
+
+> it only works because the contract governs the worker that is editing it. I had to obey the step to get
+> any work done at all, so a wrong branch cost me something immediately instead of passing a review. On a
+> task where the artefact under change is not one the implementer must itself execute, that feedback loop is
+> absent and adversarial probing is back to being the only tool.
+
+Verified rather than asserted: the containment test was run against both situations that implementer was
+actually in — 13 inherited `Land T-35`/`Land T-42` commits contained in `main` (routed to divergent reset),
+and its own commits contained in neither (routed to preserve) — and reproduced what it had in fact done,
+with no judgement anywhere in the decision.
+
+### Known and not closed
+
+An **incorrectly named base** (every check is consistency with what was handed over; mitigated as far as a
+contract can by `orchestrate.md`'s "the branch you committed the frozen spec to and no other"), a **detached
+HEAD** at the base commit, and a **local base ref behind its remote** — airtight while one `.git` is shared,
+and an exact reproduction of the stale-spec failure the day orchestration crosses clones.
+
+One tuning question, not a correctness one: a worktree the harness dirties on creation now blocks rather
+than resets. If that proves common, the question is *which* dirt counts — and it surfaces as blocked reports
+rather than as bad work, which is the right way round.
+
+## Superseded proof (round 4)
 
 ```
 dotnet build   0 warnings, 0 errors
