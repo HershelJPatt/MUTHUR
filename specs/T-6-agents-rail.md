@@ -255,3 +255,60 @@ the row must flip to `unheld` without a reload of anything but the page you fetc
   question for the rail's next pass.
 - **The validation queue and the roles panel both show validator roles.** Deliberate, per Context. If the
   rail ever feels crowded, the question is which panel should stop — not whether to filter one silently.
+
+## Proof (2026-09-19)
+
+```
+dotnet build   →  0 Warning(s), 0 Error(s)
+dotnet test
+  Muthur.Launch.Tests    23/23
+  Muthur.Core.Tests      3708/3708
+  Muthur.Cli.Tests       65/65
+  Muthur.Server.Tests    316/316     (307 before this task: +3 Unit A, +6 Unit B)
+```
+
+The rail itself, fetched from a scratch hub on port 7521 with a CLI installed from this branch — one agent
+holding `reviewer` and working `T-1`, one validator role with room for two and nobody in it:
+
+```html
+<div class="agent "><div class="agent-head"><span class="dot"></span>
+  <span class="agent-name">worker</span><span class="tag">implementer</span><span class="agent-age">0s</span></div>
+  <div class="agent-model">claude/opus</div>
+  <div class="agent-task">T-1 · Wire the rail</div>
+  <div class="agent-meta"><span class="pill pill-role">reviewer</span><span class="pill">1 task</span></div></div>
+```
+
+```html
+<span class="panel-title">Roles</span> <span class="panel-sub">1 of 2 held</span>
+  <div class="agent"><div class="agent-head"><span class="agent-name">pair</span>
+    <span class="tag">validator</span><span class="agent-age">0 of 2</span></div>
+    <div class="agent-meta"><span class="pill">unheld</span></div></div>
+  <div class="agent"><div class="agent-head"><span class="agent-name">reviewer</span></div>
+    <div class="agent-meta"><span class="pill pill-role">worker</span></div></div>
+```
+
+Every bullet of the Verification section: the agent's name, `claude/opus` and `implementer`; an `agent-task`
+line carrying **both** the id and the title of the task in progress; the `Roles` head reading `1 of 2 held`;
+`reviewer` naming its holder in a `pill-role`; `pair` showing `0 of 2` and `unheld`; and the same panel on
+`/needs-you`.
+
+Releasing the role and re-fetching flips it, with nothing written but the release:
+
+```
+after release: <span class="panel-sub">0 of 2 held</span> … reviewer … unheld
+```
+
+Scratch hub stopped; the live hub's `processId` 63224 is unchanged.
+
+**No browser was used, and none is needed.** The rail is an `<aside>` sibling of `BoardPanel`, outside the
+`<Virtualize>` that hides the board's own cards.
+
+## Out of scope / follow-ups (added)
+
+- **The rail's task query has no project filter.** `BoardPanel` filters by the selected project; the rail does
+  not, deliberately, because it describes agents rather than a project. On a multi-project hub with the board
+  filtered, an agent's `agent-task` line can name a task the board is not showing. Correct today; worth a
+  decision if the rail ever gains a project sense.
+- **`TaskService.ListAsync` clamps `Limit` to 2000** and orders by priority descending, so past 2000 open
+  tasks a low-priority in-progress task could go unnamed. The same exposure `BoardPanel` already carries, so
+  it belongs to whichever task addresses that, not this one.
