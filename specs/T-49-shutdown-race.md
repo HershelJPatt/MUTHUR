@@ -250,8 +250,45 @@ This is T-41's end-to-end repeated, because the behaviour under test is the one 
 task must not have regressed it. It is not expected to reproduce the defect: the window is milliseconds and
 Kestrel drains.
 
+## Amendment 2 — step 2 has been run, and what it found
+
+The worker the previous session started did build the harness and did run it, and its measurement survived
+the session that commissioned it (`t49-measure.txt`, a scratch file in its worktree, not part of the change).
+Step 2 is therefore closed, and by sighting rather than by hypothesis. Three shapes reached `ErrorMiddleware`
+with the response not started:
+
+| # | What arrived | From | `RequestAborted` |
+|---|---|---|---|
+| 1 | `AggregateException` over `ObjectDisposedException` ("Cannot write to a closed TextWriter") | `SaveChangesAsync`, raised out of EF's own `SaveChangesFailedAsync` logging | signalled |
+| 2 | `TaskCanceledException`, nothing in its chain | `Ledger.MutateAsync` line 19 (`CreateDbContextAsync`) | signalled |
+| 3 | `AggregateException` over `ObjectDisposedException` | the test's channel, hub not yet aborted | not signalled |
+
+Shape 1 is the one the rule's `InnerException` clause was written for, and it is now a measurement: a hub
+disposed underneath a live write does not raise an `ObjectDisposedException`, it raises something wrapping
+one, and the type-matched guard let exactly that through. **Step 3's first branch applies — make the
+production change.**
+
+**Shape 2 is not the escape case, and does not come back to me.** The rule is about what the hub *says*; a
+request whose `RequestAborted` is signalled is told nothing at all, because the last catch has always
+required `!http.RequestAborted.IsCancellationRequested` — no 500 on the wire, no `Error` line in the log,
+nothing to forgive. T-41 settled that and this task does not reopen it. What would be the escape case is that
+same chainless exception arriving with the response not started **and the request not aborted**: then the hub
+really would be telling someone it broke over its own teardown, and the rule as written would not cover it.
+That has not been seen. If it is ever seen, it is a new ledger task with the trace attached.
+
+**What this means for evidence (acceptance criterion 3).** Because an aborted request is neither answered nor
+logged, the real-disposal harness may well pass with the production change reverted — the abort hides the
+defect from the client rather than the fix removing it. If it does, that harness is **not** evidence for the
+change and must not be written as though it were: it stays as the regression test T-49 was missing (a request
+that met a fully disposed hub was not told the hub broke, and nothing was logged), and the report says
+plainly that it passes both ways and why. The failing-without-the-change evidence then comes from the
+deterministic pair — the wrapped exception on a stopping hub, which without `IsTeardown` is a 500 with an
+`Error` line, and its mirror on a hub nobody asked to stop, which must stay a 500. Both must be run reverted
+and the report must say what they did.
+
 ## Out of scope / follow-ups
 
 - **Draining**, still. T-41 named it; this task's rule is what a drain's own deadline needs behind it.
 - If step 3 finds a shape the rule does not cover, that becomes its own ledger task with the evidence
-  attached — not a widening of this one.
+  attached — not a widening of this one. Shape 2 above is judged *not* to be such a shape; the reasoning is
+  in amendment 2 so that a later reader can disagree with it on the record.
