@@ -157,6 +157,79 @@ public sealed class LifecycleTests : IDisposable
     }
 
     /// <summary>
+    /// T-45: eight sessions ended in 'blocked' for want of a browser, three of them on one task. The second
+    /// session had nothing available to it that the first did not, so a second block stops the staffing rather
+    /// than spending the budget rediscovering the same prerequisite every round the owner re-implements.
+    /// </summary>
+    [Fact]
+    public async Task A_second_block_flags_the_task_for_a_human_and_says_so_once()
+    {
+        await _hub.AddProjectAsync(repoPath: _repo.Path, validators: ["win-validator"]);
+        await DefineRolesAsync("win-validator");
+        var (owner, id) = await ImplementableTaskAsync();
+        var validator = await _hub.RegisterAgentAsync("validator");
+        (await TakeAsync(validator, "win-validator")).EnsureSuccessStatusCode();
+
+        // One block is the system working: a session found a missing prerequisite and the owner may well fix it.
+        (await owner.PostActionAsync(id, "implemented", new ImplementedRequest("task/T-1-feature"))).EnsureSuccessStatusCode();
+        var once = await (await validator.PostActionAsync(id, "blocked", new VerdictRequest("win-validator", "No browser here."))).ReadTaskAsync();
+        Assert.Null(once.AttendedReason);
+
+        // Two is a class of thing. The owner re-implements, the next session hits the same wall.
+        (await owner.PostActionAsync(id, "implemented", new ImplementedRequest("task/T-1-feature"))).EnsureSuccessStatusCode();
+        var twice = await (await validator.PostActionAsync(id, "blocked",
+            new VerdictRequest("win-validator", "Still no browser.\nTried: the CLI, curl, the suite."))).ReadTaskAsync();
+
+        Assert.Equal("Blocked twice without reaching a verdict. Latest: Still no browser.", twice.AttendedReason);
+        var detail = await owner.GetTaskAsync(id);
+        Assert.Contains(detail.Events, e => e.Type == "task.attended"
+            && e.Payload.GetProperty("source").GetString() == "validation_blocked"
+            && e.Payload.GetProperty("blocks").GetInt32() == 2);
+
+        // The founder is told once that it is an incident, and once that it is now a standing fact — not the
+        // same sentence twice, and the second names the way out.
+        var toFounder = (await _hub.Founder().GetFromJsonAsync(Routes.Messages + "?founder=true", MuthurJsonContext.Default.IReadOnlyListMessageDto))!;
+        Assert.Single(toFounder, x => x.Body.Contains("needs something a validator could not supply"));
+        var named = Assert.Single(toFounder, x => x.Body.Contains("blocked twice without a verdict"));
+        Assert.Contains("Still no browser.", named.Body);
+        Assert.DoesNotContain("Tried:", named.Body);
+        Assert.Contains($"muthur task attended {id} --clear", named.Body);
+
+        // A third block is the flag working, not news: nothing further reaches the founder.
+        (await owner.PostActionAsync(id, "implemented", new ImplementedRequest("task/T-1-feature"))).EnsureSuccessStatusCode();
+        (await validator.PostActionAsync(id, "blocked", new VerdictRequest("win-validator", "Still no browser."))).EnsureSuccessStatusCode();
+        var after = (await _hub.Founder().GetFromJsonAsync(Routes.Messages + "?founder=true", MuthurJsonContext.Default.IReadOnlyListMessageDto))!;
+        Assert.Equal(toFounder.Count, after.Count);
+    }
+
+    /// <summary>
+    /// A human already said why a human is needed. That sentence is better than the generated one, and
+    /// overwriting it would lose the reason — so the count decides the message, never the flag's text.
+    /// </summary>
+    [Fact]
+    public async Task A_second_block_does_not_overwrite_an_attended_reason_somebody_wrote()
+    {
+        await _hub.AddProjectAsync(repoPath: _repo.Path, validators: ["win-validator"]);
+        await DefineRolesAsync("win-validator");
+        var (owner, id) = await ImplementableTaskAsync();
+        var validator = await _hub.RegisterAgentAsync("validator");
+        (await TakeAsync(validator, "win-validator")).EnsureSuccessStatusCode();
+        const string Written = "The collision pill renders inside Virtualize, which a prerender does not emit.";
+        (await owner.PostActionAsync(id, "attended", new AttendedRequest(Written))).EnsureSuccessStatusCode();
+
+        (await owner.PostActionAsync(id, "implemented", new ImplementedRequest("task/T-1-feature"))).EnsureSuccessStatusCode();
+        (await validator.PostActionAsync(id, "blocked", new VerdictRequest("win-validator", "No browser here."))).EnsureSuccessStatusCode();
+        (await owner.PostActionAsync(id, "implemented", new ImplementedRequest("task/T-1-feature"))).EnsureSuccessStatusCode();
+        var twice = await (await validator.PostActionAsync(id, "blocked", new VerdictRequest("win-validator", "Still no browser."))).ReadTaskAsync();
+
+        Assert.Equal(Written, twice.AttendedReason);
+
+        // The founder is still told, because that is the count's business and not the flag's.
+        var toFounder = (await _hub.Founder().GetFromJsonAsync(Routes.Messages + "?founder=true", MuthurJsonContext.Default.IReadOnlyListMessageDto))!;
+        Assert.Single(toFounder, x => x.Body.Contains("blocked twice without a verdict"));
+    }
+
+    /// <summary>
     /// The thing that must never happen: a validator that could not run must not be counted as one that approved.
     /// </summary>
     [Fact]

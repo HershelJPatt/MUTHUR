@@ -249,4 +249,119 @@ public sealed class SpecGuardTests : IDisposable
 
         Assert.Equal("specs/T-9-buried-heading.md", task.SpecPath);
     }
+
+    /// <summary>
+    /// Founder request #15, option C: a spec says what it needs and the hub flags the task at freeze time,
+    /// so the conductor never staffs a session that cannot run it. Eight validator sessions ended in
+    /// 'blocked' for want of a browser before this existed, three of them on one task.
+    /// </summary>
+    [Theory]
+    [InlineData("needs: browser")]
+    [InlineData("  needs: browser")]
+    [InlineData("- needs: browser")]
+    [InlineData("> needs: browser")]
+    [InlineData("**needs:** browser")]
+    [InlineData("NEEDS: Browser")]
+    public async Task A_spec_that_declares_what_it_needs_flags_the_task_when_it_is_frozen(string declaration)
+    {
+        var (owner, id) = await ClaimedTaskAsync();
+        _repo.Write("specs/T-1-eyes.md", $"# T-1 — Build it\n\n## Verification\n\n{declaration}\n");
+
+        var task = await (await owner.PostActionAsync(id, "spec", new SetSpecRequest("specs/T-1-eyes.md"))).ReadTaskAsync();
+
+        Assert.StartsWith("The spec declares 'needs: ", task.AttendedReason);
+        Assert.Contains("waits for a human validator", task.AttendedReason);
+        var recorded = Assert.Single((await owner.GetTaskAsync(id)).Events, e => e.Type == "task.attended");
+        Assert.Equal("spec_needs", recorded.Payload.GetProperty("source").GetString());
+    }
+
+    [Fact]
+    public async Task A_spec_that_declares_nothing_leaves_the_task_alone()
+    {
+        var (owner, id) = await ClaimedTaskAsync();
+        // Prose about browsers is not a declaration; only a line of its own is.
+        _repo.Write("specs/T-1-quiet.md", "# T-1 — Build it\n\nNothing here needs a browser, and this sentence is not a declaration.\n");
+
+        var task = await (await owner.PostActionAsync(id, "spec", new SetSpecRequest("specs/T-1-quiet.md"))).ReadTaskAsync();
+
+        Assert.Null(task.AttendedReason);
+        Assert.DoesNotContain((await owner.GetTaskAsync(id)).Events, e => e.Type == "task.attended");
+    }
+
+    /// <summary>
+    /// A declaration is found wherever it is. The heading check reads only the first 8KB on purpose; a need
+    /// the hub silently failed to see would be the worst of both worlds, so the read for it is not capped
+    /// there.
+    /// </summary>
+    [Fact]
+    public async Task A_declaration_past_the_heading_window_is_still_seen()
+    {
+        var (owner, id) = await ClaimedTaskAsync();
+        _repo.Write("specs/T-1-late.md", "# T-1 — Build it\n" + new string('x', 20_000) + "\n\nneeds: browser\n");
+
+        var task = await (await owner.PostActionAsync(id, "spec", new SetSpecRequest("specs/T-1-late.md"))).ReadTaskAsync();
+
+        Assert.Contains("needs: browser", task.AttendedReason);
+    }
+
+    /// <summary>A human's own sentence is better than the generated one, so freezing a spec never overwrites it.</summary>
+    [Fact]
+    public async Task A_reason_somebody_wrote_survives_freezing_a_spec_that_declares_a_need()
+    {
+        var (owner, id) = await ClaimedTaskAsync();
+        const string Written = "the collision pill renders inside Virtualize";
+        (await owner.PostActionAsync(id, "attended", new AttendedRequest(Written))).EnsureSuccessStatusCode();
+        _repo.Write("specs/T-1-eyes.md", "# T-1 — Build it\n\nneeds: browser\n");
+
+        var task = await (await owner.PostActionAsync(id, "spec", new SetSpecRequest("specs/T-1-eyes.md"))).ReadTaskAsync();
+
+        Assert.Equal(Written, task.AttendedReason);
+    }
+
+    /// <summary>
+    /// The hole a validator found: a 1 MB cap does not remove the silent miss, it moves it to a bigger
+    /// number. A spec with a megabyte of padding and then "needs: browser" was accepted with no flag, marked
+    /// implemented, and actually staffed. A spec too big to read in full is now refused rather than read in
+    /// part, so there is no size at which a declaration is quietly unseen.
+    /// </summary>
+    [Fact]
+    public async Task A_spec_too_large_to_read_in_full_is_refused_rather_than_half_read()
+    {
+        var (owner, id) = await ClaimedTaskAsync();
+        _repo.Write("specs/T-1-huge.md", "# T-1 - Build it" + new string('x', 1_050_000) + "needs: browser");
+
+        var error = await RefusedAsync(owner, id, "specs/T-1-huge.md");
+
+        Assert.Equal("spec_too_large", error.Code);
+        Assert.Contains("larger than 1 MB", error.Message);
+        Assert.Contains("silently missed", error.Message);
+        Assert.Null((await owner.GetTaskAsync(id)).Task.SpecPath);   // nothing was attached
+    }
+
+    /// <summary>And the same spec on a branch, since that read has its own path to the cap.</summary>
+    [Fact]
+    public async Task A_spec_too_large_is_refused_when_it_comes_off_a_branch_too()
+    {
+        var (owner, id) = await ClaimedTaskAsync();
+        _repo.BranchWithFile("task/T-1-huge", "specs/T-1-huge.md",
+            "# T-1 - Build it" + new string('x', 1_050_000) + "needs: browser");
+
+        var error = await RefusedAsync(owner, id, "specs/T-1-huge.md", "task/T-1-huge");
+
+        Assert.Equal("spec_too_large", error.Code);
+    }
+
+    /// <summary>A spec right up against the cap is still ordinary work, and its declaration is still seen.</summary>
+    [Fact]
+    public async Task A_spec_just_inside_the_cap_is_read_in_full()
+    {
+        var (owner, id) = await ClaimedTaskAsync();
+        var head = "# T-1 - Build it\n";
+        var tail = "\nneeds: browser\n";
+        _repo.Write("specs/T-1-big.md", head + new string('x', 1_048_576 - head.Length - tail.Length) + tail);
+
+        var task = await (await owner.PostActionAsync(id, "spec", new SetSpecRequest("specs/T-1-big.md"))).ReadTaskAsync();
+
+        Assert.Contains("needs: browser", task.AttendedReason);
+    }
 }

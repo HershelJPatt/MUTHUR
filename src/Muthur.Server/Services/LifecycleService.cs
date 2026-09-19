@@ -270,12 +270,36 @@ public sealed class LifecycleService(Ledger ledger, LeasePolicy leases, ITaskLan
                         $"{Wire.TaskId(task.Id)} could not be validated by {validator}: it is back in progress with you. " +
                         $"This is not a verdict on the work. Why: muthur task show {Wire.TaskId(task.Id)}", task.Id);
 
+                // Including this one. A second session that could not reach a verdict had nothing available to
+                // it that the first did not, so the task stops being staffed rather than spending the budget
+                // rediscovering the same prerequisite every round the owner re-implements.
+                var blocks = 1 + await m.Db.Events.CountAsync(e => e.TaskId == task.Id && e.Type == "task.validation_blocked", ct);
+                var first = Evidence.FirstLine(request.Evidence);
+
+                // The conductor already leaves an attended task alone (T-31), so setting the flag is the whole
+                // mechanism; there is deliberately no second way to skip. An orchestrator's own reason is left
+                // as it stands — a human said why a human is needed, and that sentence is better than this one.
+                if (blocks >= 2 && string.IsNullOrWhiteSpace(task.AttendedReason))
+                {
+                    task.AttendedReason = $"Blocked twice without reaching a verdict. Latest: {first}";
+                    m.Record("task.attended", task.Id, new { reason = task.AttendedReason, source = "validation_blocked", blocks });
+                }
+
                 // And the founder: that a task needs something the organization cannot supply unattended is a fact
                 // only they can act on, and the failure this closes was exactly that it reached one inbox and stopped.
-                MessageService.PostFromHub(m, Recipient.Founder, null,
-                    $"{Wire.TaskId(task.Id)} \"{task.Title}\" needs something a validator could not supply: " +
-                    $"{Evidence.FirstLine(request.Evidence)}. It is back with {task.Owner?.Name ?? "its owner"}. " +
-                    $"Full evidence: muthur task show {Wire.TaskId(task.Id)}", task.Id);
+                // Twice is where it becomes a class of thing rather than an incident; past that the flag is set and
+                // the founder has been told, so a task still being blocked is the flag working, not news.
+                if (blocks == 1)
+                    MessageService.PostFromHub(m, Recipient.Founder, null,
+                        $"{Wire.TaskId(task.Id)} \"{task.Title}\" needs something a validator could not supply: " +
+                        $"{first}. It is back with {task.Owner?.Name ?? "its owner"}. " +
+                        $"Full evidence: muthur task show {Wire.TaskId(task.Id)}", task.Id);
+                else if (blocks == 2)
+                    MessageService.PostFromHub(m, Recipient.Founder, null,
+                        $"{Wire.TaskId(task.Id)} \"{task.Title}\" has now been blocked twice without a verdict: {first}. " +
+                        $"It is flagged for a human validator and will not be staffed again until that is lifted " +
+                        $"(muthur task attended {Wire.TaskId(task.Id)} --clear). " +
+                        $"Full evidence: muthur task show {Wire.TaskId(task.Id)}", task.Id);
             }
             else if (rows.All(v => v.Verdict == Verdict.Yes))
             {
