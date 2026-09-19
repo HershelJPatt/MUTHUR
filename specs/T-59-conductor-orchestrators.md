@@ -515,3 +515,25 @@ added to Unit C's file list for this. The lists' contents do not change.
 `ValidatorLaunchException` and `ValidatorSessionException` now carry orchestrator failures too, so their
 names under-describe them. Renaming touches several files for no behaviour change; it belongs in its own
 task rather than in the diff a validator is about to read.
+
+## Amendment 4 — the whole sentence, not just the noun
+
+Amendment 3 asked for the noun. That was too small a change, and Unit C's implementer said so rather than
+doing the literal thing.
+
+Swapping only the noun would have left an orchestrator's no-verdict message reading: *"The conductor started
+3 orchestrators for T-5 and none of them **reached a verdict**. … then re-spec the task, **validate it
+yourself**."* Sound advice about validation, and nonsense about a task nobody has claimed — the same
+send-the-founder-to-the-wrong-place defect Amendment 3 was written to fix, one layer below the word it fixed.
+
+`Unproductive.NoVerdict` therefore has an orchestrator arm of its own: *"…and none of them **claimed it**.
+They ran and exited cleanly, so something is stopping them from **starting the task** at all rather than
+failing at it. Look at the bus for what they said, then re-spec the task, **take it yourself**, or raise
+`Muthur:ConductorMaxAttempts`."* The validator arm beside it is byte-identical to what it was.
+
+Recorded because the amendment that asked for it was mine and it was wrong by omission. The implementer
+could only see it because it had the full message body in front of it; I had quoted myself only the noun.
+
+Left as they are, deliberately: `_lastAction`'s strings still name the role key rather than the kind, and the
+`(#orchestrator)` parenthetical is redundant beside "an orchestrator". Both are accurate, and one message
+format is worth more than two that read slightly better.
