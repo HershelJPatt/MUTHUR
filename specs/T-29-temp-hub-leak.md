@@ -277,3 +277,46 @@ that the cleanup accounting is now decoration:
 
 So Unit B's expected output on an integrated branch is a summary line reporting 0 failures, and that is a pass,
 not a no-op.
+
+## Amendment 2 — two defects only the integrated branch could show (2026-09-19)
+
+Units A and B each verified green alone. Merging them produced
+`183 removed, 2 kept (logged an error), 1 could not be removed` — worse than Unit A alone, which left zero.
+Both causes are recorded here because both are traps the next person will fall into.
+
+**1. The delete had a retry, and it was invisible.**
+
+`WebApplicationFactory.Dispose()` reaches `Dispose(bool)` **twice**: once directly, and once through the
+`DisposeAsync()` it starts. The second arrival happens after the host has finished shutting down, so a handle
+still open on the first arrival is released by the second. The original swallowing code attempted the delete on
+both arrivals, which meant it silently retried and usually won.
+
+Unit B first guarded the double arrival with a "first call wins" set, to stop double-counting. That is correct
+about the counting and wrong about the work: it removed the retry. The rule is therefore:
+
+> `Release` is idempotent in what it **counts**, not in what it **attempts**. Every arrival does the work; the
+> outcome recorded for a path is the latest one, so a path that fails and then succeeds is reported once, as
+> removed.
+
+The spec's frozen `Release` description did not mention the second arrival because the orchestrator did not
+know about it. It is now the reason the implementation keys outcomes by path.
+
+**2. Some tests log errors on purpose, and retention was keeping their directories forever.**
+
+The two kept directories were not accidents:
+
+- `SystemTests.A_disposed_object_on_a_hub_that_is_not_stopping_is_still_an_internal_error` — logs
+  `ErrorMiddleware: Unhandled error on PUT /api/v1/outbound-targets`, which is the assertion.
+- a test asserting EF's failure handling — two `Microsoft.EntityFrameworkCore.Database.Command: Failed
+  executing DbCommand` lines.
+
+Retaining those rebuilds the original bug at 2 directories per run instead of 185. Slower is still unbounded.
+
+**Retention means *unexpected*.** `HubFactory` gains `public bool ExpectsLoggedErrors { get; init; }`, passed to
+`Release`; when set, the evidence check is skipped and the directory is removed like any other. The flag is set
+by the test that intends the error, because that test is the only thing that knows the error is intended. A
+category blocklist (ignore `Microsoft.EntityFrameworkCore.*`, say) was rejected: it would silently swallow a
+real EF error in a test that did not expect one.
+
+A test that forgets the flag gets a retained directory and a `kept` line naming it. That is the intended
+behavior — visible, not silent — and no fallback may hide it.
