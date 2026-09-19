@@ -3,6 +3,11 @@
 @inject HarnessService Harnesses
 @inject RoleService Roles
 @inject ProjectService Projects
+@inject OutboundService Outbound
+@inject TaskService Tasks
+@* The channels this hub has registered, which is what the channel select offers — the same set OutboundService
+   itself resolves a name against, so the page cannot offer one the service would then refuse. *@
+@inject IEnumerable<IOutboundChannel> Channels
 
 @*
     Founder-only work, done by reading labels instead of remembering flags. Every control calls the same
@@ -94,7 +99,7 @@
                         lets them see what was inferred and say otherwise before pressing Define.
                     *@
                     <dt><label for="role-validator">Gives validation verdicts</label></dt>
-                    <dd><input type="checkbox" id="role-validator" @bind="_roleIsValidator" /></dd>
+                    <dd><input type="checkbox" id="role-validator" checked="@_roleIsValidator" @onchange="ValidatorToggled" /></dd>
                 </dl>
                 <div class="btn-row">
                     <button class="btn btn-go" @onclick="DefineRoleAsync">Define</button>
@@ -185,6 +190,141 @@
                 }
             </div>
         </section>
+
+        <section class="panel panel-fit">
+            <div class="panel-head">
+                <span class="panel-title">Outbound</span>
+                <span class="panel-sub">the allowlist: everywhere this organization may send</span>
+            </div>
+            <div class="panel-body">
+                @*
+                    The row carries the key, the channel, and whether the founder must approve each message. It
+                    does not carry the address, and adding it here would be the defect this section is shaped
+                    around: an address is routinely the credential itself — a webhook URL is the whole authority
+                    to post as this organization — so a page that echoed one back would put every such secret on
+                    a screen behind one bookmark, and into whatever is recording that screen.
+
+                    "Show the address so the founder can check it" is the obvious wrong idea, and it is wrong
+                    because checking is not what it would buy: an address that reads correctly can still be a
+                    revoked webhook, and one that reads wrong is confirmed wrong by the send that fails. What
+                    actually checks a target is `muthur doctor`, which probes it and names nothing of it.
+
+                    TargetDto has no address field at all, which is why this is cheap to keep: nothing the page
+                    can read back holds one. Do not add a field to that record to make this row richer.
+                *@
+                @if (_targets.Count == 0)
+                {
+                    <div class="empty">no targets yet · nothing can be sent anywhere</div>
+                }
+                @foreach (var target in _targets)
+                {
+                    <div class="agent">
+                        <div class="agent-head">
+                            <span class="agent-name">@target.Key</span>
+                            <span class="agent-model">@target.Channel</span>
+                            @if (target.RequiresFounderApproval)
+                            {
+                                <span class="pill pill-role">founder approves</span>
+                            }
+                        </div>
+                    </div>
+                }
+                <dl class="kv">
+                    <dt><label for="target-key">Key</label></dt>
+                    <dd><input id="target-key" class="input" @bind="_targetKey" @bind:event="oninput" /></dd>
+                    <dt><label for="target-channel">Channel</label></dt>
+                    <dd>
+                        @*
+                            A closed set, and read from the channels this hub has registered rather than listed
+                            here: FindChannel accepts those and refuses everything else, so free text could only
+                            hand the founder a refusal they could have been spared — and a channel added to the
+                            server appears in this list without anyone editing this file. No vendor is named,
+                            because a channel is a way out of the machine and not a model.
+                        *@
+                        <select id="target-channel" class="select" @bind="_targetChannel">
+                            @foreach (var channel in Channels)
+                            {
+                                <option value="@channel.Name">@channel.Name</option>
+                            }
+                        </select>
+                    </dd>
+                    <dt><label for="target-address">Address</label></dt>
+                    <dd>
+                        @*
+                            Write-only. It is typed here, it goes to the service, and it never comes back: the
+                            field is empty after a save even for a target that was just corrected, because there
+                            is nowhere to read the old value from. That is the inconvenience, and it is the
+                            cheaper half of the trade — re-typing a webhook URL costs a minute, and rotating one
+                            that was read off a shared screen costs whoever depends on it.
+                        *@
+                        <input id="target-address" class="input" @bind="_targetAddress" @bind:event="oninput"
+                               placeholder="absolute file path, webhook URL, or owner/repo#number" />
+                    </dd>
+                    @*
+                        Sent every time, because DefineTargetAsync writes it unconditionally on an existing key:
+                        a console that left it out would strip founder approval from a target the first time
+                        anyone corrected its address, silently. `muthur out target --founder-approval` carries it,
+                        and two clients of one operation must not have different safety rules.
+                    *@
+                    <dt><label for="target-approval">Founder approves every message</label></dt>
+                    <dd><input type="checkbox" id="target-approval" @bind="_targetApproval" /></dd>
+                </dl>
+                <div class="btn-row">
+                    <button class="btn btn-go" @onclick="AddTargetAsync">Add</button>
+                </div>
+                @if (_targetError is { } targetError)
+                {
+                    <div class="error-text">@targetError</div>
+                }
+                @if (_addedTarget is { } added)
+                {
+                    @* The key and the channel. Naming the address back here would undo the whole section. *@
+                    <div class="section-note">Allowed @added.Key on @added.Channel.</div>
+                }
+            </div>
+        </section>
+
+        <section class="panel panel-fit">
+            <div class="panel-head">
+                <span class="panel-title">Tasks</span>
+                <span class="panel-sub">one task, named by id — the board is the list</span>
+            </div>
+            <div class="panel-body">
+                @*
+                    No list of tasks here. The board already is that list, and a second rendering of the same
+                    backlog on a page that reloads on its own schedule is how two views of one thing start
+                    disagreeing — and how a founder acts on whichever of them is stale. Typing the id is also
+                    what makes three destructive-looking buttons safe: nothing here can fire against a row the
+                    founder did not name.
+                *@
+                <dl class="kv">
+                    <dt><label for="task-id">Task</label></dt>
+                    <dd><input id="task-id" class="input" @bind="_taskId" @bind:event="oninput" placeholder="T-<number>" /></dd>
+                    <dt><label for="task-priority">Priority</label></dt>
+                    <dd><input type="number" id="task-priority" class="input" @bind="_taskPriority" @bind:event="oninput" /></dd>
+                    @*
+                        Optional, exactly as `muthur task cancel --reason` is optional: CancelTaskRequest takes a
+                        nullable reason and the hub refuses neither. Whether a cancellation must be explained is
+                        the hub's rule to make, so this box validates nothing ahead of it and sends what it has.
+                    *@
+                    <dt><label for="task-reason">Cancel reason</label></dt>
+                    <dd><input id="task-reason" class="input" @bind="_cancelReason" @bind:event="oninput" /></dd>
+                </dl>
+                <div class="btn-row">
+                    <button class="btn btn-go" @onclick="SetTaskPriorityAsync">Set priority</button>
+                    <button class="btn btn-stop" @onclick="CancelTaskAsync">Cancel</button>
+                    <button class="btn" @onclick="ReopenTaskAsync">Reopen</button>
+                </div>
+                @if (_taskError is { } taskError)
+                {
+                    <div class="error-text">@taskError</div>
+                }
+                @if (_taskNote is { } taskNote)
+                {
+                    <div class="section-note">@taskNote</div>
+                }
+            </div>
+        </section>
     </div>
 </div>
 
@@ -204,6 +344,7 @@
     private string _roleKey = "";
     private string _roleBrief = "";
     private bool _roleIsValidator;
+    private bool _roleValidatorTouched;
     private RoleDto? _defined;
     private string? _roleError;
 
@@ -212,6 +353,27 @@
     private readonly Dictionary<string, string> _land = new(StringComparer.Ordinal);
     private string? _saved;
     private (string Key, string Message)? _projectError;
+
+    private IReadOnlyList<TargetDto> _targets = [];
+    private string _targetKey = "";
+    private string _targetChannel = "";
+    private bool _targetApproval;
+    private TargetDto? _addedTarget;
+    private string? _targetError;
+
+    /// <summary>
+    /// The address being typed, and the only place on this page it ever lives. It is sent and forgotten: nothing
+    /// reads it back, because nothing can — <see cref="TargetDto"/> has no address on it and the service returns
+    /// one of those. <b>Do not add a read path for it</b>, here or in the contract: an outbound address is as
+    /// often as not the credential itself, and a field that could be re-rendered would eventually be rendered.
+    /// </summary>
+    private string _targetAddress = "";
+
+    private string _taskId = "";
+    private int _taskPriority;
+    private string _cancelReason = "";
+    private string? _taskNote;
+    private string? _taskError;
 
     /// <summary>
     /// The registration token, shown exactly once and then gone. The hub keeps only its hash, so once this
@@ -231,6 +393,10 @@
     {
         await SuggestAsync();
         await LoadProjectsAsync();
+        await LoadTargetsAsync();
+        // The select needs something standing before the founder touches it, and the first registered channel is
+        // as good an answer as this page can give: the order is the container's, not a preference of this file's.
+        _targetChannel = Channels.Select(c => c.Name).FirstOrDefault() ?? "";
     }
 
     /// <summary>
@@ -318,11 +484,28 @@
         return normalized == "validator" || normalized.EndsWith("-validator", StringComparison.Ordinal);
     }
 
-    /// <summary>Re-infers as the key is typed, so what the box shows is always what this key would mean.</summary>
+    /// <summary>
+    /// What the checkbox should read after a keystroke in the key field. Inference is a <em>default</em>, for a
+    /// key nobody has ruled on yet, and it stops the moment the founder touches the box: an override that the
+    /// next keystroke revokes is not an override. Without the latch a founder who unticks the box and then goes
+    /// back to fix a typo in the key gets it silently re-ticked and defines the validator they just declined —
+    /// and the control exists so they can see <em>and</em> disagree with what was inferred, not only see it.
+    /// </summary>
+    internal static bool ValidatorAfterKeystroke(string key, bool current, bool touched) =>
+        touched ? current : InfersValidator(key);
+
+    /// <summary>Re-infers as the key is typed, until the founder has said what they want.</summary>
     private void RoleKeyTyped(ChangeEventArgs e)
     {
         _roleKey = e.Value?.ToString() ?? "";
-        _roleIsValidator = InfersValidator(_roleKey);
+        _roleIsValidator = ValidatorAfterKeystroke(_roleKey, _roleIsValidator, _roleValidatorTouched);
+    }
+
+    /// <summary>Touching the box is the founder ruling on this entry, and it is what ends the inference.</summary>
+    private void ValidatorToggled(ChangeEventArgs e)
+    {
+        _roleIsValidator = e.Value is true;
+        _roleValidatorTouched = true;
     }
 
     private async Task DefineRoleAsync()
@@ -334,6 +517,9 @@
         try
         {
             _defined = await Roles.DefineAsync(Caller.Founder, new DefineRoleRequest(_roleKey, brief, _roleIsValidator));
+            // The ruling was about the role just defined. The next key typed into this field is a different
+            // entry and infers again, or the founder's one refusal would quietly govern every role after it.
+            _roleValidatorTouched = false;
         }
         catch (Muthur.Core.MuthurException ex)
         {
@@ -414,6 +600,74 @@
             // The service's own words, and the boxes keep what was typed into them: a refused validator name is
             // something to correct, not to type again from the beginning.
             _projectError = (key, ex.Message);
+        }
+    }
+
+    // -- Outbound -----------------------------------------------------------------------------------------
+
+    private async Task LoadTargetsAsync() => _targets = await Outbound.TargetsAsync();
+
+    private async Task AddTargetAsync()
+    {
+        ClearOnce();
+        _targetError = null;
+        _addedTarget = null;
+        try
+        {
+            _addedTarget = await Outbound.DefineTargetAsync(
+                Caller.Founder, new DefineTargetRequest(_targetKey, _targetChannel, _targetAddress, _targetApproval));
+            // Written, then dropped. The founder saw what they typed; from here the hub is the only holder of it,
+            // which is the state this control exists to reach rather than a tidiness the page performs.
+            _targetAddress = "";
+            await LoadTargetsAsync();
+        }
+        catch (Muthur.Core.MuthurException ex)
+        {
+            // The service's own words, and the address stays in the box: a refusal about the key or the channel
+            // must not cost the founder a credential they now have to fetch again from wherever it came from.
+            _targetError = ex.Message;
+        }
+    }
+
+    // -- Tasks --------------------------------------------------------------------------------------------
+
+    private Task SetTaskPriorityAsync() => ActOnTaskAsync(async () =>
+    {
+        var task = await Tasks.SetPriorityAsync(Caller.Founder, _taskId, new SetPriorityRequest(_taskPriority));
+        return $"{task.Id} is priority {task.Priority}.";
+    });
+
+    private Task CancelTaskAsync() => ActOnTaskAsync(async () =>
+    {
+        // Blank is no reason, not an empty one, which is what the CLI sends when --reason is left off.
+        var reason = _cancelReason.Trim() is { Length: > 0 } text ? text : null;
+        var task = await Tasks.CancelAsync(Caller.Founder, _taskId, new CancelTaskRequest(reason));
+        return $"{task.Id} is {task.State.ToWire()}.";
+    });
+
+    private Task ReopenTaskAsync() => ActOnTaskAsync(async () =>
+    {
+        var task = await Tasks.ReopenAsync(Caller.Founder, _taskId);
+        return $"{task.Id} is {task.State.ToWire()}.";
+    });
+
+    /// <summary>
+    /// One shape for all three buttons: the service's answer, or the service's refusal, and the fields keep what
+    /// was typed either way — a task id refused because the task is in the wrong state is one to press a
+    /// different button on, not one to type again.
+    /// </summary>
+    private async Task ActOnTaskAsync(Func<Task<string>> act)
+    {
+        ClearOnce();
+        _taskError = null;
+        _taskNote = null;
+        try
+        {
+            _taskNote = await act();
+        }
+        catch (Muthur.Core.MuthurException ex)
+        {
+            _taskError = ex.Message;
         }
     }
 
