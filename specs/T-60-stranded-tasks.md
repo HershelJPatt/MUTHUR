@@ -174,3 +174,77 @@ muthur log --limit 20           # no staffing for that task
 
 - Whether the overseer role itself should be a hub-staffed session. Its own task.
 - `_lastAction` does not distinguish a resumption from a fresh start on the founder's card.
+
+## Amendment 1 — the premise was false, and the task is smaller and sharper than it looked
+
+The implementer refused to build this and was right. Everything above rests on "a task whose orchestrator
+dies sits in `in_progress` for ever". It does not.
+
+`TaskService.SweepExpiredClaimsAsync` returns every lapsed in-progress task to the backlog, unconditionally,
+and `LeaseSweeper` runs it every **30 seconds** and once at startup. `ReturnToBacklog` clears State, Owner
+and ClaimExpires and **keeps Branch, SpecPath, PrUrl and Priority**. T-59's existing
+`PlanOrchestratorsAsync` then staffs it from the backlog with no change at all. Verified in the source, and
+by the implementer against a real hub with a fake clock:
+
+```
+planned while in_progress: 0; swept: 1; state after sweep: Backlog; owner: (none);
+spec kept: specs/T-1.md; planned after sweep: [T-1]
+```
+
+The sweeper and the conductor are registered under the same `BackgroundServices` flag, so a hub that is not
+sweeping is not staffing either.
+
+**The Context section's evidence was misread, and the misreading was mine.** T-13 and T-17 were released by
+hand at 04:39; their claims ran to 05:03. Nothing was stranded — the overseer simply did not wait the
+remaining twenty-four minutes. That is evidence about a human's patience, not about the machine.
+
+### What is actually wrong
+
+The task comes back, but it comes back **anonymous**. `PlanOrchestratorsAsync` cannot tell a task that has
+never been started from one that already carries a frozen spec and a half-built branch, so the second kind
+is handed the fresh-start prompt — *"Claim {TaskKey} … and take it from claim to landing"* — and a session
+begins designing work that is already designed. That is the duplication this task exists to prevent, and the
+original Design never reached it, because it was watching a state the sweeper had already cleared.
+
+### The design, replaced
+
+1. **`PlanOrchestratorsAsync` keeps its backlog query unchanged.** No new source. The `stranded` source
+   described above is **dropped**: the sweeper's 30-second interval beats the conductor's 60-second one, so
+   it would be dead code in production, and it is what created the contradiction in Finding 3 below.
+2. **`Resuming` is set from the work already attached**, not from the state: `true` for any planned task
+   whose `SpecPath` or `Branch` is non-null. A task in `backlog` carrying either has been worked before —
+   `task spec` requires an owner, so there is no other way to acquire one.
+3. **`PreviousOwner` comes from the ledger**, because the sweeper cleared the column. The newest
+   `task.claim_expired` for the task carries `{ agent }`; one grouped query in the same shape as the existing
+   `built` and `CapStateAsync` reads.
+4. **Order:** tasks carrying prior work before untouched ones, both `OrderByDescending(Priority).ThenBy(Id)`.
+   That is the original "resuming beats starting" intent, expressed against the state that actually occurs.
+5. **The takeover prompt ships exactly as written above.** Only its trigger changes.
+6. **The `kit/core/orchestrate.md` heartbeat sentence stays.** It is true and useful on its own: a session
+   silent longer than the claim lease loses its task to the sweeper, which is precisely what happened to the
+   overseer on T-59 at 14:00.
+
+### Finding 3 dissolves rather than needing a fix
+
+The implementer found that Design and Acceptance contradicted each other: `RunOrchestratorSessionAsync`
+judges a session productive via `StillInBacklogAsync`, so a resuming session whose task is `InProgress`
+would always be credited as productive and never stall. With the stranded source dropped, every planned task
+is in `backlog` when planned and leaves it when claimed, so the existing check is correct as written and
+needs no change. Removing the source removes the contradiction.
+
+### Condition 3 was not doing the work the spec claimed
+
+`HeartbeatAsync` sets `LastHeartbeat` **and** renews the claim in one mutation, so at the default 30-minute
+lease "the claim lapsed" already implies "silent for 30 minutes", which implies stale at 180 seconds. The
+staleness test only does independent work for a claim taken with an explicit short lease
+(`muthur task claim T-n --lease 1`) or inside the plan-to-launch race. Neither is the case the spec argued
+from. With the stranded source gone the question is moot, and it is recorded here so nobody reinstates the
+argument later.
+
+### Left for the founder, not decided here
+
+Whether `SweepExpiredClaimsAsync` should stop returning tasks to the backlog and leave them `in_progress`
+until someone takes them over — keeping the owner visible and giving `LeasePolicy.IsClaimable`'s takeover
+path something to do. That is arguably the better world and it is a founder-level change: the board, `muthur
+task list --state backlog`, and `Sweep_returns_lapsed_tasks_to_the_backlog` in `TaskLeaseTests.cs:95` all
+rest on today's behaviour. Its own task if it is ever wanted; T-60 does not need it.
