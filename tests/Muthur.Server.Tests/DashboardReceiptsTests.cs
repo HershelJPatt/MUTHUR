@@ -25,6 +25,14 @@ public sealed class DashboardReceiptsTests : IDisposable
     private Task<string> PageAsync(int? hours = null) =>
         _hub.CreateClient().GetStringAsync("/receipts" + (hours is { } h ? $"?hours={h}" : ""));
 
+    /// <summary>
+    /// The page at a window spelled exactly as a hand would type it, junk included — which is the point of a URL
+    /// whose controls are links. Unlike <see cref="PageAsync"/> this never goes through an int, so what the server
+    /// does with a value it cannot read is the thing under test rather than something the test spells away.
+    /// </summary>
+    private Task<HttpResponseMessage> TypedAsync(string hours) =>
+        _hub.CreateClient().GetAsync($"/receipts?hours={Uri.EscapeDataString(hours)}");
+
     // -- the fixture, the same spend Unit B's tests read as JSON ------------------------------------------------
 
     private async Task<HttpClient> RegisterAsync(string name, string harness, string model, string tier, string account)
@@ -238,6 +246,65 @@ public sealed class DashboardReceiptsTests : IDisposable
         var row = Regex.Match(page, "<div class=\"btn-row\">.*?</div>", RegexOptions.Singleline);
         Assert.True(row.Success, "the page renders no window selector at all");
         return row.Value;
+    }
+
+    /// <summary>
+    /// A window the page cannot read is a window, not a crash. Making the controls links made the URL something a
+    /// founder edits by hand, and the first things a hand types are the labels the controls print — "24h", "7d" —
+    /// neither of which is a number. The design already says what to do with a window it cannot honour: clamp it,
+    /// never refuse it. An unreadable one is the same class of mistake, so it reads as the absent window.
+    /// </summary>
+    [Theory]
+    [InlineData("7d")]              // the label on control 2
+    [InlineData("24h")]             // the label on control 1
+    [InlineData("abc")]
+    [InlineData("1e9")]
+    [InlineData("24,168")]          // two windows, pasted
+    [InlineData("null")]
+    [InlineData(" ")]
+    [InlineData("")]                // ?hours= with nothing after it
+    [InlineData("9999999999999")]   // a number, but not one an int can hold
+    public async Task A_window_the_page_cannot_read_renders_rather_than_erroring(string hours)
+    {
+        var response = await TypedAsync(hours);
+
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        Assert.DoesNotContain("An unhandled error", await response.Content.ReadAsStringAsync());
+    }
+
+    /// <summary>The label the page itself prints is not a number, so it falls back to the default window.</summary>
+    [Fact]
+    public async Task The_window_the_page_cannot_read_falls_back_to_twenty_four_hours()
+    {
+        var row = WindowRow(await (await TypedAsync("7d")).Content.ReadAsStringAsync());
+
+        Assert.Matches("<a class=\"btn btn-on\"[^>]*href=\"/receipts\\?hours=24\"", row);
+        Assert.DoesNotMatch("class=\"btn btn-on\"[^>]*>7d<", row);
+    }
+
+    /// <summary>
+    /// A window too large for an int is clamped like any other number too large, because the page saturates it to
+    /// int.MaxValue and hands the clamping to <c>ReceiptsService</c>, where the 1..720 bounds live. Read through
+    /// the window the panel says it read: the marker stays on the window that was asked for, which for any number
+    /// outside the three controls — 9999999999999 as much as 100000 — is none of them.
+    /// </summary>
+    [Fact]
+    public async Task A_window_too_large_for_an_int_is_clamped_to_thirty_days_rather_than_refused()
+    {
+        await SpendAsync();
+
+        var huge = Since(await (await TypedAsync("9999999999999")).Content.ReadAsStringAsync());
+
+        Assert.Equal(Since(await PageAsync(720)), huge);
+        Assert.NotEqual(Since(await PageAsync()), huge);
+    }
+
+    /// <summary>The window the panel reports having read, which is the clamped one and not the one requested.</summary>
+    private static string Since(string page)
+    {
+        var since = Regex.Match(page, "<span class=\"panel-sub\">since ([^<]+)</span>");
+        Assert.True(since.Success, "the panel does not say which window it read");
+        return since.Groups[1].Value;
     }
 
     /// <summary>
