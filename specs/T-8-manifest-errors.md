@@ -672,3 +672,92 @@ half-installed repository — five of the six above do. The Goal is amended to w
 Making the write loop transactional — stage, then move into place, then roll back on failure — closes the
 remainder in one move and is the honest end of this line of work. It is a real design change to `Install` and
 deserves its own spec and its own verdict, so it is filed rather than folded in here.
+
+## Amendment 6 — a measurement I did not take, and the line this task stops at (2026-09-19)
+
+Units C and D are in and the six shapes of Amendment 5 are closed. Three corrections, one of them mine.
+
+### 1. The reserved-device rule over-refuses, because I asserted instead of measuring
+
+Amendment 5 said `NUL` crashes as a directory component "while `CON` and `COM1` do not", and then told the
+implementer to refuse the whole list `CON PRN AUX NUL COM1-9 LPT1-9`. Those two sentences contradict each
+other and I did not notice. The implementer measured `Directory.CreateDirectory` before writing the rule:
+
+```
+NUL, nul, "NUL ", "NUL."   -> DirectoryNotFoundException
+CON  PRN  AUX  COM0  COM1  LPT1  NUL.md  CON.md  COM1.md   -> all create real directories
+```
+
+**Only `NUL` fails on this platform.** The other eight names install cleanly, so refusing them refuses
+manifests that work. The implementer built the frozen list anyway — correctly, the spec is frozen — and
+flagged it as an over-refusal and a behaviour change on previously-passing strings.
+
+**Narrow the rule to `NUL`.** Two reasons, and the second is the one that settles it:
+
+- The measurement says `NUL` is the crash. Nothing else on the list is.
+- **Amendment 3 already decided this question the other way for file names.** It measured `CON`, `PRN`,
+  `AUX`, `COM1` and `LPT1` as *file* names, found they install as real files, and deliberately left them
+  alone. Refusing the same names one path component earlier, where they also work, would make the two
+  decisions contradict each other for no measured reason.
+
+Keep the `TrimEnd(' ', '.')` before the comparison — `"NUL "` and `"NUL."` are the same device — and keep the
+`OperatingSystem.IsWindows()` gate. The message stays as written.
+
+### 2. F4 — a directory component Win32 trims to nothing
+
+The implementer's own attack found eight further crashes in four families. Seven are decided by the
+*repository*, not the manifest, and are filed below. **One family is decidable from the manifest string
+alone**, so it is in scope and breaks the Goal as this spec now words it:
+
+```
+to: "docs /x.md"   (trailing space)   -> DirectoryNotFoundException, leaves 1 entry behind
+to: ".../x.md"                        -> DirectoryNotFoundException
+to: "   /x.md"                        -> DirectoryNotFoundException
+```
+
+Win32 trims trailing spaces and dots from a path component; a component made only of them trims to nothing,
+and the directory cannot be created. Same class as rules 17, 18 and 19 — a component that resolves but cannot
+be created — and the same fix shape. Refuse a `to` any of whose components is empty after
+`TrimEnd(' ', '.')`, checked with the other `to` rules:
+
+```
+"<manifestPath>: entry <n> writes \"<to>\", whose component \"<component>\" is only spaces and dots, which this platform trims to nothing."
+```
+
+This also repairs a message the implementer flagged as imprecise: `to: "   "` is currently refused as *"an
+existing directory in the repository"*, which is true only because Win32 trimmed it to the repository root.
+After this rule it is refused for what it actually is.
+
+### 3. What this task does not close, and will not
+
+The other seven crashes need a particular repository, not a particular manifest:
+
+| Family | Shape | Filed |
+|---|---|---|
+| F1 | an ancestor of `to` already exists as a **file** — the exact mirror of the rule Unit D added | T-56 |
+| F2 | the repository already holds a **directory** named `.gitignore` or `muthur.project.json` — **every install crashes, including the three shipped kits, with no manifest involved** | T-56 |
+| F3 | the destination exists and is read-only | T-56 |
+
+And one that is not a crash at all but defeats rule 14's central claim:
+
+> **Containment does not survive a directory junction.** With `repo\link` a junction to somewhere else,
+> `to: "link/escaped.md"` exits **0** and writes the file outside the repository — confirmed by reading the
+> content back from the target. `Path.GetFullPath` normalises the string and does not follow reparse points,
+> so rule 14 is satisfied by a path that does not stay where it resolves. Filed as **T-57**, because rule
+> 14's whole sentence is "a manifest can no longer choose where its files land", and this is the one way it
+> still can.
+
+None of the eight is a regression: the pre-change binary crashes on 18 of the same 25 manifests, this one on
+8, and after this amendment on 3 — all repository-decided.
+
+**The Goal stands as Amendment 5 amended it** — every manifest shape anyone has found is refused before a
+byte is written — and after change 2 above that is true for the first time. It was never a claim about
+repository state, and F1–F3 are exactly that. Note that **T-55's transactional write phase does not fix F2
+either**: the fault is that `Install` writes its own two files without checking what is already at those
+paths.
+
+### Also recorded
+
+The guard caught **nothing in 136 manifests** — double the previous unit's sample, same result, same reason.
+And `to: "."`, `to: "briefs/.."` and `to: "   "` never reach rule 19 because rule 14 refuses them one step
+earlier as outside the repository, which is the better sentence; left alone deliberately.
