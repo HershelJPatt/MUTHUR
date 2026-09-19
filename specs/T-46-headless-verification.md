@@ -268,3 +268,41 @@ creates it is worse than the scope.
 `Invoke` registers `Globals.AddTo(root)` alongside `KitCommands.AddTo(root)`. Section 5 named only the latter;
 `Output.Emit` reads `Globals.Pretty` off the parse result, and `HubIsolationTests.Invoke` — the idiom this spec
 told the implementer to follow — registers it for that reason. The spec was underspecified; the code is right.
+
+## Proof (2026-09-19)
+
+Integrated branch, `TEMP`/`TMP` on a fresh scratch directory:
+
+```
+dotnet build   →  0 Warning(s), 0 Error(s)
+dotnet test
+  Muthur.Launch.Tests    23/23
+  Muthur.Core.Tests      3708/3708
+  Muthur.Cli.Tests       60/60      (55 before this task)
+  Muthur.Server.Tests    233/233
+```
+
+The manual half, which is the point of the task — a CLI built from this branch with
+`scripts/install.ps1 -Destination ./artifacts/t46`, installing into three scratch repositories:
+
+```
+claude exit=0 / codex exit=0 / generic exit=0
+
+claude   section=True rules=True defect=True template=True
+codex    section=True rules=True defect=True template=True
+generic  section=True rules=True defect=True template=True
+
+unexpanded {{core: tokens anywhere?  none
+```
+
+`section` is `no browser, no GUI, no hands`; `rules` is `no browser, no GUI and no human` in the installed
+procedure; `defect` is `is a defect in the spec`; `template` is the same phrase in the installed
+`specs/_TEMPLATE.md`. The claude row is the one that matters most: it reaches the procedure only through
+`{{core:orchestrate.md}}`, the expansion that had no test before this task.
+
+The rule-removal check, run by the implementer in the three steps Amendment 1 specifies: deleting the section
+failed exactly the section assertion on all three harnesses and left the Rules assertion passing; deleting the
+`## Rules` bullet did the reverse; restoring both returned the suite to green. The template-drift test was
+proved to be a real guard by appending four bytes to `specs/_TEMPLATE.md` and watching it fail.
+
+No browser was used to validate this task, which is the rule it adds.
