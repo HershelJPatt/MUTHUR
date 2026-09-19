@@ -99,11 +99,24 @@ New file `tests/Muthur.Cli.Tests/HubIsolationTests.cs`:
 
 ### What a validator should check, and it is not a test
 
-That the isolation holds when the environment is hostile rather than absent. Run
-`dotnet test tests/Muthur.Cli.Tests` with `MUTHUR_URL` and `MUTHUR_TOKEN` exported to real values — the live
-hub's address and a real token — and confirm the suite still passes and the live hub records nothing. A
-module initializer overwrites an inherited value; that is the claim, and it is only worth anything if someone
-checks it with a hostile environment rather than a clean one.
+That the isolation holds when the environment is **hostile rather than absent** — a module initializer
+overwriting an inherited value is the claim, and checking it with a clean environment proves only that it
+fills an absent one.
+
+**Do not point it at the live hub.** The first version of this section told a validator to export the live
+hub's address and a real founder token; `conductor-validator` correctly refused, its approval review
+rejecting the run for production mutation risk. That refusal was right and the instruction was wrong — a
+spec should not ask a validator to aim a write at production to prove a safety property.
+
+**That run has already been done by the orchestrator**, whose authority covers it, and its evidence is in
+the Proof section below: ledger seq 907 before and 907 after, 43 tests passing, with the live address and a
+real founder token exported. A validator does not need to repeat it.
+
+What a validator should do instead, which tests the same claim with nothing at stake: bring up a **scratch**
+hub (`scripts/install.ps1 -Destination ./artifacts/<name>`, scratch `MUTHUR_HOME` and `MUTHUR_URL`), export
+that scratch address and its founder token, and run `dotnet test tests/Muthur.Cli.Tests`. The suite must pass
+and the scratch hub's ledger must not move. An inherited value is an inherited value; it does not have to be
+production's for the override to be proven.
 
 ## Units of work
 
@@ -199,3 +212,15 @@ changing `src/`, which this spec forbids. Recorded rather than quietly accepted.
 in the unsafe state was present. The environment test then failed with
 `Expected: "http://127.0.0.1:1"  Actual: "http://127.0.0.1:7420"` — this spec's central claim demonstrated
 literally — and was restored immediately.
+
+## State at handover (2026-09-19)
+
+Complete, green and pushed on `task/T-36-cli-isolation`. Nothing is outstanding in the code.
+
+It was blocked once, and the blocker was this spec rather than the work: it instructed a validator to run
+the isolation check against the **live** hub with a real founder token, and `conductor-validator`'s approval
+review rejected that for production mutation risk. The validator was right. The instruction is now corrected
+above — the live-hub run was performed by the orchestrator and its evidence is recorded; a validator repeats
+the same claim against a scratch hub instead.
+
+Resubmitted after that correction. If it blocks again, the reason will be new.
