@@ -23,6 +23,11 @@ public static class SystemCommands
         });
         root.Subcommands.Add(doctor);
 
+        var hours = new Option<int?>("--hours") { Description = "The window to report on, in hours (default 24, at most 720)." };
+        var receipts = new Command("receipts", "What this organization spent in a window: sessions by harness and account, which tasks consumed them, and where the time went.") { hours };
+        receipts.SetAction(async (parse, ct) => Output.Emit(parse, await HubClient.For(parse).GetAsync(Routes.Receipts + ReceiptsQuery(parse.GetValue(hours)), ct)));
+        root.Subcommands.Add(receipts);
+
         var up = new Command("up", "Start the hub server in the background (no-op if already running).");
         up.SetAction(UpAsync);
         root.Subcommands.Add(up);
@@ -79,6 +84,13 @@ public static class SystemCommands
     /// touches nothing and keeps the default.
     /// </summary>
     internal static TimeSpan? DoctorTimeout(bool offline) => offline ? null : TimeSpan.FromSeconds(180);
+
+    /// <summary>
+    /// The window as a query string. An absent --hours sends no parameter, so the hub's own default of 24 stands;
+    /// a number outside 1..720 is sent as typed rather than refused here, because the hub clamps it and a founder
+    /// asking for 100000 hours wants everything, not an argument error.
+    /// </summary>
+    internal static string ReceiptsQuery(int? hours) => hours is { } h ? "?hours=" + h : "";
 
     /// <summary>A report that reached us and contains a failed check is exit 1; a warning never is.</summary>
     internal static int DoctorExitCode(ApiResult result, int emitted)

@@ -576,6 +576,10 @@ namespace Muthur.Data.Migrations
                         .HasColumnType("TEXT")
                         .HasColumnName("brief_md");
 
+                    b.Property<int>("Holders")
+                        .HasColumnType("INTEGER")
+                        .HasColumnName("holders");
+
                     b.Property<bool>("IsValidator")
                         .HasColumnType("INTEGER")
                         .HasColumnName("is_validator");
@@ -595,19 +599,19 @@ namespace Muthur.Data.Migrations
                         .HasColumnType("TEXT")
                         .HasColumnName("role_key");
 
-                    b.Property<long>("AcquiredAt")
-                        .HasColumnType("INTEGER")
-                        .HasColumnName("acquired_at");
-
                     b.Property<Guid>("AgentId")
                         .HasColumnType("TEXT")
                         .HasColumnName("agent_id");
+
+                    b.Property<long>("AcquiredAt")
+                        .HasColumnType("INTEGER")
+                        .HasColumnName("acquired_at");
 
                     b.Property<long>("LeaseExpires")
                         .HasColumnType("INTEGER")
                         .HasColumnName("lease_expires");
 
-                    b.HasKey("RoleKey");
+                    b.HasKey("RoleKey", "AgentId");
 
                     b.HasIndex("AgentId");
 
@@ -629,6 +633,14 @@ namespace Muthur.Data.Migrations
                         .HasColumnType("INTEGER")
                         .HasColumnName("at");
 
+                    b.Property<long?>("ClaimExpires")
+                        .HasColumnType("INTEGER")
+                        .HasColumnName("claim_expires");
+
+                    b.Property<Guid?>("ClaimedByAgentId")
+                        .HasColumnType("TEXT")
+                        .HasColumnName("claimed_by_agent_id");
+
                     b.Property<string>("Evidence")
                         .HasColumnType("TEXT")
                         .HasColumnName("evidence");
@@ -647,9 +659,15 @@ namespace Muthur.Data.Migrations
                         .HasColumnType("TEXT")
                         .HasColumnName("verdict");
 
+                    b.Property<long>("WaitingSince")
+                        .HasColumnType("INTEGER")
+                        .HasColumnName("waiting_since");
+
                     b.HasKey("Id");
 
                     b.HasIndex("AgentId");
+
+                    b.HasIndex("ClaimedByAgentId");
 
                     b.HasIndex("TaskId", "ValidatorKey")
                         .IsUnique();
@@ -775,8 +793,8 @@ namespace Muthur.Data.Migrations
                         .IsRequired();
 
                     b.HasOne("Muthur.Core.Entities.Role", null)
-                        .WithOne()
-                        .HasForeignKey("Muthur.Core.Entities.RoleHold", "RoleKey")
+                        .WithMany()
+                        .HasForeignKey("RoleKey")
                         .OnDelete(DeleteBehavior.Cascade)
                         .IsRequired();
 
@@ -790,6 +808,11 @@ namespace Muthur.Data.Migrations
                         .HasForeignKey("AgentId")
                         .OnDelete(DeleteBehavior.SetNull);
 
+                    b.HasOne("Muthur.Core.Entities.Agent", "ClaimedBy")
+                        .WithMany()
+                        .HasForeignKey("ClaimedByAgentId")
+                        .OnDelete(DeleteBehavior.SetNull);
+
                     b.HasOne("Muthur.Core.Entities.WorkTask", null)
                         .WithMany()
                         .HasForeignKey("TaskId")
@@ -797,6 +820,8 @@ namespace Muthur.Data.Migrations
                         .IsRequired();
 
                     b.Navigation("Agent");
+
+                    b.Navigation("ClaimedBy");
                 });
 
             modelBuilder.Entity("Muthur.Core.Entities.WorkTask", b =>

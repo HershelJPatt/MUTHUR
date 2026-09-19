@@ -233,6 +233,16 @@ public sealed partial class OutboundService(Ledger ledger, IEnumerable<IOutbound
             return rows.OrderBy(o => o.Id).Select(ToDto).ToList();
         }, ct);
 
+    /// <summary>How many messages sit in <paramref name="status"/>, and when the oldest arrived there.</summary>
+    /// <remarks>The count the founder is told is the number waiting, not the number a capped list happened to fit.</remarks>
+    public Task<(int Count, DateTimeOffset? Oldest)> SummaryAsync(OutboundStatus status, CancellationToken ct = default) =>
+        ledger.ReadAsync(async (db, _) =>
+        {
+            var waiting = db.OutboundMessages.Where(o => o.Status == status);
+            var count = await waiting.CountAsync(ct);
+            return (count, count == 0 ? null : (DateTimeOffset?)await waiting.MinAsync(o => o.CreatedAt, ct));
+        }, ct);
+
     public Task<OutboundDto> GetAsync(string id, CancellationToken ct = default) =>
         ledger.ReadAsync(async (db, _) => ToDto(await LoadAsync(db, id, ct)), ct);
 

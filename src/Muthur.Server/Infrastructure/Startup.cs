@@ -26,7 +26,10 @@ public static class Startup
         // nothing and add back the two that have a reader.
         builder.Logging.ClearProviders();
         builder.Logging.AddConsole();
-        builder.Logging.AddProvider(new FileLoggerProvider(Path.Combine(options.DataDir, MuthurEnvironment.LogFile)));
+        // A factory, not AddProvider(instance): nobody disposes an instance the container did not create, so the
+        // handle on muthur.log survived the hub and was released only by finalization. The creator is the disposer.
+        builder.Logging.Services.AddSingleton<ILoggerProvider>(
+            _ => new FileLoggerProvider(Path.Combine(options.DataDir, MuthurEnvironment.LogFile)));
 
         builder.Services.AddSingleton(TimeProvider.System);
         builder.Services.AddSingleton<InstanceInfo>();
@@ -75,6 +78,7 @@ public static class Startup
         builder.Services.AddSingleton<IPullRequestOpener, GhPullRequestOpener>();
         builder.Services.AddSingleton<ITaskLander, GitLander>();
         builder.Services.AddSingleton<DoctorService>();
+        builder.Services.AddSingleton<ReceiptsService>();
         // Registered in the order DoctorService reports them, so the list reads like the report.
         builder.Services.AddSingleton<IDoctorCheck, DoctorIngestCheck>();
         builder.Services.AddSingleton<IDoctorCheck, DoctorLoggingCheck>();

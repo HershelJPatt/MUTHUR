@@ -15,6 +15,10 @@
       "to": ".muthur/procedures/implementer.md"
     },
     {
+      "from": "../core/specialist.md",
+      "to": ".muthur/procedures/specialist.md"
+    },
+    {
       "from": "../core/validate.md",
       "to": ".muthur/procedures/validate.md"
     },
@@ -35,6 +39,11 @@
     {
       "from": "../briefs/comms-oncall.md",
       "to": "briefs/comms-oncall.md",
+      "mode": "create"
+    },
+    {
+      "from": "../briefs/knowledge-oncall.md",
+      "to": "briefs/knowledge-oncall.md",
       "mode": "create"
     },
     {

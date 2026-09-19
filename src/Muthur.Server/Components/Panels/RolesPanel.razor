@@ -1,0 +1,61 @@
+@inherits LivePanel
+@inject RoleService Roles
+
+<section class="panel">
+    <div class="panel-head">
+        <span class="panel-title">Roles</span>
+        <span class="panel-sub">@_held of @_roles.Count held</span>
+    </div>
+    <div class="panel-body">
+        @if (_roles.Count == 0)
+        {
+            <div class="empty">no roles defined · muthur role define &lt;key&gt; --brief-file … --founder</div>
+        }
+        @foreach (var r in _roles)
+        {
+            <div class="agent">
+                <div class="agent-head">
+                    <span class="agent-name">@r.Key</span>
+                    @if (r.IsValidator)
+                    {
+                        <span class="tag">validator</span>
+                    }
+                    @if (r.Capacity > 1)
+                    {
+                        <span class="agent-age">@r.Holders.Count of @r.Capacity</span>
+                    }
+                </div>
+                <div class="agent-meta">
+                    @if (r.Holders.Count == 0)
+                    {
+                        <span class="pill">unheld</span>
+                    }
+                    @foreach (var h in r.Holders)
+                    {
+                        <span class="pill pill-role">@h.Agent</span>
+                    }
+                </div>
+            </div>
+        }
+    </div>
+</section>
+
+@code {
+    private List<RoleDto> _roles = [];
+    private int _held;
+
+    // A lease lapses with nothing written, so refresh on the clock too.
+    protected override TimeSpan? ClockInterval => TimeSpan.FromSeconds(15);
+
+    protected override bool IsRelevant(Muthur.Core.Entities.LedgerEvent e) =>
+        e.Type.StartsWith("role.", StringComparison.Ordinal)
+        || e.Type.StartsWith("agent.", StringComparison.Ordinal);
+
+    protected override async Task LoadAsync()
+    {
+        var roles = await Roles.ListAsync();
+        // Alphabetical, not held-first: a rail whose rows move as leases come and go is harder to read.
+        _roles = roles.OrderBy(r => r.Key, StringComparer.Ordinal).ToList();
+        _held = roles.Count(r => r.Holders.Count > 0);
+    }
+}

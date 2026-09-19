@@ -20,6 +20,8 @@ public sealed record AskRequest(string Question, string? Task = null, IReadOnlyL
 
 public sealed record AnswerRequest(string Answer);
 
+/// <param name="BlocksTask">The task this asks about is sitting in 'blocked', waiting for the answer.</param>
+/// <param name="Dependents">Unfinished tasks naming that blocked task as their parent: work stopped behind this one.</param>
 public sealed record FounderRequestDto(
     int Id,
     string? Task,
@@ -30,4 +32,6 @@ public sealed record FounderRequestDto(
     string Status,
     string? Answer,
     DateTimeOffset CreatedAt,
-    DateTimeOffset? AnsweredAt);
+    DateTimeOffset? AnsweredAt,
+    bool BlocksTask = false,
+    int Dependents = 0);

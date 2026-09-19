@@ -28,9 +28,42 @@ public sealed class RoleService(Ledger ledger, LeasePolicy leases)
             }
             if (request.Brief is not null) role.BriefMd = request.Brief;
             if (request.IsValidator is { } validator) role.IsValidator = validator;
+            if (request.Holders is { } holders)
+            {
+                if (holders < 1)
+                    throw Fail.Rule("invalid_holders", "A role needs at least one holder.");
+                // Lowering the ceiling evicts nobody: existing holds stand until they lapse or are released.
+                role.Holders = holders;
+            }
+            // Read once: the live holds decide whether this definition is legal, and they are the answer to it.
+            var live = Ordered(await m.Db.RoleHolds.Include(h => h.Agent)
+                .Where(h => h.RoleKey == key && h.LeaseExpires > m.Now).ToListAsync(ct));
+
+            // "Strictly one holder" is a fact about the post, so it is checked against the role's state after
+            // both fields have been applied, and against what is standing — not against the argument that
+            // happened to be passed. Two ways to break it, and both are refused rather than fixed silently:
+            if (!role.IsValidator)
+            {
+                // The ceiling. "--validator true --holders 3" works in one call; "--validator false" alone on a
+                // role already at three is refused, because how many may hold a post is the founder's sentence
+                // to write, not a number the hub picks while answering a different question.
+                if (role.Holders > 1)
+                    throw Fail.Rule("single_holder", $"Only a validator role may have more than one holder: '{key}' is a standing post, and who holds it has to have one answer.");
+
+                // The occupancy. Setting the ceiling to one is not enough: lowering a capacity evicts nobody by
+                // design, and a holder renews its own lease, so a post converted while two agents held it would
+                // read "1" and be held by two of them with no way to lose one. Refused instead of choosing whom
+                // to evict — whose role it is cannot be decided by a call that was about something else.
+                if (live.Count > 1)
+                    throw Fail.Rule("single_holder",
+                        $"'{key}' cannot become a standing post while {live.Count} agents hold it: {string.Join(", ", live.Select(h => h.Agent?.Name))}. " +
+                        "Lowering a capacity never evicts anyone, so the post would read one holder and have several. Release all but one first.");
+            }
             role.UpdatedAt = m.Now;
-            m.Record(created ? "role.defined" : "role.updated", payload: new { role = key, role.IsValidator, briefChars = role.BriefMd.Length });
-            return ToDto(role, null);
+            m.Record(created ? "role.defined" : "role.updated", payload: new { role = key, role.IsValidator, role.Holders, briefChars = role.BriefMd.Length });
+            // The live holds, not an empty list: a define that lowers a capacity below what is standing must not
+            // answer as though it had emptied the role. The very next take will name those holders back.
+            return ToDto(role, live);
         }, ct);
     }
 
@@ -38,8 +71,9 @@ public sealed class RoleService(Ledger ledger, LeasePolicy leases)
         ledger.ReadAsync<IReadOnlyList<RoleDto>>(async (db, now) =>
         {
             var roles = await db.Roles.OrderBy(r => r.Key).ToListAsync(ct);
-            var holds = await db.RoleHolds.Include(h => h.Agent).Where(h => h.LeaseExpires > now).ToDictionaryAsync(h => h.RoleKey, ct);
-            return roles.Select(r => ToDto(r, holds.GetValueOrDefault(r.Key))).ToList();
+            var holds = await db.RoleHolds.Include(h => h.Agent).Where(h => h.LeaseExpires > now).ToListAsync(ct);
+            var byRole = holds.GroupBy(h => h.RoleKey).ToDictionary(g => g.Key, g => (IReadOnlyList<RoleHold>)[.. g]);
+            return roles.Select(r => ToDto(r, byRole.GetValueOrDefault(r.Key, []))).ToList();
         }, ct);
 
     public Task<RoleBriefDto> BriefAsync(string key, CancellationToken ct = default) =>
@@ -57,41 +91,53 @@ public sealed class RoleService(Ledger ledger, LeasePolicy leases)
         {
             var normalized = Normalize(key);
             var role = await m.Db.Roles.SingleOrDefaultAsync(r => r.Key == normalized, ct) ?? throw Fail.NotFound("Role", normalized);
-            var hold = await m.Db.RoleHolds.Include(h => h.Agent).SingleOrDefaultAsync(h => h.RoleKey == normalized, ct);
-
-            if (hold is not null && hold.AgentId != agentId && hold.LeaseExpires > m.Now)
-                throw Fail.Conflict("role_held", $"Role '{normalized}' is held by '{hold.Agent?.Name}' until {hold.LeaseExpires:O}.");
+            // Lapsed rows the sweeper has not reaped yet still occupy this agent's slot in the key, so load them all.
+            var all = await m.Db.RoleHolds.Include(h => h.Agent).Where(h => h.RoleKey == normalized).ToListAsync(ct);
+            var live = Ordered(all.Where(h => h.LeaseExpires > m.Now));
+            var mine = all.SingleOrDefault(h => h.AgentId == agentId);
 
             // Taking a role you already hold just renews it; no ledger noise.
-            var isRenewal = hold is not null && hold.AgentId == agentId && hold.LeaseExpires > m.Now;
-            var previous = hold is not null && hold.AgentId != agentId ? hold.Agent?.Name : null;
-            if (hold is null)
+            var isRenewal = mine is not null && mine.LeaseExpires > m.Now;
+            // Branching on the live count rather than the capacity: a founder may lower a capacity below the
+            // holds already standing, and naming one of the two agents in your way is worse than naming none.
+            if (!isRenewal && live.Count >= role.Holders)
+                throw Fail.Conflict("role_held", live.Count == 1
+                    ? $"Role '{normalized}' is held by '{live[0].Agent?.Name}' until {live[0].LeaseExpires:O}."
+                    : $"Role '{normalized}' is full: {live.Count} of {role.Holders} held by {string.Join(", ", live.Select(h => h.Agent?.Name))}.");
+
+            if (mine is null)
             {
-                hold = new RoleHold { RoleKey = normalized, AgentId = agentId };
-                m.Db.RoleHolds.Add(hold);
+                mine = new RoleHold { RoleKey = normalized, AgentId = agentId };
+                m.Db.RoleHolds.Add(mine);
             }
             if (!isRenewal)
             {
-                hold.AgentId = agentId;
-                hold.AcquiredAt = m.Now;
-                m.Record("role.taken", payload: new { role = normalized, agent = caller.Name, tookOverFrom = previous });
+                mine.AcquiredAt = m.Now;
+                m.Record("role.taken", payload: new { role = normalized, agent = caller.Name, holders = live.Count + 1, capacity = role.Holders });
             }
-            hold.LeaseExpires = m.Now + leases.RoleLease;
-            hold.Agent = await m.Db.Agents.SingleAsync(a => a.Id == agentId, ct);
-            return ToDto(role, hold);
+            mine.LeaseExpires = m.Now + leases.RoleLease;
+            mine.Agent = await m.Db.Agents.SingleAsync(a => a.Id == agentId, ct);
+            return ToDto(role, [.. live.Where(h => h.AgentId != agentId), mine]);
         }, ct);
     }
 
+    /// <summary>Releases the caller's hold; the founder's release clears every hold on the role.</summary>
     public Task ReleaseAsync(Caller caller, string key, CancellationToken ct = default) =>
         ledger.MutateAsync(caller, async m =>
         {
             var normalized = Normalize(key);
-            var hold = await m.Db.RoleHolds.Include(h => h.Agent).SingleOrDefaultAsync(h => h.RoleKey == normalized, ct)
-                ?? throw Fail.Rule("role_not_held", $"Role '{normalized}' is not held by anyone.");
-            if (!caller.IsFounder && hold.AgentId != caller.AgentId)
-                throw Fail.Rule("not_holder", $"Role '{normalized}' is held by '{hold.Agent?.Name}'; only the holder or the founder may release it.");
-            m.Db.RoleHolds.Remove(hold);
-            m.Record("role.released", payload: new { role = normalized, agent = hold.Agent?.Name });
+            var holds = Ordered(await m.Db.RoleHolds.Include(h => h.Agent).Where(h => h.RoleKey == normalized).ToListAsync(ct));
+            if (holds.Count == 0)
+                throw Fail.Rule("role_not_held", $"Role '{normalized}' is not held by anyone.");
+
+            var releasing = caller.IsFounder ? holds : holds.Where(h => h.AgentId == caller.AgentId).ToList();
+            if (releasing.Count == 0)
+                throw Fail.Rule("not_holder", $"Role '{normalized}' is held by '{string.Join("', '", holds.Select(h => h.Agent?.Name))}'; only a holder or the founder may release it.");
+            foreach (var hold in releasing)
+            {
+                m.Db.RoleHolds.Remove(hold);
+                m.Record("role.released", payload: new { role = normalized, agent = hold.Agent?.Name });
+            }
         }, ct);
 
     /// <summary>Removes holds whose lease ran out, so the role shows as open.</summary>
@@ -109,6 +155,12 @@ public sealed class RoleService(Ledger ledger, LeasePolicy leases)
 
     private static string Normalize(string? key) => (key ?? "").Trim().ToLowerInvariant();
 
-    private static RoleDto ToDto(Role role, RoleHold? hold) =>
-        new(role.Key, role.IsValidator, hold?.Agent?.Name, hold?.AcquiredAt, hold?.LeaseExpires, role.BriefMd.Length > 0, role.UpdatedAt);
+    /// <summary>Oldest hold first, so a list of holders reads in the order they arrived.</summary>
+    private static List<RoleHold> Ordered(IEnumerable<RoleHold> holds) =>
+        [.. holds.OrderBy(h => h.AcquiredAt).ThenBy(h => h.Agent?.Name, StringComparer.Ordinal)];
+
+    private static RoleDto ToDto(Role role, IReadOnlyList<RoleHold> holds) =>
+        new(role.Key, role.IsValidator, role.Holders,
+            [.. Ordered(holds).Select(h => new RoleHolderDto(h.Agent?.Name ?? "", h.AcquiredAt, h.LeaseExpires))],
+            role.BriefMd.Length > 0, role.UpdatedAt);
 }

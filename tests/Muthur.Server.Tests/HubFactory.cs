@@ -14,6 +14,13 @@ public sealed class HubFactory : WebApplicationFactory<Program>
 {
     /// <summary>Settable so a test can bring a second hub up over the same database, as a restart does.</summary>
     public string DataDir { get; init; } = Path.Combine(Path.GetTempPath(), "muthur-tests", Guid.NewGuid().ToString("n"));
+
+    /// <summary>
+    /// Set by a test that provokes a logged error on purpose: its log is not evidence of anything, so the
+    /// data directory is removed like any other instead of being kept for someone to read.
+    /// </summary>
+    public bool ExpectsLoggedErrors { get; init; }
+
     public ObservingClock Clock { get; } = new(new DateTimeOffset(2026, 1, 1, 12, 0, 0, TimeSpan.Zero));
 
     /// <summary>Extra configuration for a test class, e.g. ["Muthur:RequireCrossProviderReview"] = "true".</summary>
@@ -65,7 +72,7 @@ public sealed class HubFactory : WebApplicationFactory<Program>
     protected override void Dispose(bool disposing)
     {
         base.Dispose(disposing);
-        try { Directory.Delete(DataDir, recursive: true); } catch (IOException) { } catch (UnauthorizedAccessException) { }
+        TestHubDirectories.Release(DataDir, ExpectsLoggedErrors);
     }
 }
 

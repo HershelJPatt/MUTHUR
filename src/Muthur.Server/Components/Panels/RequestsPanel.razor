@@ -5,48 +5,51 @@
 <section class="panel">
     <div class="panel-head">
         <span class="panel-title">Waiting on you</span>
-        <span class="panel-sub">@_requests.Count open</span>
+        <span class="panel-sub">@_open open</span>
     </div>
     <div class="panel-body">
         @if (_requests.Count == 0)
         {
             <div class="empty">nothing is waiting on you</div>
         }
-        @foreach (var request in _requests)
+        @foreach (var group in _groups)
         {
-            <div class="request">
-                <div class="request-head">
-                    <span class="tag tag-open">#@request.Id</span>
-                    <span class="event-actor">@request.Agent</span>
-                    @if (request.Task is { } task)
-                    {
-                        <a class="event-task" href="/tasks/@task">@task</a>
-                        <span>@request.TaskTitle</span>
-                    }
-                    <span class="card-age">@Format.Age(request.CreatedAt, _now)</span>
-                </div>
-                <div class="request-question">@request.Question</div>
-                @if (request.Options.Count > 0)
-                {
-                    <div class="btn-row">
-                        @foreach (var option in request.Options)
-                        {
-                            <button class="btn btn-go" @onclick="() => AnswerAsync(request.Id, option)">@option</button>
-                        }
+            @if (group.Count == 1)
+            {
+                @RequestCard(group[0])
+            }
+            else
+            {
+                <div class="group">
+                    <div class="group-head">
+                        <span class="group-count">@group.Count waiting</span>
+                        <span class="group-question">@group[0].Question</span>
+                        <span class="card-age">oldest @Format.Age(group.Min(r => r.CreatedAt), _now)</span>
                     </div>
-                }
-                <textarea class="textarea" placeholder="or answer in your own words…"
-                          @bind="_drafts[request.Id]" @bind:event="oninput"></textarea>
-                <div class="btn-row">
-                    <button class="btn btn-go" disabled="@(string.IsNullOrWhiteSpace(_drafts[request.Id]))"
-                            @onclick="() => AnswerAsync(request.Id, _drafts[request.Id])">Answer</button>
-                    <button class="btn btn-stop" @onclick="() => WithdrawAsync(request.Id)">Withdraw</button>
+                    @foreach (var request in group)
+                    {
+                        @RequestCard(request)
+                    }
+                    <div class="group-all">
+                        <span class="panel-sub">answer all @group.Count at once</span>
+                        @if (group[0].Options.Count > 0)
+                        {
+                            <div class="btn-row">
+                                @foreach (var option in group[0].Options)
+                                {
+                                    <button class="btn btn-go" @onclick="() => AnswerGroupAsync(group, option)">@option</button>
+                                }
+                            </div>
+                        }
+                        <textarea class="textarea" placeholder="or answer all of them in your own words…"
+                                  @bind="_groupDrafts[Key(group[0])]" @bind:event="oninput"></textarea>
+                        <div class="btn-row">
+                            <button class="btn btn-go" disabled="@(string.IsNullOrWhiteSpace(_groupDrafts[Key(group[0])]))"
+                                    @onclick="() => AnswerGroupAsync(group, _groupDrafts[Key(group[0])])">Answer all</button>
+                        </div>
+                    </div>
                 </div>
-                @if (_errors.TryGetValue(request.Id, out var error))
-                {
-                    <div class="error-text">@error</div>
-                }
-            </div>
+            }
         }
     </div>
 </section>
@@ -55,7 +58,12 @@
     // Kept per request id, so a reload triggered by someone else's event does not wipe what the founder is typing.
     private readonly Dictionary<int, string> _drafts = [];
     private readonly Dictionary<int, string> _errors = [];
+    // The same, for the one box that answers a whole group; keyed by the group rather than by a request.
+    private readonly Dictionary<string, string> _groupDrafts = [];
     private IReadOnlyList<FounderRequestDto> _requests = [];
+    // What is waiting, not what fitted on the page: at 210 open the list is capped and this is not.
+    private int _open;
+    private IReadOnlyList<IReadOnlyList<FounderRequestDto>> _groups = [];
     private DateTimeOffset _now;
 
     // Requests age in place, so refresh occasionally even when nothing is written.
@@ -68,17 +76,66 @@
     {
         _now = Clock.GetUtcNow();
         _requests = await Requests.ListAsync(openOnly: true);
+        _open = (await Requests.OpenSummaryAsync()).Count;
+
+        // Exact question and exact options, never a near match: guessing that two questions are the same is how
+        // a founder answers one they did not read. The service has already put them in cost order, and grouping
+        // preserves first-appearance order, so that order is what reaches the page.
+        _groups = _requests.GroupBy(Key, StringComparer.Ordinal)
+            .Select(g => (IReadOnlyList<FounderRequestDto>)g.ToList())
+            .ToList();
 
         var open = _requests.Select(r => r.Id).ToHashSet();
         foreach (var closed in _drafts.Keys.Where(id => !open.Contains(id)).ToList()) _drafts.Remove(closed);
         foreach (var closed in _errors.Keys.Where(id => !open.Contains(id)).ToList()) _errors.Remove(closed);
         foreach (var id in open) _drafts.TryAdd(id, "");
+
+        var keys = _groups.Select(g => Key(g[0])).ToHashSet(StringComparer.Ordinal);
+        foreach (var gone in _groupDrafts.Keys.Where(k => !keys.Contains(k)).ToList()) _groupDrafts.Remove(gone);
+        foreach (var key in keys) _groupDrafts.TryAdd(key, "");
+    }
+
+    /// <summary>
+    /// The group a request belongs to: its question and its options, encoded so that no two unlike requests
+    /// can ever produce the same key.
+    /// <para>
+    /// Each part is written as its length, a colon, then the part itself, which makes the encoding decodable
+    /// and therefore injective whatever the characters are. An earlier version joined on U+001F and justified
+    /// itself with "that cannot appear in a typed question" — the CLI accepts it, a validator put one there,
+    /// and two unlike questions became one group with one Answer all button. A separator is an assumption
+    /// about content; a length is a fact about it.
+    /// </para>
+    /// </summary>
+    private static string Key(FounderRequestDto r)
+    {
+        var key = new System.Text.StringBuilder();
+        key.Append(r.Question.Length).Append(':').Append(r.Question);
+        foreach (var option in r.Options) key.Append(option.Length).Append(':').Append(option);
+        return key.ToString();
     }
 
     private Task AnswerAsync(int id, string answer) =>
         ActAsync(id, () => Requests.AnswerAsync(Caller.Founder, id, new AnswerRequest(answer)));
 
     private Task WithdrawAsync(int id) => ActAsync(id, () => Requests.CancelAsync(Caller.Founder, id));
+
+    /// <summary>
+    /// The whole of what this button does is <see cref="RequestService.AnswerManyAsync"/>, which is where the
+    /// one-at-a-time answering and the partial failure live and where a test without a browser can reach them.
+    /// What is left here is display: whose row shows an error afterwards.
+    /// </summary>
+    private async Task AnswerGroupAsync(IReadOnlyList<FounderRequestDto> group, string answer)
+    {
+        if (string.IsNullOrWhiteSpace(answer)) return;
+        var refused = await Requests.AnswerManyAsync(Caller.Founder, group.Select(r => r.Id), new AnswerRequest(answer));
+        foreach (var request in group)
+        {
+            if (refused.TryGetValue(request.Id, out var why)) _errors[request.Id] = why;
+            else { _errors.Remove(request.Id); _drafts.Remove(request.Id); }
+        }
+        _groupDrafts[Key(group[0])] = "";
+        await ReloadNowAsync();
+    }
 
     private async Task ActAsync(int id, Func<Task> action)
     {
@@ -95,4 +152,48 @@
         _errors.Remove(id);
         await ReloadNowAsync();
     }
+
+    /// <summary>One request, whole: its own agent, task, age, draft and buttons. Grouping never takes these away.</summary>
+    private RenderFragment RequestCard(FounderRequestDto request) =>
+        @<div class="request">
+            <div class="request-head">
+                <span class="tag tag-open">#@request.Id</span>
+                <span class="event-actor">@request.Agent</span>
+                @if (request.Task is { } task)
+                {
+                    <a class="event-task" href="/tasks/@task">@task</a>
+                    <span>@request.TaskTitle</span>
+                }
+                @if (request.BlocksTask)
+                {
+                    <span class="tag tag-blocking">blocking @request.Task</span>
+                    @if (request.Dependents > 0)
+                    {
+                        <span class="tag tag-blocking">@request.Dependents behind it</span>
+                    }
+                }
+                <span class="card-age">@Format.Age(request.CreatedAt, _now)</span>
+            </div>
+            <div class="request-question">@request.Question</div>
+            @if (request.Options.Count > 0)
+            {
+                <div class="btn-row">
+                    @foreach (var option in request.Options)
+                    {
+                        <button class="btn btn-go" @onclick="() => AnswerAsync(request.Id, option)">@option</button>
+                    }
+                </div>
+            }
+            <textarea class="textarea" placeholder="or answer in your own words…"
+                      @bind="_drafts[request.Id]" @bind:event="oninput"></textarea>
+            <div class="btn-row">
+                <button class="btn btn-go" disabled="@(string.IsNullOrWhiteSpace(_drafts[request.Id]))"
+                        @onclick="() => AnswerAsync(request.Id, _drafts[request.Id])">Answer</button>
+                <button class="btn btn-stop" @onclick="() => WithdrawAsync(request.Id)">Withdraw</button>
+            </div>
+            @if (_errors.TryGetValue(request.Id, out var error))
+            {
+                <div class="error-text">@error</div>
+            }
+        </div>;
 }

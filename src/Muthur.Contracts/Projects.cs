@@ -27,4 +27,11 @@ public sealed record ProjectDto(
     IReadOnlyList<string> RequiredValidators,
     DateTimeOffset CreatedAt,
     /// <summary>External sources polled for inbound items, e.g. "github:owner/repo".</summary>
-    IReadOnlyList<string> IngestSources);
+    IReadOnlyList<string> IngestSources)
+{
+    /// <summary>
+    /// No validator is required, so `implemented` goes straight to `validated` with nobody looking. A
+    /// legitimate choice for a solo repository, and one the founder should never make by accident.
+    /// </summary>
+    public bool Ungated => RequiredValidators.Count == 0;
+}

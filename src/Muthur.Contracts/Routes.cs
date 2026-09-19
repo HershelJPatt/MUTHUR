@@ -6,6 +6,7 @@ public static class Routes
 
     public const string Status = Api + "/status";
     public const string Doctor = Api + "/doctor";
+    public const string Receipts = Api + "/receipts";
     public const string Shutdown = Api + "/admin/shutdown";
 
     public const string Agents = Api + "/agents";
@@ -26,6 +27,7 @@ public static class Routes
     public static string RoleAction(string key, string action) => $"{Role(key)}/{action}";
 
     public const string Validations = Api + "/validations";
+    public const string ValidationQueue = Validations + "/queue";
 
     public const string Messages = Api + "/messages";
     public const string Inbox = Messages + "/inbox";

@@ -28,6 +28,10 @@ public static class SystemEndpoints
         // Unauthenticated, exactly like status: nothing doctor returns is a secret.
         app.MapGet(Routes.Doctor, (bool? probe, DoctorService doctor, CancellationToken ct) => doctor.RunAsync(probe ?? true, ct));
 
+        // Also unauthenticated: receipts names accounts and task titles, and /harness/tiers and /tasks already
+        // serve both without a token.
+        app.MapGet(Routes.Receipts, (int? hours, ReceiptsService receipts, CancellationToken ct) => receipts.ReadAsync(hours ?? 24, ct));
+
         app.MapPost(Routes.Shutdown, (IHostApplicationLifetime lifetime) =>
         {
             // Respond first, then stop: the caller gets its 202 before the listener closes.

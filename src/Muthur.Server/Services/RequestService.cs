@@ -72,6 +72,36 @@ public sealed class RequestService(Ledger ledger, LeasePolicy leases)
         }, ct);
     }
 
+    /// <summary>
+    /// One answer to several requests asked in the same words — but never one action. Each goes through
+    /// <see cref="AnswerAsync"/> on its own, in id order, so every unblock, ledger event and message happens
+    /// exactly as if the founder had clicked them one at a time. One that refuses does not stop the rest:
+    /// this is a convenience over a queue, not a transaction, and it must not pretend to be one.
+    /// <para>
+    /// It lives here rather than in the panel because a click is the one thing an unattended validator cannot
+    /// make. The button is a call to this method and nothing else, so what the founder gets when they press
+    /// it is exactly what a test can establish without a browser.
+    /// </para>
+    /// </summary>
+    /// <returns>The message from each request that refused, by id. Empty when every one was answered.</returns>
+    public async Task<IReadOnlyDictionary<int, string>> AnswerManyAsync(
+        Caller caller, IEnumerable<int> ids, AnswerRequest request, CancellationToken ct = default)
+    {
+        var refused = new Dictionary<int, string>();
+        foreach (var id in ids.Distinct().Order())
+        {
+            try
+            {
+                await AnswerAsync(caller, id, request, ct);
+            }
+            catch (MuthurException ex)
+            {
+                refused[id] = ex.Message;
+            }
+        }
+        return refused;
+    }
+
     public Task<FounderRequestDto> CancelAsync(Caller caller, int id, CancellationToken ct = default) =>
         ledger.MutateAsync(caller, async m =>
         {
@@ -91,16 +121,72 @@ public sealed class RequestService(Ledger ledger, LeasePolicy leases)
             return ToDto(entity, title);
         }, ct);
 
+    /// <summary>
+    /// Open requests come back in the order of what they are costing, not of when they were asked: a question
+    /// three tasks are stopped behind is not the same size of thing as one nobody is waiting on, and at two
+    /// hundred of them an id order is no order at all. Closed ones keep the id order — nothing is waiting on
+    /// an answered question, so there is nothing to rank.
+    /// </summary>
     public Task<IReadOnlyList<FounderRequestDto>> ListAsync(bool openOnly, int limit = 200, CancellationToken ct = default) =>
         ledger.ReadAsync<IReadOnlyList<FounderRequestDto>>(async (db, _) =>
         {
             var query = db.FounderRequests.AsQueryable();
             if (openOnly) query = query.Where(r => r.Status == RequestStatus.Open);
-            var rows = await query.OrderByDescending(r => r.Id).Take(Math.Clamp(limit, 1, 1000)).ToListAsync(ct);
+            // The cap on the open queue is applied *after* the ranking, never before it. Taking the newest 200
+            // and then sorting them by cost is how the one question that mattered most — the oldest, with three
+            // tasks stopped behind it — fell off the page at 210 open. The read is still bounded: Ceiling is an
+            // order of magnitude above any queue a founder has, and far above the number they are shown.
+            var rows = await query
+                .OrderByDescending(r => r.Id)
+                .Take(openOnly ? Ceiling : Math.Clamp(limit, 1, 1000))
+                .ToListAsync(ct);
             var taskIds = rows.Where(r => r.TaskId != null).Select(r => r.TaskId!.Value).Distinct().ToList();
-            var titles = await db.Tasks.Where(t => taskIds.Contains(t.Id)).ToDictionaryAsync(t => t.Id, t => t.Title, ct);
-            return rows.OrderBy(r => r.Id).Select(r => ToDto(r, r.TaskId is { } t ? titles.GetValueOrDefault(t) : null)).ToList();
+            var tasks = await db.Tasks.Where(t => taskIds.Contains(t.Id)).ToDictionaryAsync(t => t.Id, t => t, ct);
+
+            // Only tasks that are actually blocked have work stopped behind them, and only their unfinished
+            // children are waiting: a done or cancelled child is not costing anybody anything.
+            var blocked = tasks.Values.Where(t => t.State == TaskState.Blocked).Select(t => t.Id).ToList();
+            var dependents = blocked.Count == 0
+                ? []
+                : await db.Tasks
+                    .Where(t => t.ParentId != null && blocked.Contains(t.ParentId!.Value)
+                        && t.State != TaskState.Done && t.State != TaskState.Cancelled)
+                    .GroupBy(t => t.ParentId!.Value)
+                    .Select(g => new { Parent = g.Key, Count = g.Count() })
+                    .ToDictionaryAsync(x => x.Parent, x => x.Count, ct);
+
+            var dtos = rows.Select(r =>
+            {
+                var task = r.TaskId is { } id ? tasks.GetValueOrDefault(id) : null;
+                var blocks = task is { State: TaskState.Blocked };
+                return ToDto(r, task?.Title, blocks, blocks ? dependents.GetValueOrDefault(task!.Id) : 0);
+            });
+
+            return openOnly
+                ? dtos.OrderByDescending(r => r.Dependents)
+                    .ThenByDescending(r => r.BlocksTask)
+                    .ThenBy(r => r.CreatedAt)
+                    .ThenBy(r => r.Id)          // a total order, so two reads of the same queue never disagree
+                    .Take(Math.Clamp(limit, 1, 1000))
+                    .ToList()
+                : dtos.OrderBy(r => r.Id).ToList();
         }, ct);
+
+    /// <summary>How many questions are open and when the oldest was asked, whatever the page is showing.</summary>
+    /// <remarks>
+    /// The count the founder is told must be the number that is waiting, not the number that fitted: a badge
+    /// reading 200 while 210 wait is worse than no badge, because it is believable.
+    /// </remarks>
+    public Task<(int Count, DateTimeOffset? Oldest)> OpenSummaryAsync(CancellationToken ct = default) =>
+        ledger.ReadAsync(async (db, _) =>
+        {
+            var open = db.FounderRequests.Where(r => r.Status == RequestStatus.Open);
+            var count = await open.CountAsync(ct);
+            return (count, count == 0 ? null : (DateTimeOffset?)await open.MinAsync(r => r.CreatedAt, ct));
+        }, ct);
+
+    /// <summary>The most open requests one read will rank. Far above any real queue, and far above what is shown.</summary>
+    private const int Ceiling = 5000;
 
     /// <summary>A task that leaves its owner's hands takes its open questions with it; nobody is waiting for the answer any more.</summary>
     public static async Task WithdrawForTaskAsync(Mutation m, int taskId, string reason, CancellationToken ct)
@@ -130,7 +216,7 @@ public sealed class RequestService(Ledger ledger, LeasePolicy leases)
         return task.Title;
     }
 
-    private static FounderRequestDto ToDto(FounderRequest r, string? taskTitle) =>
+    private static FounderRequestDto ToDto(FounderRequest r, string? taskTitle, bool blocksTask = false, int dependents = 0) =>
         new(r.Id, r.TaskId is { } id ? Wire.TaskId(id) : null, taskTitle, r.AgentName, r.Question, r.Options,
-            r.Status.ToString().ToLowerInvariant(), r.Answer, r.CreatedAt, r.AnsweredAt);
+            r.Status.ToString().ToLowerInvariant(), r.Answer, r.CreatedAt, r.AnsweredAt, blocksTask, dependents);
 }

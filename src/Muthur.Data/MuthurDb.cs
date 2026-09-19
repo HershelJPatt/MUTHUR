@@ -82,8 +82,8 @@ public sealed class MuthurDb(DbContextOptions<MuthurDb> options) : DbContext(opt
         modelBuilder.Entity<RoleHold>(e =>
         {
             e.ToTable("role_holds");
-            e.HasKey(x => x.RoleKey); // one holder per role
-            e.HasOne<Role>().WithOne().HasForeignKey<RoleHold>(x => x.RoleKey).OnDelete(DeleteBehavior.Cascade);
+            e.HasKey(x => new { x.RoleKey, x.AgentId });   // a role may have several holders; an agent holds it once
+            e.HasOne<Role>().WithMany().HasForeignKey(x => x.RoleKey).OnDelete(DeleteBehavior.Cascade);
             e.HasOne(x => x.Agent).WithMany().HasForeignKey(x => x.AgentId).OnDelete(DeleteBehavior.Cascade);
         });
 
@@ -93,6 +93,7 @@ public sealed class MuthurDb(DbContextOptions<MuthurDb> options) : DbContext(opt
             e.HasIndex(x => new { x.TaskId, x.ValidatorKey }).IsUnique();
             e.HasOne<WorkTask>().WithMany().HasForeignKey(x => x.TaskId).OnDelete(DeleteBehavior.Cascade);
             e.HasOne(x => x.Agent).WithMany().HasForeignKey(x => x.AgentId).OnDelete(DeleteBehavior.SetNull);
+            e.HasOne(x => x.ClaimedBy).WithMany().HasForeignKey(x => x.ClaimedByAgentId).OnDelete(DeleteBehavior.SetNull);
         });
 
         modelBuilder.Entity<Message>(e =>

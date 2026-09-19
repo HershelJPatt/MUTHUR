@@ -22,7 +22,7 @@ public interface IValidatorSessionLauncher
 /// Staffs validation so a task that passes needs nobody awake.
 /// <para>
 /// The conductor adds no state to the task machine it serves. It only notices a task sitting in
-/// <see cref="TaskState.Validating"/> whose required role nobody holds, and starts a session to hold it. A failed
+/// <see cref="TaskState.Validating"/> whose required role has a free slot, and starts a session to hold it. A failed
 /// task is already back with its owner; if that session has gone, the claim lapses and the task is staffable
 /// again on a later pass — the bounce-back loop closes on machinery that already existed.
 /// </para>
@@ -192,8 +192,33 @@ public sealed class ConductorService(Ledger ledger, MuthurOptions options, TimeP
                 .ToListAsync(ct);
             if (pending.Count == 0) return [];
 
-            var held = await db.RoleHolds.Where(h => h.LeaseExpires > now).Select(h => h.RoleKey).ToListAsync(ct);
-            var validatorRoles = await db.Roles.Where(r => r.IsValidator).Select(r => r.Key).ToListAsync(ct);
+            // Free slots, not "is it held at all": a validator role is a skill several agents may hold at once.
+            var holds = await db.RoleHolds.Include(h => h.Agent).Where(h => h.LeaseExpires > now).ToListAsync(ct);
+            var liveHolders = holds.GroupBy(h => h.RoleKey).ToDictionary(g => g.Key, g => g.Count());
+            var capacities = await db.Roles.Where(r => r.IsValidator).ToDictionaryAsync(r => r.Key, r => r.Holders, ct);
+
+            // A slot is taken by a hold or by a session already on its way to one. A session that has started but
+            // has not yet taken the role holds nothing yet, and without this the next pass plans straight over it:
+            // the extras start, fail to take the role, and produce nothing. Read once, never per candidate.
+            //
+            // Once that session does take the role it is both a hold and a running session, and counting it in
+            // both places charges one validator two slots — a capacity of two would then staff a second task
+            // only while the first session was still starting up, and serialize for the rest of its life. The
+            // session's agent name is the (task, role) pair's own, so a hold by that name is that session: it is
+            // already counted, and the running set must not count it again.
+            var heldBy = holds.Select(h => (h.RoleKey, Name: h.Agent?.Name ?? "")).ToHashSet();
+            lock (_running)
+                foreach (var session in _running)
+                {
+                    var slash = session.IndexOf('/');                   // keys are "T-n/role"
+                    var (task, role) = (session[..slash], session[(slash + 1)..]);
+                    if (heldBy.Contains((role, ValidatorSessionLauncher.IdentityName(task, role)))) continue;
+                    liveHolders[role] = liveHolders.GetValueOrDefault(role) + 1;
+                }
+
+            // A pair a validator has already taken is not the conductor's to staff.
+            var claimed = pending.Where(v => LeasePolicy.IsClaimLive(v, now))
+                .Select(v => (v.TaskId, v.ValidatorKey)).ToHashSet();
 
             // A task that has failed too many times and come back unchanged is a judgment call, and judgment
             // calls go to the founder.
@@ -215,8 +240,10 @@ public sealed class ConductorService(Ledger ledger, MuthurOptions options, TimeP
                 if (task.AttendedReason is not null) continue;
                 foreach (var validation in pending.Where(v => v.TaskId == task.Id))
                 {
-                    if (held.Contains(validation.ValidatorKey)) continue;
-                    if (!validatorRoles.Contains(validation.ValidatorKey)) continue;   // a role that no longer exists
+                    if (claimed.Contains((task.Id, validation.ValidatorKey))) continue;   // someone is already on it
+                    if (!capacities.TryGetValue(validation.ValidatorKey, out var capacity)) continue;   // a role that no longer exists
+                    // A session that cannot take the role is a session that does nothing.
+                    if (liveHolders.GetValueOrDefault(validation.ValidatorKey) >= capacity) continue;
                     var key = $"{Wire.TaskId(task.Id)}/{validation.ValidatorKey}";
                     lock (_running)
                         if (_running.Contains(key)) continue;
@@ -229,6 +256,10 @@ public sealed class ConductorService(Ledger ledger, MuthurOptions options, TimeP
                         task.Id, Wire.TaskId(task.Id), task.Title, task.Project?.Key ?? "",
                         validation.ValidatorKey,
                         built.GetValueOrDefault(task.Id) is { Length: > 0 } model ? model.Split('/')[0] : null));
+
+                    // The session this plan asks for will take a slot, so the rest of the pass sees one fewer:
+                    // otherwise three waiting tasks become three sessions for a role with two free slots.
+                    liveHolders[validation.ValidatorKey] = liveHolders.GetValueOrDefault(validation.ValidatorKey) + 1;
                 }
             }
             return plan;

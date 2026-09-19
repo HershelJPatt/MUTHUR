@@ -12,7 +12,9 @@ namespace Muthur.Server.Tests;
 
 public sealed class SystemTests : IDisposable
 {
-    private readonly HubFactory _hub = new();
+    // A_disposed_object_on_a_hub_that_is_not_stopping_is_still_an_internal_error provokes the unhandled
+    // error it then reads out of this hub's log, so the log is a fixture rather than evidence.
+    private readonly HubFactory _hub = new() { ExpectsLoggedErrors = true };
 
     public void Dispose() => _hub.Dispose();
 
@@ -242,6 +244,36 @@ public sealed class SystemTests : IDisposable
 
         /// <summary>Lets the shutdown finish — and lets it finish again, since disposal stops the host a second time.</summary>
         public void Release() => _released.TrySetResult();
+    }
+
+    /// <summary>
+    /// What `muthur receipts` sends on a hub that has done nothing yet. It carries no token and asks for no
+    /// window, and the answer has to be a 200 with zeros — the command exits on the status, so an empty hub
+    /// answering anything but 200 would make a founder's first receipts run look like a broken hub.
+    /// </summary>
+    [Fact]
+    public async Task Receipts_answers_an_empty_hub_without_a_token()
+    {
+        var response = await _hub.CreateClient().GetAsync(Routes.Receipts);
+
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        var receipts = await response.Content.ReadFromJsonAsync(MuthurJsonContext.Default.ReceiptsDto);
+        Assert.NotNull(receipts);
+        Assert.Equal(0, receipts.Sessions);
+        Assert.Empty(receipts.Tasks);
+        Assert.Equal(_hub.Clock.GetUtcNow(), receipts.At);
+        Assert.Equal(receipts.At.AddHours(-24), receipts.Since);
+    }
+
+    /// <summary>`muthur receipts --hours 6`, spelled the way the CLI spells it, moves the hub's window.</summary>
+    [Fact]
+    public async Task Receipts_takes_the_window_from_the_query_string()
+    {
+        var response = await _hub.CreateClient().GetAsync(Routes.Receipts + "?hours=6");
+
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        var receipts = await response.Content.ReadFromJsonAsync(MuthurJsonContext.Default.ReceiptsDto);
+        Assert.Equal(_hub.Clock.GetUtcNow().AddHours(-6), receipts!.Since);
     }
 
     /// <summary>

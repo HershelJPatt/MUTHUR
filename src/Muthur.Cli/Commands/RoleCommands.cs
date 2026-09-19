@@ -18,7 +18,8 @@ public static class RoleCommands
         var defineKey = new Argument<string>("role") { Description = "Role key, e.g. win-validator, comms-oncall." };
         var briefFile = new Option<string?>("--brief-file") { Description = "Markdown file with the role's brief (its job description)." };
         var validator = new Option<bool?>("--validator") { Description = "Whether holders may give validation verdicts (default: true for keys ending in -validator)." };
-        var define = new Command("define", "Create a role or replace its brief. Needs --founder.") { defineKey, briefFile, validator };
+        var holders = new Option<int?>("--holders") { Description = "How many agents may hold this role at once (default 1). Only a validator role may exceed 1." };
+        var define = new Command("define", "Create a role or replace its brief. Needs --founder.") { defineKey, briefFile, validator, holders };
         define.SetAction(async (parse, ct) =>
         {
             string? brief = null;
@@ -33,7 +34,7 @@ public static class RoleCommands
                 if (FileProvenance.Describe(file) is { } source)
                     Console.Error.WriteLine($"Read {file} at {source.Ref} ({source.Commit}).");
             }
-            var request = new DefineRoleRequest(parse.GetValue(defineKey)!, brief, parse.GetValue(validator));
+            var request = new DefineRoleRequest(parse.GetValue(defineKey)!, brief, parse.GetValue(validator), parse.GetValue(holders));
             return Output.Emit(parse, await HubClient.For(parse).PutAsync(Routes.Roles, request, MuthurJsonContext.Default.DefineRoleRequest, ct));
         });
         role.Subcommands.Add(define);
@@ -70,17 +71,45 @@ public static class RoleCommands
         root.Subcommands.Add(validate);
 
         var roleFilter = new Option<string?>("--role") { Description = "Only tasks waiting on this validator role." };
-        var list = new Command("list", "Tasks waiting for validation.") { roleFilter };
-        list.SetAction(async (parse, ct) =>
-        {
-            var query = parse.GetValue(roleFilter) is { } r ? "?role=" + Uri.EscapeDataString(r) : "";
-            return Output.Emit(parse, await HubClient.For(parse).GetAsync(Routes.Validations + query, ct));
-        });
+        var all = new Option<bool>("--all") { Description = "Include tasks another validator has already claimed." };
+        var list = new Command("list", "Tasks waiting for validation.") { roleFilter, all };
+        list.SetAction(async (parse, ct) => Output.Emit(parse, await HubClient.For(parse).GetAsync(
+            Routes.Validations + ValidationListQuery(parse.GetValue(roleFilter), parse.GetValue(all)), ct)));
         validate.Subcommands.Add(list);
+
+        var queue = new Command("queue", "How deep the validation queue is, per validator role.");
+        queue.SetAction(async (parse, ct) => Output.Emit(parse, await HubClient.For(parse).GetAsync(Routes.ValidationQueue, ct)));
+        validate.Subcommands.Add(queue);
+
+        validate.Subcommands.Add(Claim("claim", "validate-claim",
+            "Take a task for validation so no other validator spends a session on it. Exit 3 if someone already has it."));
+        validate.Subcommands.Add(Claim("release", "validate-release", "Give back a task you claimed but will not validate."));
 
         validate.Subcommands.Add(Verdict("pass", "The task works end to end on your platform."));
         validate.Subcommands.Add(Verdict("fail", "The task does not pass; it returns to its owner with your evidence."));
         validate.Subcommands.Add(Verdict("blocked", "You could not validate it at all — say what stopped you. The task returns to its owner; this is not a verdict on the work."));
+    }
+
+    /// <summary>
+    /// The query behind `validate list`. Both filters are optional and either may be the first one present,
+    /// so the leading '?' belongs to the string as a whole rather than to `--role`.
+    /// </summary>
+    internal static string ValidationListQuery(string? role, bool all)
+    {
+        var query = new List<string>();
+        if (role is { } r) query.Add("role=" + Uri.EscapeDataString(r));
+        if (all) query.Add("all=true");
+        return query.Count == 0 ? "" : "?" + string.Join('&', query);
+    }
+
+    private static Command Claim(string name, string action, string description)
+    {
+        var id = new Argument<string>("id") { Description = "Task id, e.g. T-12." };
+        var asRole = new Option<string>("--as") { Description = "The validator role you are acting as.", Required = true };
+        var command = new Command(name, description) { id, asRole };
+        command.SetAction(async (parse, ct) => Output.Emit(parse, await HubClient.For(parse).PostAsync(
+            Routes.TaskAction(parse.GetValue(id)!, action), new ClaimValidationRequest(parse.GetValue(asRole)!), MuthurJsonContext.Default.ClaimValidationRequest, ct)));
+        return command;
     }
 
     private static Command Verdict(string name, string description)

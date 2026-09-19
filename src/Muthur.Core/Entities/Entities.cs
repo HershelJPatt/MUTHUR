@@ -80,10 +80,12 @@ public sealed class Role
     public string BriefMd { get; set; } = "";
     /// <summary>Validator roles may give verdicts on tasks and can be listed in a project's required validators.</summary>
     public bool IsValidator { get; set; }
+    /// <summary>How many agents may hold this role at once. Only a validator role may exceed 1: "who is on call" has one answer.</summary>
+    public int Holders { get; set; } = 1;
     public DateTimeOffset UpdatedAt { get; set; }
 }
 
-/// <summary>Who currently holds a role. One holder per role; the hold is a lease.</summary>
+/// <summary>One agent's hold on a role. A role may have up to <see cref="Role.Holders"/> of these; the hold is a lease.</summary>
 public sealed class RoleHold
 {
     public required string RoleKey { get; set; }
@@ -104,6 +106,12 @@ public sealed class TaskValidation
     public Guid? AgentId { get; set; }
     public Agent? Agent { get; set; }
     public DateTimeOffset? At { get; set; }
+    /// <summary>When this row started waiting — set when the round opens, never moved by a verdict.</summary>
+    public DateTimeOffset WaitingSince { get; set; }
+    /// <summary>The validator who has taken this (task, role) pair. Nobody else may spend a session on it.</summary>
+    public Guid? ClaimedByAgentId { get; set; }
+    public Agent? ClaimedBy { get; set; }
+    public DateTimeOffset? ClaimExpires { get; set; }
 }
 
 public enum Recipient { Agent, Role, Founder }
