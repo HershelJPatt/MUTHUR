@@ -168,7 +168,8 @@ on a different vendor than the author.
 | `Muthur:IngestIntervalSeconds` | 180 | |
 | `Muthur:RequireCrossProviderReview` | false | |
 | `Muthur:ConductorEnabled` | false | the starting value only; `muthur conductor on --founder` is stored in the database and outlives a restart |
-| `Muthur:ConductorMaxSessions` | 2 | validator sessions running at once |
+| `Muthur:ConductorMaxSessions` | 2 | the starting value only; `muthur conductor sessions <n> --founder` is stored in the database and outlives a restart |
+| unattended window | — | `muthur conductor unattended --from 22:00 --to 07:00 --sessions 1 --founder` caps the ceiling during the hours nobody is watching; local time, and it may cross midnight |
 | `Muthur:ConductorSessionMinutes` | 45 | a session that has not finished by then is killed |
 | `Muthur:ConductorMaxAttempts` | 3 | failed verdicts on one task before it stops and asks you |
 | `Muthur:ConductorIntervalSeconds` | 60 | how often it looks; floored at 15s, and `conductor status` reports the floored value |

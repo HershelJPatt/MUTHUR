@@ -1486,4 +1486,784 @@ public sealed class ConductorTests : IDisposable
         var refused = await agent.PostAsJsonAsync(Routes.Conductor, new ConductorSwitch(true));
         Assert.Equal(System.Net.HttpStatusCode.Unauthorized, refused.StatusCode);
     }
+
+    /// <summary>The founder moving the ceiling, as the CLI sends it.</summary>
+    private Task<HttpResponseMessage> SetCeilingAsync(int? sessions = null, string? from = null, string? to = null, int? inWindow = null, bool clear = false) =>
+        _hub.Founder().PostAsJsonAsync(Routes.ConductorSessions, new ConductorSessionsRequest(sessions, from, to, inWindow, clear));
+
+    private static async Task<ConductorStatusDto> ReadStatusAsync(HttpResponseMessage response)
+    {
+        response.EnsureSuccessStatusCode();
+        return (await response.Content.ReadFromJsonAsync(MuthurJsonContext.Default.ConductorStatusDto))!;
+    }
+
+    [Fact]
+    public async Task With_nothing_set_the_ceiling_is_the_number_in_the_configuration_file()
+    {
+        _hub.Settings["Muthur:ConductorMaxSessions"] = "3";
+
+        var status = await Conductor.StatusAsync();
+
+        Assert.Equal(3, status.Ceiling);
+        Assert.Equal(3, status.MaxSessions);
+        Assert.Equal("Muthur:ConductorMaxSessions.", status.CeilingReason);
+    }
+
+    [Fact]
+    public async Task The_number_the_founder_sets_is_the_one_the_pass_obeys()
+    {
+        // Five pairs it could staff, a configuration file that would allow nine, and a founder who said four.
+        // Nobody should have to edit a file and restart the hub to say that.
+        _hub.Settings["Muthur:ConductorMaxSessions"] = "9";
+        await SetUpAsync("win-validator");
+        await DefineAsync(5, "win-validator");
+        _hub.Validators.Block = true;   // the sessions are still running when the pass ends, so the ceiling is what counts
+        var owner = await _hub.RegisterAgentAsync("owner");
+        for (var i = 0; i < 5; i++) await ValidatingTaskAsync(owner, $"Waiting {i}", priority: 5 - i);
+
+        var status = await ReadStatusAsync(await SetCeilingAsync(sessions: 4));
+
+        Assert.Equal(4, status.Ceiling);
+        Assert.Equal("Set by the founder.", status.CeilingReason);
+        Assert.Equal(9, status.MaxSessions);   // what the file asks for, unchanged, so nothing reading it moves
+        Assert.Equal(5, (await Conductor.PlanAsync()).Count);
+        Assert.Equal(4, await Conductor.RunPassAsync());
+        Assert.Equal(4, _hub.Validators.Started.Count);
+        Assert.Equal(4, (await Conductor.StatusAsync()).Ceiling);
+
+        _hub.Validators.Finish(4);
+    }
+
+    [Fact]
+    public async Task The_ceiling_the_founder_set_outlives_the_process_that_heard_it()
+    {
+        // The hub is off for hours at a time, so this lives in the database like the on/off switch. A second hub
+        // over the same data reads it back through a service instance that never heard the founder say it.
+        (await SetCeilingAsync(sessions: 4)).EnsureSuccessStatusCode();
+
+        using var restarted = new HubFactory { DataDir = _hub.DataDir };
+        var status = await restarted.Services.GetRequiredService<ConductorService>().StatusAsync();
+
+        Assert.Equal(4, status.Ceiling);
+        Assert.Equal("Set by the founder.", status.CeilingReason);
+        Assert.Equal(2, status.MaxSessions);   // the configuration default, so the 4 can only have come from Meta
+    }
+
+    [Fact]
+    public async Task While_the_founder_is_asleep_the_window_is_the_ceiling()
+    {
+        // Pinned to UTC so "local" is a fact of this test and not of the machine running it, and driven entirely
+        // by stepping the fake clock.
+        _hub.Clock.SetLocalTimeZone(TimeZoneInfo.Utc);
+        (await SetCeilingAsync(sessions: 4)).EnsureSuccessStatusCode();
+
+        var awake = await ReadStatusAsync(await SetCeilingAsync(from: "22:00", to: "07:00", inWindow: 1));
+        Assert.Equal(4, awake.Ceiling);                          // noon: the window is shut
+        Assert.Equal("Set by the founder.", awake.CeilingReason);
+
+        // 23:00, then 02:00 the next morning: one window, either side of midnight.
+        foreach (var step in new[] { TimeSpan.FromHours(11), TimeSpan.FromHours(3) })
+        {
+            _hub.Clock.Advance(step);
+            var asleep = await Conductor.StatusAsync();
+            Assert.Equal(1, asleep.Ceiling);
+            Assert.Equal("Unattended 22:00-07:00 caps this at 1.", asleep.CeilingReason);
+        }
+
+        _hub.Clock.Advance(TimeSpan.FromHours(10));   // noon again, and the founder's own number is back
+        var morning = await Conductor.StatusAsync();
+        Assert.Equal(4, morning.Ceiling);
+        Assert.Equal("Set by the founder.", morning.CeilingReason);
+    }
+
+    [Fact]
+    public async Task An_open_window_is_a_ceiling_the_pass_keeps_to_and_not_only_a_line_on_a_card()
+    {
+        _hub.Settings["Muthur:ConductorMaxSessions"] = "9";
+        _hub.Clock.SetLocalTimeZone(TimeZoneInfo.Utc);
+        await SetUpAsync("win-validator");
+        await DefineAsync(3, "win-validator");
+        _hub.Validators.Block = true;
+        var owner = await _hub.RegisterAgentAsync("owner");
+        for (var i = 0; i < 3; i++) await ValidatingTaskAsync(owner, $"Waiting {i}", priority: 3 - i);
+        (await SetCeilingAsync(sessions: 4)).EnsureSuccessStatusCode();
+        (await SetCeilingAsync(from: "22:00", to: "07:00", inWindow: 1)).EnsureSuccessStatusCode();
+
+        _hub.Clock.Advance(TimeSpan.FromHours(11));   // 23:00
+
+        Assert.Equal(3, (await Conductor.PlanAsync()).Count);
+        Assert.Equal(1, await Conductor.RunPassAsync());
+        Assert.Single(_hub.Validators.Started);
+
+        _hub.Validators.Finish();
+    }
+
+    [Fact]
+    public async Task The_window_is_the_founders_own_night_and_not_UTC()
+    {
+        // Ten hours east: noon on the hub's clock is ten at night where the founder is asleep.
+        _hub.Clock.SetLocalTimeZone(TimeZoneInfo.CreateCustomTimeZone("muthur-test-east", TimeSpan.FromHours(10), "east", "east"));
+
+        var status = await ReadStatusAsync(await SetCeilingAsync(from: "22:00", to: "07:00", inWindow: 1));
+
+        Assert.Equal(1, status.Ceiling);
+        Assert.Equal("Unattended 22:00-07:00 caps this at 1.", status.CeilingReason);
+    }
+
+    [Fact]
+    public async Task Clear_takes_both_numbers_away_and_the_configuration_file_has_its_say_again()
+    {
+        _hub.Settings["Muthur:ConductorMaxSessions"] = "3";
+        _hub.Clock.SetLocalTimeZone(TimeZoneInfo.Utc);
+        (await SetCeilingAsync(sessions: 4)).EnsureSuccessStatusCode();
+        (await SetCeilingAsync(from: "22:00", to: "07:00", inWindow: 1)).EnsureSuccessStatusCode();
+        _hub.Clock.Advance(TimeSpan.FromHours(11));   // 23:00, so both keys are in force when the clear lands
+        Assert.Equal(1, (await Conductor.StatusAsync()).Ceiling);
+
+        var cleared = await ReadStatusAsync(await SetCeilingAsync(clear: true));
+
+        Assert.Equal(3, cleared.Ceiling);
+        Assert.Equal("Muthur:ConductorMaxSessions.", cleared.CeilingReason);
+        await using var db = await _hub.Services.GetRequiredService<IDbContextFactory<MuthurDb>>().CreateDbContextAsync();
+        Assert.Empty(await db.Meta.Where(e => e.Key == MetaEntry.ConductorSessions || e.Key == MetaEntry.ConductorUnattended).ToListAsync());
+        Assert.Contains(await EventsAsync(), e => e.Type == "conductor.ceiling_cleared");
+    }
+
+    [Theory]
+    [InlineData(0, null)]
+    [InlineData(-1, null)]
+    [InlineData(null, 0)]
+    [InlineData(null, -3)]
+    public async Task A_conductor_allowed_no_sessions_at_all_is_refused(int? sessions, int? inWindow)
+    {
+        var refused = await SetCeilingAsync(sessions, inWindow is null ? null : "22:00", inWindow is null ? null : "07:00", inWindow);
+
+        Assert.Equal(System.Net.HttpStatusCode.UnprocessableEntity, refused.StatusCode);
+        var error = await refused.ReadErrorAsync();
+        Assert.Equal("sessions_invalid", error.Code);
+        Assert.Equal("The conductor needs at least one session to do anything.", error.Message);
+    }
+
+    [Theory]
+    [InlineData("22:00", null, null)]
+    [InlineData(null, "07:00", null)]
+    [InlineData(null, null, 1)]
+    [InlineData("22:00", "07:00", null)]
+    [InlineData("22:00", null, 1)]
+    [InlineData(null, "07:00", 1)]
+    public async Task Half_an_unattended_window_is_refused_rather_than_guessed(string? from, string? to, int? inWindow)
+    {
+        var refused = await SetCeilingAsync(from: from, to: to, inWindow: inWindow);
+
+        Assert.Equal(System.Net.HttpStatusCode.UnprocessableEntity, refused.StatusCode);
+        var error = await refused.ReadErrorAsync();
+        Assert.Equal("unattended_incomplete", error.Code);
+        Assert.Equal("An unattended window needs --from, --to and --sessions.", error.Message);
+    }
+
+    [Theory]
+    [InlineData("9am", "07:00")]
+    [InlineData("7:00", "07:00")]
+    [InlineData("24:00", "07:00")]
+    [InlineData("22:60", "07:00")]
+    [InlineData("22:00:00", "07:00")]
+    [InlineData("22.00", "07:00")]
+    [InlineData("22:00", "7am")]
+    public async Task A_time_that_is_not_HH_mm_is_refused(string from, string to)
+    {
+        var refused = await SetCeilingAsync(from: from, to: to, inWindow: 1);
+
+        Assert.Equal(System.Net.HttpStatusCode.UnprocessableEntity, refused.StatusCode);
+        var error = await refused.ReadErrorAsync();
+        Assert.Equal("time_invalid", error.Code);
+        Assert.Equal("Times are HH:mm, 24-hour.", error.Message);
+    }
+
+    [Fact]
+    public async Task A_window_with_no_width_is_no_window()
+    {
+        // Midnight to midnight would otherwise read as "always" or "never" depending on which way the comparison
+        // was written. A founder who means always says so with `conductor sessions`.
+        _hub.Clock.SetLocalTimeZone(TimeZoneInfo.Utc);
+
+        var status = await ReadStatusAsync(await SetCeilingAsync(from: "12:00", to: "12:00", inWindow: 1));
+
+        Assert.Equal(2, status.Ceiling);
+        Assert.Equal("Muthur:ConductorMaxSessions.", status.CeilingReason);
+    }
+
+    [Fact]
+    public async Task The_ledger_carries_the_numbers_the_founder_chose()
+    {
+        (await SetCeilingAsync(sessions: 4)).EnsureSuccessStatusCode();
+        (await SetCeilingAsync(from: "22:00", to: "07:00", inWindow: 1)).EnsureSuccessStatusCode();
+
+        var events = await EventsAsync();
+        Assert.Equal(4, Assert.Single(events, e => e.Type == "conductor.sessions_set").Payload.GetProperty("sessions").GetInt32());
+        var window = Assert.Single(events, e => e.Type == "conductor.unattended_set").Payload;
+        Assert.Equal("22:00", window.GetProperty("from").GetString());
+        Assert.Equal("07:00", window.GetProperty("to").GetString());
+        Assert.Equal(1, window.GetProperty("sessions").GetInt32());
+    }
+
+    [Fact]
+    public async Task An_agent_may_not_move_the_ceiling()
+    {
+        var agent = await _hub.RegisterAgentAsync("nosy");
+
+        var refused = await agent.PostAsJsonAsync(Routes.ConductorSessions, new ConductorSessionsRequest(99, null, null, null, Clear: false));
+
+        Assert.Equal(System.Net.HttpStatusCode.Unauthorized, refused.StatusCode);
+    }
+
+    // ---- the conductor staffs orchestrators too -----------------------------------------------------------------
+
+    /// <summary>The founder turning the half that begins new work on or off.</summary>
+    private Task<HttpResponseMessage> OrchestratorsAsync(bool enabled) =>
+        _hub.Founder().PostAsJsonAsync(Routes.ConductorOrchestrators, new ConductorOrchestratorSwitch(enabled));
+
+    /// <summary>Staffing backlog tasks, on, in a project whose repository is on disk.</summary>
+    private async Task<HttpClient> OrchestratingAsync()
+    {
+        await SetUpAsync();
+        (await OrchestratorsAsync(true)).EnsureSuccessStatusCode();
+        return await _hub.RegisterAgentAsync("author");
+    }
+
+    [Fact]
+    public async Task Orchestrators_are_off_until_the_founder_asks_and_validation_is_unaffected()
+    {
+        // The whole reason for a third switch. A hub that upgrades into this build has no row for the key, and no
+        // row means no: landing this must not spend one session the build before it would not have spent.
+        await SetUpAsync("win-validator");
+        await DefineAsync("win-validator");
+        await TaskInValidationAsync();                          // T-1, waiting on a validator
+        var author = await _hub.RegisterAgentAsync("author");
+        await author.AddTaskAsync("Nobody has started this");   // T-2, sitting in the backlog
+
+        Assert.Empty(await Conductor.PlanOrchestratorsAsync());
+        Assert.Equal(1, await Conductor.RunPassAsync());
+        await SettledAsync();
+
+        Assert.Empty(_hub.Orchestrators.Started);
+        Assert.Equal("T-1", Assert.Single(_hub.Validators.Started).TaskKey);
+    }
+
+    [Fact]
+    public async Task Turned_on_it_staffs_one_orchestrator_for_an_unclaimed_backlog_task()
+    {
+        var author = await OrchestratingAsync();
+        var id = (await author.AddTaskAsync("Ship the export")).Id;
+
+        Assert.Equal(1, await Conductor.RunPassAsync());
+        await SettledAsync();
+
+        var started = Assert.Single(_hub.Orchestrators.Started);
+        Assert.Equal(id, started.TaskKey);
+        Assert.Equal("Ship the export", started.TaskTitle);
+        Assert.Equal("demo", started.Project);
+
+        // Who the session acts as, and what it is told. Neither is observable anywhere else, and the prompt is the
+        // whole of the brief: a task it cannot name is a task it cannot claim.
+        Assert.Equal("orchestrator-t-1", OrchestratorSessionLauncher.IdentityName(id));
+        var prompt = OrchestratorSessionLauncher.Prompt(started, new Muthur.Launch.HarnessCandidate("codex", "gpt", "acct"));
+        Assert.Contains($"""Claim {id} ("Ship the export")""", prompt, StringComparison.Ordinal);
+        Assert.Contains($"muthur task claim {id}", prompt, StringComparison.Ordinal);
+
+        var staffed = Assert.Single(await EventsAsync(), e => e.Type == "conductor.staffing");
+        Assert.Equal(id, staffed.TaskId);
+        Assert.Equal("#orchestrator", RoleOf(staffed));
+    }
+
+    [Fact]
+    public async Task A_task_somebody_has_claimed_is_not_orchestrated()
+    {
+        // The expensive mistake: a second mastermind staged onto work another session is already doing. A claim
+        // takes the task out of the backlog, and the backlog is the only place this plan looks.
+        var author = await OrchestratingAsync();
+        var task = await author.AddTaskAsync("Already being worked on");
+        (await author.ClaimAsync(task.Id)).EnsureSuccessStatusCode();
+
+        Assert.Empty(await Conductor.PlanOrchestratorsAsync());
+        Assert.Equal(0, await Conductor.RunPassAsync());
+        Assert.Empty(_hub.Orchestrators.Started);
+    }
+
+    [Fact]
+    public async Task A_blocked_task_is_never_orchestrated()
+    {
+        // It is waiting on the founder. A session started for it would spend three quarters of an hour learning
+        // what the task already says, and the conductor must never answer a founder request on their behalf.
+        var author = await OrchestratingAsync();
+        var task = await author.AddTaskAsync("Needs a decision");
+        (await author.ClaimAsync(task.Id)).EnsureSuccessStatusCode();
+        (await author.PostAsJsonAsync(Routes.Requests, new AskRequest("Monthly or annual?", task.Id, ["monthly", "annual"]))).EnsureSuccessStatusCode();
+
+        Assert.Empty(await Conductor.PlanOrchestratorsAsync());
+        Assert.Equal(0, await Conductor.RunPassAsync());
+        Assert.Empty(_hub.Orchestrators.Started);
+    }
+
+    [Fact]
+    public async Task A_project_with_no_repository_on_record_is_not_orchestrated()
+    {
+        // There is nowhere for the session to run, and starting one to find that out costs a session. The API
+        // refuses an empty path, so the only way into this state is a hand-edited database - which is exactly the
+        // state a guard is for.
+        var author = await OrchestratingAsync();
+        await author.AddTaskAsync("Nowhere to run it");
+        await using (var db = await _hub.Services.GetRequiredService<IDbContextFactory<MuthurDb>>().CreateDbContextAsync())
+        {
+            (await db.Projects.SingleAsync()).RepoPath = "";
+            await db.SaveChangesAsync();
+        }
+
+        Assert.Empty(await Conductor.PlanOrchestratorsAsync());
+        Assert.Equal(0, await Conductor.RunPassAsync());
+        Assert.Empty(_hub.Orchestrators.Started);
+    }
+
+    [Fact]
+    public async Task Two_backlog_tasks_and_room_for_one_start_one()
+    {
+        _hub.Settings["Muthur:ConductorMaxSessions"] = "1";
+        var author = await OrchestratingAsync();
+        _hub.Orchestrators.Block = true;   // the first session is still running when the pass looks at the second
+        var urgent = (await author.AddTaskAsync("Urgent", priority: 3)).Id;
+        await author.AddTaskAsync("Can wait", priority: 1);
+
+        Assert.Equal(2, (await Conductor.PlanOrchestratorsAsync()).Count);   // both are staffable
+        Assert.Equal(1, await Conductor.RunPassAsync());                     // the ceiling is what says no
+        Assert.Equal(urgent, Assert.Single(_hub.Orchestrators.Started).TaskKey);
+
+        _hub.Orchestrators.Finish();
+        await SettledAsync();
+    }
+
+    [Fact]
+    public async Task Validation_drains_before_the_conductor_starts_anything_new()
+    {
+        // One ceiling for both halves, and validation has it first: a task in validating is closer to done than a
+        // task in the backlog, and staffing the backlog instead only makes more work to validate later.
+        _hub.Settings["Muthur:ConductorMaxSessions"] = "1";
+        await SetUpAsync("win-validator");
+        await DefineAsync("win-validator");
+        (await OrchestratorsAsync(true)).EnsureSuccessStatusCode();
+        _hub.Validators.Block = true;
+        _hub.Orchestrators.Block = true;
+        await TaskInValidationAsync();                       // T-1, waiting on a validator
+        var author = await _hub.RegisterAgentAsync("author");
+        await author.AddTaskAsync("Not started yet");        // T-2, sitting in the backlog
+
+        Assert.Single(await Conductor.PlanAsync());
+        Assert.Single(await Conductor.PlanOrchestratorsAsync());
+        Assert.Equal(1, await Conductor.RunPassAsync());
+
+        Assert.Equal("T-1", Assert.Single(_hub.Validators.Started).TaskKey);
+        Assert.Empty(_hub.Orchestrators.Started);
+
+        _hub.Validators.Finish();
+        await SettledAsync();
+    }
+
+    [Fact]
+    public async Task One_task_is_never_staffed_by_two_orchestrators_at_once()
+    {
+        // A session's first act is to claim, so between starting and claiming the task is still in the backlog and
+        // the plan would find it again. The running set is what stops the second one.
+        var author = await OrchestratingAsync();
+        _hub.Orchestrators.Block = true;
+        var id = (await author.AddTaskAsync("Only once")).Id;
+
+        Assert.Equal(1, await Conductor.RunPassAsync());
+        Assert.Equal(1, Conductor.RunningCount);
+
+        Assert.Empty(await Conductor.PlanOrchestratorsAsync());
+        Assert.Equal(0, await Conductor.RunPassAsync());
+        Assert.Equal(id, Assert.Single(_hub.Orchestrators.Started).TaskKey);
+
+        _hub.Orchestrators.Finish();
+        await SettledAsync();
+    }
+
+    [Fact]
+    public async Task An_orchestrator_that_cannot_start_is_retried_but_not_all_night()
+    {
+        _hub.Settings["Muthur:ConductorMaxAttempts"] = "2";
+        _hub.Settings["Muthur:ConductorStallProbeMinutes"] = "30";
+        var author = await OrchestratingAsync();
+        await author.AddTaskAsync("Nothing can start it");
+        _hub.Orchestrators.Throw = new ValidatorLaunchException("No available mastermind candidate to orchestrate T-1.");
+
+        // A throw must leave the running entry removed, or the task is never staffed again at all.
+        Assert.Equal(1, await Conductor.RunPassAsync());
+        await SettledAsync();
+        Assert.Equal(0, Conductor.RunningCount);
+
+        for (var pass = 0; pass < 4; pass++)
+        {
+            await Conductor.RunPassAsync();
+            await SettledAsync();
+        }
+        Assert.Equal(2, _hub.Orchestrators.Started.Count);   // two attempts, then the cooldown holds it
+
+        // Half-open, like every other pair: whatever was wrong is usually fixed from outside the hub.
+        _hub.Clock.Advance(TimeSpan.FromMinutes(31));
+        _hub.Orchestrators.Throw = null;
+        _hub.Orchestrators.Claim = async a => (await author.ClaimAsync(a.TaskKey)).EnsureSuccessStatusCode();
+        Assert.Equal(1, await Conductor.RunPassAsync());
+        await SettledAsync();
+
+        Assert.Equal(3, _hub.Orchestrators.Started.Count);
+        var events = await _hub.EventsWhenAsync(e => e.Count(x => x.Type == "conductor.failed") == 2,
+            "two orchestrator launch failures were never recorded");
+        Assert.All(events.Where(e => e.Type == "conductor.failed"), e => Assert.Equal("#orchestrator", RoleOf(e)));
+        Assert.Single(events, e => e.Type == "conductor.stalled");
+    }
+
+    [Fact]
+    public async Task A_session_that_ran_and_claimed_nothing_is_not_mistaken_for_progress()
+    {
+        // The 45-minute nothing. A session that exits cleanly having never claimed leaves the task exactly where
+        // the plan found it, so the next pass stages it again - three quarters of an hour at a time, all night.
+        // Charged on the counter a validator that reaches no verdict is charged on, and stalled by the same cap.
+        _hub.Settings["Muthur:ConductorMaxAttempts"] = "2";
+        var author = await OrchestratingAsync();
+        var id = (await author.AddTaskAsync("Nobody claims it")).Id;
+
+        for (var pass = 0; pass < 4; pass++)
+        {
+            await Conductor.RunPassAsync();
+            await SettledAsync();
+        }
+
+        Assert.Equal(2, _hub.Orchestrators.Started.Count);
+        var events = await _hub.EventsWhenAsync(e => e.Count(x => x.Type == "conductor.no_verdict") == 2,
+            "two orchestrator sessions that claimed nothing were never recorded");
+        Assert.All(events.Where(e => e.Type == "conductor.no_verdict"), e =>
+        {
+            Assert.Equal(id, e.TaskId);
+            Assert.Equal("#orchestrator", RoleOf(e));
+        });
+        Assert.Single(events, e => e.Type == "conductor.stalled");
+    }
+
+    [Fact]
+    public async Task A_session_that_claimed_its_task_leaves_no_strike_behind_it()
+    {
+        var author = await OrchestratingAsync();
+        var id = (await author.AddTaskAsync("Claimed on the way in")).Id;
+        _hub.Orchestrators.Claim = async a => (await author.ClaimAsync(a.TaskKey)).EnsureSuccessStatusCode();
+
+        Assert.Equal(1, await Conductor.RunPassAsync());
+        await SettledAsync();
+
+        // Claimed, so out of the backlog, so never staffed again and nothing charged against the pass.
+        Assert.Equal(TaskState.InProgress, (await author.GetTaskAsync(id)).Task.State);
+        Assert.Equal(0, await Conductor.RunPassAsync());
+        Assert.Single(_hub.Orchestrators.Started);
+        Assert.DoesNotContain(await EventsAsync(), e => e.Type is "conductor.no_verdict" or "conductor.failed" or "conductor.stalled");
+    }
+
+    [Fact]
+    public async Task An_orchestrators_running_key_is_never_counted_as_a_validators_slot()
+    {
+        // Both halves share one running set, keyed "T-n/role", and PlanAsync charges every entry in it to the role
+        // it names. '#' is the whole of the guarantee that the two key spaces cannot meet: no role key may contain
+        // one, so no orchestrator can ever be charged to a role that exists. The skip in PlanAsync makes that
+        // local rather than something inferred two files away from RoleKey's pattern - so what this pins is the
+        // property both rest on, and the behaviour a founder would lose if either drifted: a role with room for
+        // one holder still staffs validation while an orchestrator is running.
+        _hub.Settings["Muthur:ConductorMaxSessions"] = "5";
+        Assert.False(RoleKey.IsValid("#orchestrator"));
+        var refused = await _hub.Founder().PutAsJsonAsync(Routes.Roles, new DefineRoleRequest("#orchestrator", "# no\nDrive it."));
+        Assert.Equal("invalid_key", (await refused.ReadErrorAsync()).Code);
+
+        await SetUpAsync("win-validator");
+        await DefineAsync("win-validator");              // room for exactly one holder
+        (await OrchestratorsAsync(true)).EnsureSuccessStatusCode();
+        _hub.Validators.Block = true;
+        _hub.Orchestrators.Block = true;
+        var author = await _hub.RegisterAgentAsync("author");
+        var backlog = (await author.AddTaskAsync("Not started yet", priority: 5)).Id;
+
+        Assert.Equal(1, await Conductor.RunPassAsync());
+        Assert.Equal(backlog, Assert.Single(_hub.Orchestrators.Started).TaskKey);
+        Assert.Equal(1, Conductor.RunningCount);
+
+        // Work arrives for the validator while that orchestrator is still running. Its slot is free, and stays free.
+        var validating = await ValidatingTaskAsync(author, "Waiting on a validator", priority: 1);
+        Assert.Equal(validating, Assert.Single(await Conductor.PlanAsync()).TaskKey);
+        Assert.Equal(1, await Conductor.RunPassAsync());
+        Assert.Equal(validating, Assert.Single(_hub.Validators.Started).TaskKey);
+
+        _hub.Validators.Finish();
+        _hub.Orchestrators.Finish();
+        await SettledAsync();
+    }
+
+    [Fact]
+    public async Task The_decision_to_staff_orchestrators_outlives_the_process_that_heard_it()
+    {
+        // The hub is off for hours at a time. A founder who turned this on must not find it silently off - and,
+        // far more importantly, one who turned it off must not find it silently on.
+        await SetUpAsync();
+        var author = await _hub.RegisterAgentAsync("author");
+        await author.AddTaskAsync("Not started yet");
+        var founder = _hub.Founder();
+        (await founder.PostAsJsonAsync(Routes.Conductor, new ConductorSwitch(true))).EnsureSuccessStatusCode();
+        (await founder.PostAsJsonAsync(Routes.ConductorOrchestrators, new ConductorOrchestratorSwitch(true))).EnsureSuccessStatusCode();
+
+        using var restarted = new HubFactory { DataDir = _hub.DataDir };
+        var planned = await restarted.Services.GetRequiredService<ConductorService>().PlanOrchestratorsAsync();
+
+        Assert.Equal("T-1", Assert.Single(planned).TaskKey);
+    }
+
+    [Fact]
+    public async Task The_founder_turns_orchestrators_on_and_off_and_the_ledger_says_so()
+    {
+        var founder = _hub.Founder();
+        (await founder.PostAsJsonAsync(Routes.ConductorOrchestrators, new ConductorOrchestratorSwitch(true))).EnsureSuccessStatusCode();
+        (await founder.PostAsJsonAsync(Routes.ConductorOrchestrators, new ConductorOrchestratorSwitch(true))).EnsureSuccessStatusCode();
+        (await founder.PostAsJsonAsync(Routes.ConductorOrchestrators, new ConductorOrchestratorSwitch(false))).EnsureSuccessStatusCode();
+
+        // Said twice, recorded once: the ledger carries decisions, not keystrokes.
+        var events = await EventsAsync();
+        Assert.Single(events, e => e.Type == "conductor.orchestrators_on");
+        Assert.Single(events, e => e.Type == "conductor.orchestrators_off");
+    }
+
+    [Fact]
+    public async Task An_agent_may_not_turn_orchestrators_on()
+    {
+        var agent = await _hub.RegisterAgentAsync("nosy");
+
+        var refused = await agent.PostAsJsonAsync(Routes.ConductorOrchestrators, new ConductorOrchestratorSwitch(true));
+
+        Assert.Equal(System.Net.HttpStatusCode.Unauthorized, refused.StatusCode);
+    }
+
+    [Fact]
+    public async Task Status_says_which_way_the_most_expensive_switch_was_last_thrown()
+    {
+        // Without this a founder can only learn whether the hub may start orchestrators by reading the ledger for
+        // the last time it changed - which is a question about history standing in for one about state.
+        Assert.False((await Conductor.StatusAsync()).Orchestrators);
+
+        var on = await ReadStatusAsync(await OrchestratorsAsync(true));
+        Assert.True(on.Orchestrators);
+
+        // And the rest of the card reads exactly as a founder saw it yesterday: this switch is a new line on it,
+        // not a change to the numbers beside it.
+        Assert.True(on.Enabled);
+        Assert.Equal(2, on.MaxSessions);
+        Assert.Equal(2, on.Ceiling);
+        Assert.Equal("Muthur:ConductorMaxSessions.", on.CeilingReason);
+
+        var off = await ReadStatusAsync(await OrchestratorsAsync(false));
+        Assert.False(off.Orchestrators);
+    }
+
+    [Fact]
+    public async Task The_answer_survives_the_process_that_heard_it_and_is_readable_over_HTTP()
+    {
+        (await OrchestratorsAsync(true)).EnsureSuccessStatusCode();
+
+        using var restarted = new HubFactory { DataDir = _hub.DataDir };
+        var status = await restarted.CreateClient().GetFromJsonAsync(Routes.Conductor, MuthurJsonContext.Default.ConductorStatusDto);
+
+        Assert.True(status!.Orchestrators, "the switch is in the database, not in the process that was told");
+    }
+
+    [Fact]
+    public async Task A_stalled_orchestrator_is_not_reported_to_the_founder_as_a_validator()
+    {
+        // The wording of a failure is the whole of what the founder has to go on at three in the morning. Told a
+        // validator could not start - for a task no validator has been asked to look at, because nobody has even
+        // claimed it - they go looking at validation, which is not where this broke.
+        _hub.Settings["Muthur:ConductorMaxAttempts"] = "2";
+        var author = await OrchestratingAsync();
+        await author.AddTaskAsync("Nothing can start it");
+        _hub.Orchestrators.Throw = new ValidatorLaunchException("No available mastermind candidate to orchestrate T-1.");
+
+        for (var pass = 0; pass < 3; pass++)
+        {
+            await Conductor.RunPassAsync();
+            await SettledAsync();
+        }
+
+        var told = Assert.Single(await FounderMessagesAsync());
+        Assert.StartsWith(
+            "The conductor could not start an orchestrator for T-1 (#orchestrator) 2 times and has stopped trying: " +
+            "No available mastermind candidate to orchestrate T-1.",
+            told.Body);
+        Assert.DoesNotContain("validator", told.Body, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task A_founder_told_nothing_claimed_the_task_is_not_sent_to_go_and_validate_it()
+    {
+        // The neighbouring wrong place. "None of them reached a verdict … validate it yourself" is sound advice
+        // about validation and nonsense about a task sitting unclaimed in the backlog: what failed is that no
+        // session ever started it.
+        _hub.Settings["Muthur:ConductorMaxAttempts"] = "2";
+        var author = await OrchestratingAsync();
+        await author.AddTaskAsync("Nobody claims it");
+
+        for (var pass = 0; pass < 3; pass++)
+        {
+            await Conductor.RunPassAsync();
+            await SettledAsync();
+        }
+
+        var told = Assert.Single(await FounderMessagesAsync());
+        Assert.StartsWith(
+            "The conductor started 2 orchestrators for T-1 (#orchestrator) and none of them claimed it. They ran " +
+            "and exited cleanly, so something is stopping them from starting the task at all rather than failing " +
+            "at it. Look at the bus for what they said, then re-spec the task, take it yourself, or raise " +
+            "Muthur:ConductorMaxAttempts.",
+            told.Body);
+        Assert.Contains("retries by itself within", told.Body, StringComparison.Ordinal);   // the half-open probe, on this message too
+    }
+
+    // ---- a session must not outlive the hub that started it ------------------------------------------------------
+
+    /// <summary>
+    /// A validator session held open, the way a real harness holds one open for its whole timeout. The fake blocks
+    /// on the session's own cancellation token, so stopping the hub ends it exactly as killing the process tree does.
+    /// </summary>
+    private async Task<string> HeldValidatorSessionAsync()
+    {
+        await SetUpAsync("win-validator");
+        await DefineAsync("win-validator");
+        _hub.Validators.Block = true;
+        var id = await TaskInValidationAsync();
+
+        Assert.Equal(1, await Conductor.RunPassAsync());
+        Assert.Equal(1, Conductor.RunningCount);
+        return id;
+    }
+
+    [Fact]
+    public async Task Sessions_die_with_the_hub_that_started_them()
+    {
+        // The defect validation failed this task on, reproduced on the installed product: a hub staffs a session,
+        // `down` then `up`, and the new hub staffs the same task again while the first child is still alive. The
+        // child was launched with a token nobody ever cancelled, and _running lives in memory - so the next hub
+        // began with an empty set and every reason to believe nothing was running.
+        await HeldValidatorSessionAsync();
+
+        await Conductor.StopSessionsAsync();
+
+        // Nothing left running, and the ledger says work was cut off rather than leaving a founder to infer it.
+        Assert.Equal(0, Conductor.RunningCount);
+        var terminated = Assert.Single(await EventsAsync(), e => e.Type == "conductor.sessions_terminated");
+        Assert.Equal(1, terminated.Payload.GetProperty("count").GetInt32());
+    }
+
+    [Fact]
+    public async Task An_orchestrator_does_not_outlive_the_hub_that_started_it()
+    {
+        // The exact shape the validator hit: orchestrator-t-9 staffed by one hub and again by the next, both
+        // children alive, both told to claim T-9. Two orchestrators on one task is two specs and two branches.
+        var author = await OrchestratingAsync();
+        _hub.Orchestrators.Block = true;
+        await author.AddTaskAsync("Only one of these, ever");
+        Assert.Equal(1, await Conductor.RunPassAsync());
+        Assert.Equal(1, Conductor.RunningCount);
+
+        await Conductor.StopSessionsAsync();
+
+        Assert.Equal(0, Conductor.RunningCount);
+        Assert.Single(await EventsAsync(), e => e.Type == "conductor.sessions_terminated");
+        Assert.Single(_hub.Orchestrators.Started);
+    }
+
+    [Fact]
+    public async Task After_the_sessions_are_stopped_the_task_is_planned_exactly_once_again()
+    {
+        // The other half of the reproduction. With the child dead, an empty running set is *true*, so the next hub
+        // plans the task once - not once more on top of a session that is still going.
+        var id = await HeldValidatorSessionAsync();
+
+        await Conductor.StopSessionsAsync();
+
+        Assert.Equal(0, Conductor.RunningCount);
+        Assert.Equal(id, Assert.Single(await Conductor.PlanAsync()).TaskKey);
+        Assert.Single(await EventsAsync(), e => e.Type == "conductor.staffing");
+    }
+
+    [Fact]
+    public async Task A_killed_session_is_not_charged_to_the_pair_that_did_nothing_wrong()
+    {
+        // Cancellation is the hub stopping, not the pair failing. Charged as a launch failure it would leave every
+        // session in flight one strike worse off for a restart, and three restarts would stall work that was never
+        // given the chance to fail - a hub that punishes you for turning it off and on again.
+        _hub.Settings["Muthur:ConductorMaxAttempts"] = "2";
+        await HeldValidatorSessionAsync();
+
+        await Conductor.StopSessionsAsync();
+
+        var events = await EventsAsync();
+        Assert.DoesNotContain(events, e => e.Type is "conductor.failed" or "conductor.session_failed"
+            or "conductor.no_verdict" or "conductor.stalled");
+        Assert.Empty(await FounderMessagesAsync());
+    }
+
+    [Fact]
+    public async Task Once_the_hub_is_stopping_no_further_session_is_started()
+    {
+        // A pass racing the stop would launch a child with nobody left to cancel it: the orphan this mechanism
+        // exists to prevent, created by the mechanism's own shutdown.
+        await SetUpAsync("win-validator");
+        await DefineAsync("win-validator");
+        await TaskInValidationAsync();
+
+        await Conductor.StopSessionsAsync();
+
+        Assert.Equal(0, await Conductor.RunPassAsync());
+        Assert.Empty(_hub.Validators.Started);
+    }
+
+    [Fact]
+    public async Task A_session_that_finishes_normally_records_nothing_about_being_stopped()
+    {
+        await SetUpAsync("win-validator");
+        await DefineAsync("win-validator");
+        await TaskInValidationAsync();
+        Assert.Equal(1, await Conductor.RunPassAsync());
+        await SettledAsync();
+
+        Assert.DoesNotContain(await EventsAsync(), e => e.Type == "conductor.sessions_terminated");
+    }
+
+    [Fact]
+    public async Task A_stop_with_nothing_running_says_nothing_and_a_second_stop_says_nothing_twice()
+    {
+        // The event means "work was cut off here". A line printed by every clean shutdown would mean nothing.
+        await SetUpAsync("win-validator");
+        await DefineAsync("win-validator");
+
+        await Conductor.StopSessionsAsync();
+        await Conductor.StopSessionsAsync();
+
+        Assert.DoesNotContain(await EventsAsync(), e => e.Type == "conductor.sessions_terminated");
+    }
+
+    [Theory]
+    [InlineData("git push*")]
+    [InlineData("git merge*")]
+    [InlineData("git rebase*")]
+    [InlineData("git checkout main*")]
+    [InlineData("git switch main*")]
+    [InlineData("gh*")]
+    public void No_session_the_conductor_starts_may_push_merge_or_take_the_default_branch(string forbidden)
+    {
+        // Asserted as a floor rather than as the list itself, so adding a guard passes and removing one fails.
+        // Both launchers read this array: it is one boundary, and a second copy of a boundary is how one of them
+        // quietly grows a hole while every test still passes.
+        Assert.Contains(forbidden, SessionCommands.Denied);
+        Assert.Contains("muthur*", SessionCommands.Allowed);   // and it can still talk to the hub
+    }
 }
