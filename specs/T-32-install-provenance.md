@@ -279,3 +279,73 @@ meant to save.
   work rather than here.
 - Every other founder command that reads a path from the moving tree — there are few today — inherits the
   same hazard. `FileProvenance` is deliberately general so the next one costs two lines.
+
+## Proof (2026-09-18)
+
+```
+dotnet build   0 warnings, 0 errors
+dotnet test    Launch 19 + Cli 40 (was 32) + Core 3692 + Server 196, all passing
+```
+
+### Unit A, run by the orchestrator on the real checkout
+
+```
+$ pwsh ./scripts/install.ps1 -Destination ./artifacts/t32check
+Published from task/T-32-install-provenance (8f860e6).
+Installed to C:\WorkSrc\MUTHUR\artifacts\t32check
+```
+
+That line **is the incident**: an install from the main checkout while an orchestrator has it on a task
+branch. Silently, it produced the stale CLI that cost four validator sessions. It now says so.
+
+Dirty tree, from the repository root with one tracked file edited:
+
+```
+The working tree at C:\WorkSrc\MUTHUR has uncommitted changes, so the build would correspond to no commit.
+Commit them, or pass -Ref <ref> to publish a named commit instead.
+ M src/Muthur.Core/MuthurException.cs
+```
+
+`destination created? NO` — the refusal lands before any publish, which was the check worth most.
+
+### Unit B, end to end against a scratch hub
+
+The check the spec left open for a validator, because no worker may run `muthur`. Run here instead:
+
+```
+$ muthur role define probe --brief-file kit/briefs/validator.md --founder
+exit=0
+stdout: {"key":"probe","isValidator":false,"hasBrief":true,...}
+stderr: Read kit/briefs/validator.md at task/T-32-install-provenance (8f860e6).
+
+# same brief, one line appended
+$ muthur role define probe2 --brief-file kit/briefs/validator.md --founder
+exit=2
+stdout: []
+stderr: {"code":"brief_file_dirty","message":"kit/briefs/validator.md has no committed version, ..."}
+```
+
+Provenance on stderr with the JSON alone on stdout, and the second case is the founder's own incident —
+re-serving a brief from a tree that had moved — now refused instead of silently installing text that matches
+no commit.
+
+### Two findings recorded so nobody "fixes" them later
+
+- **The unborn-HEAD sentence is now defensive rather than reachable.** The two amendments interact: in any
+  repository with an unborn HEAD that also has something to publish, every file under `src/` and `kit/` is by
+  definition untracked, so the dirty check fires first and refuses. Unit A's implementer could only reach the
+  sentence end to end by constructing a repository whose `.gitignore` is `*`, and said plainly that the
+  fixture was contrived rather than presenting it as a normal case. The refusal is the better answer there;
+  the sentence is correct when it is finally reached; it is not dead code.
+- **On an unborn HEAD, `git rev-parse --abbrev-ref HEAD` prints `HEAD` to stdout and *then* exits 128.** Code
+  trusting the text rather than the exit code would read "detached", call `describe --all --always HEAD`,
+  which also fails, and print `Published from  ().` — a line naming nothing. The implementation checks `.Ok`
+  before looking at the text and probes `rev-parse --git-dir` first to tell "not a repository" from "no
+  commits". Keep that ordering.
+
+### An accepted deviation
+
+The refusal's tail is deduplicated with `Select-Object -Unique`: a tracked modification under `src/` is
+reported by both dirty commands, and a refusal that lists one problem twice invites the reader to wonder
+what the difference is. Two identical porcelain lines are necessarily the same file in the same state, so
+nothing is lost, and `-Unique` preserves first-occurrence order where `Sort-Object -Unique` would not.
