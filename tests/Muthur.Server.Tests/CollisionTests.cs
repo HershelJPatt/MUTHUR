@@ -83,6 +83,7 @@ public sealed class CollisionTests(ITestOutputHelper output) : IDisposable
         Assert.Equal(TaskState.Validating, right.State);
 
         var collisions = await Service().CurrentAsync();
+        _processes.AssertMergeTree(1);
 
         var collision = Assert.Single(collisions);
         Assert.Equal(left.Id, collision.TaskA);
@@ -116,7 +117,9 @@ public sealed class CollisionTests(ITestOutputHelper output) : IDisposable
         Assert.Equal(TaskState.Validated, left.State);
         Assert.Equal(TaskState.Validated, right.State);
 
-        var collision = Assert.Single(await Service().CurrentAsync());
+        var collisions = await Service().CurrentAsync();
+        _processes.AssertMergeTree(1);
+        var collision = Assert.Single(collisions);
 
         Assert.Equal(left.Id, collision.TaskA);
         Assert.Equal(right.Id, collision.TaskB);
@@ -138,7 +141,9 @@ public sealed class CollisionTests(ITestOutputHelper output) : IDisposable
         Assert.Contains("shared.txt", _repo.Git("diff", "--name-only", "main...task/T-1-top"));
         Assert.Contains("shared.txt", _repo.Git("diff", "--name-only", "main...task/T-2-bottom"));
 
-        Assert.Empty(await Service().CurrentAsync());
+        var collisions = await Service().CurrentAsync();
+        _processes.AssertMergeTree(0);
+        Assert.Empty(collisions);
         Assert.DoesNotContain("pill-collision", await _hub.CreateClient().GetStringAsync("/"));
     }
 
@@ -318,31 +323,47 @@ public sealed class CollisionTests(ITestOutputHelper output) : IDisposable
     private sealed class CountingProcessRunner(ITestOutputHelper output) : IProcessRunner
     {
         private readonly ProcessRunner _real = new();
+        private readonly ConcurrentQueue<MergeResult> _merges = new();
         private int _calls;
 
         public int Calls => Volatile.Read(ref _calls);
+
+        public void AssertMergeTree(int expectedExitCode)
+        {
+            var merge = Assert.Single(_merges);
+            Assert.Equal(TimeSpan.FromSeconds(5), merge.RequestedTimeout);
+            Assert.Equal(HangDetector, merge.EffectiveTimeout);
+            Assert.Equal(expectedExitCode, merge.Result.ExitCode);
+        }
 
         public async Task<ProcessResult> RunAsync(string fileName, IReadOnlyList<string> arguments, string workingDirectory,
             string? stdin = null, TimeSpan? timeout = null, CancellationToken ct = default, IReadOnlyCollection<string>? scrubEnvironment = null,
             IReadOnlyDictionary<string, string>? environment = null)
         {
             Interlocked.Increment(ref _calls);
+            var isMergeTree = fileName == "git" && arguments.Count > 0 && arguments[0] == "merge-tree";
+            // Integration proves Git's merge semantics; the scripted runner checks the responsiveness contract.
+            var effectiveTimeout = isMergeTree ? HangDetector : timeout;
             var elapsed = Stopwatch.StartNew();
             try
             {
-                var result = await _real.RunAsync(fileName, arguments, workingDirectory, stdin, timeout, ct, scrubEnvironment, environment);
+                var result = await _real.RunAsync(fileName, arguments, workingDirectory, stdin, effectiveTimeout, ct, scrubEnvironment, environment);
+                if (isMergeTree) _merges.Enqueue(new MergeResult(timeout, effectiveTimeout, result));
                 output.WriteLine($"Process: {fileName}; arguments: [{string.Join(", ", arguments)}]; working directory: {workingDirectory}; " +
-                    $"elapsed milliseconds: {elapsed.Elapsed.TotalMilliseconds}; requested timeout: {timeout}; " +
+                    $"elapsed milliseconds: {elapsed.Elapsed.TotalMilliseconds}; requested timeout: {timeout}; effective test timeout: {effectiveTimeout}; " +
                     $"exit code: {result.ExitCode}\nstdout:\n{result.StdOut}\nstderr:\n{result.StdErr}");
                 return result;
             }
             catch (Exception exception)
             {
                 output.WriteLine($"Process: {fileName}; arguments: [{string.Join(", ", arguments)}]; working directory: {workingDirectory}; " +
-                    $"elapsed milliseconds: {elapsed.Elapsed.TotalMilliseconds}; requested timeout: {timeout}; exception: {exception}");
+                    $"elapsed milliseconds: {elapsed.Elapsed.TotalMilliseconds}; requested timeout: {timeout}; effective test timeout: {effectiveTimeout}; " +
+                    $"exception: {exception}");
                 throw;
             }
         }
+
+        private sealed record MergeResult(TimeSpan? RequestedTimeout, TimeSpan? EffectiveTimeout, ProcessResult Result);
     }
 
     /// <summary>Exact service-pass calls only: no external process can influence the cache assertions.</summary>
