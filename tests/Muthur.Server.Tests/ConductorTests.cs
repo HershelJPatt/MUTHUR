@@ -94,6 +94,53 @@ public sealed class ConductorTests : IDisposable
         }
     }
 
+    /// <summary>
+    /// Both sibling sessions of one round, in the order that makes the defect happen: <paramref name="decider"/>'s
+    /// fails the task, which takes it out of validating, and the other returns having recorded nothing only once that
+    /// failure has landed. One instance per round — the gate opens once.
+    /// </summary>
+    private sealed class RoundClosedBy(HttpClient checker, string decider) : IValidatorSessionLauncher
+    {
+        private readonly TaskCompletionSource _decided = new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        public async Task StartAsync(ConductorAssignment assignment, CancellationToken ct = default)
+        {
+            if (assignment.RoleKey != decider)
+            {
+                // The sibling: it did its work, found nothing left to post, and exited 0.
+                await _decided.Task.WaitAsync(Eventually.Budget, ct);
+                return;
+            }
+            try
+            {
+                (await checker.PostAsync(Routes.RoleAction(decider, "take"), null, ct)).EnsureSuccessStatusCode();
+                (await checker.PostActionAsync(assignment.TaskKey, "fail", new VerdictRequest(decider, "the export still 500s"))).EnsureSuccessStatusCode();
+                (await checker.PostAsync(Routes.RoleAction(decider, "release"), null, ct)).EnsureSuccessStatusCode();
+            }
+            finally { _decided.TrySetResult(); }   // never leave the sibling waiting out the budget
+        }
+    }
+
+    /// <summary>
+    /// A session that passes the task and does not return until every validator has, so both siblings classify
+    /// themselves against a task that has left validating for <see cref="TaskState.Validated"/>.
+    /// </summary>
+    private sealed class PassingSession(Func<string, HttpClient> checkerFor) : IValidatorSessionLauncher
+    {
+        public async Task StartAsync(ConductorAssignment assignment, CancellationToken ct = default)
+        {
+            var checker = checkerFor(assignment.RoleKey);
+            (await checker.PostAsync(Routes.RoleAction(assignment.RoleKey, "take"), null, ct)).EnsureSuccessStatusCode();
+            (await checker.PostActionAsync(assignment.TaskKey, "pass", new VerdictRequest(assignment.RoleKey))).EnsureSuccessStatusCode();
+            (await checker.PostAsync(Routes.RoleAction(assignment.RoleKey, "release"), null, ct)).EnsureSuccessStatusCode();
+            await Eventually.TrueAsync(
+                async () => (await checker.GetTaskAsync(assignment.TaskKey)).Task.State == TaskState.Validated ? "validated" : null,
+                $"{assignment.TaskKey} never reached validated, so no session ever saw the state this test is about");
+        }
+    }
+
+    private static string? RoleOf(EventDto recorded) => recorded.Payload.GetProperty("role").GetString();
+
     [Fact]
     public async Task A_task_waiting_on_a_role_nobody_holds_gets_a_session()
     {
@@ -628,6 +675,184 @@ public sealed class ConductorTests : IDisposable
         var events = await _hub.EventsWhenAsync(e => e.Count(x => x.Type == "conductor.no_verdict") == 3,
             "three sessions without a verdict were never recorded");
         Assert.Single(events, e => e.Type == "conductor.stalled");   // still told once, not per probe
+    }
+
+    [Fact]
+    public async Task A_round_another_validator_closed_is_recorded_as_that_and_never_charged_to_the_sibling()
+    {
+        // Two required validators means two sessions for one round. The first to fail the task takes it out of
+        // validating and leaves the sibling's row pending with nothing left to post - a correct ending that the
+        // pair's own row cannot tell apart from a session that recorded nothing. Counted as nothing three times,
+        // the sibling stalls and the founder is sent to look for a validator that is not broken.
+        _hub.Settings["Muthur:ConductorMaxAttempts"] = "3";
+        await SetUpAsync("win-validator", "web-validator");
+        await DefineAsync("win-validator", "web-validator");
+        var (owner, id) = await OwnedTaskInValidationAsync();
+        var checker = await _hub.RegisterAgentAsync("checker");
+
+        for (var round = 1; round <= 3; round++)
+        {
+            _hub.Validators.Delegate = new RoundClosedBy(checker, "win-validator");
+            Assert.Equal(2, await Conductor.RunPassAsync());
+            await SettledAsync();
+
+            MoveHead();
+            (await owner.PostActionAsync(id, "implemented", new ImplementedRequest("task/T-1-feature"))).EnsureSuccessStatusCode();
+        }
+        _hub.Validators.Delegate = null;
+
+        var events = await _hub.EventsWhenAsync(e => e.Count(x => x.Type == "validation.failed") == 3,
+            "win-validator never decided the three rounds this test is about");
+
+        // The harm, asserted first and whole so a regression prints it: counted as three nothings, the sibling
+        // stalls and the founder is told to go looking for a validator that was doing exactly the right thing.
+        var stalls = events.Where(e => e.Type == "conductor.stalled").Select(RoleOf).ToList();
+        var told = await FounderMessagesAsync();
+        Assert.True(stalls.Count == 0 && told.Count == 0,
+            $"Three rounds ended correctly under web-validator, and the conductor recorded {stalls.Count} " +
+            $"conductor.stalled ({string.Join(", ", stalls)}) and sent the founder {told.Count} message(s): " +
+            string.Join(" / ", told.Select(m => m.Body)));
+
+        Assert.DoesNotContain(events, e => e.Type == "conductor.no_verdict");
+        Assert.Equal(3, events.Count(e => e.Type == "conductor.round_closed"));
+        Assert.All(events.Where(e => e.Type == "conductor.round_closed"), e =>
+        {
+            Assert.Equal(id, e.TaskId);
+            Assert.Equal("web-validator", RoleOf(e));
+        });
+    }
+
+    [Fact]
+    public async Task A_round_that_is_still_open_still_charges_the_session_that_recorded_nothing()
+    {
+        // The other half of the same fork, and the reason the fix is a classifier rather than a licence: nobody
+        // decided this task, so both sessions really did record nothing and both pairs are charged for it.
+        _hub.Settings["Muthur:ConductorMaxAttempts"] = "3";
+        await SetUpAsync("win-validator", "web-validator");
+        await DefineAsync("win-validator", "web-validator");
+        await TaskInValidationAsync();
+
+        for (var pass = 0; pass < 6; pass++)
+        {
+            await Conductor.RunPassAsync();
+            await SettledAsync();
+        }
+
+        Assert.Equal(6, _hub.Validators.Started.Count);   // three per pair, then both are stalled half-open
+
+        var events = await _hub.EventsWhenAsync(e => e.Count(x => x.Type == "conductor.no_verdict") == 6,
+            "six sessions without a verdict were never recorded");
+        Assert.DoesNotContain(events, e => e.Type == "conductor.round_closed");
+        Assert.Equal(3, events.Count(e => e.Type == "conductor.no_verdict" && RoleOf(e) == "web-validator"));
+        Assert.Equal(2, events.Count(e => e.Type == "conductor.stalled"));
+        Assert.Contains(await FounderMessagesAsync(), m => m.Body.StartsWith(
+            "The conductor started 3 validators for T-1 (web-validator) and none of them reached a verdict.",
+            StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public async Task A_closed_round_leaves_the_strikes_behind_it_exactly_where_they_were()
+    {
+        // Neither charged nor credited. Clearing here is the tempting mistake: the session did nothing wrong. But a
+        // pair that only ever runs in rounds somebody else closes would be laundered clean without ever reaching a
+        // verdict, which is precisely what the no-verdict cap exists to catch. So two strikes, then a closed round,
+        // then one more genuine nothing is three - and three is the cap.
+        _hub.Settings["Muthur:ConductorMaxAttempts"] = "3";
+        await SetUpAsync("win-validator", "web-validator");
+        await DefineAsync("win-validator", "web-validator");
+        var (owner, id) = await OwnedTaskInValidationAsync();
+        var checker = await _hub.RegisterAgentAsync("checker");
+
+        for (var pass = 0; pass < 2; pass++)
+        {
+            await Conductor.RunPassAsync();
+            await SettledAsync();
+        }
+        var charged = await _hub.EventsWhenAsync(e => e.Count(x => x.Type == "conductor.no_verdict") == 4,
+            "the two rounds nobody decided were never charged to both pairs");
+        Assert.Equal(2, charged.Count(e => e.Type == "conductor.no_verdict" && RoleOf(e) == "web-validator"));
+
+        // A round win-validator closes under it. web-validator keeps the two strikes it already had.
+        _hub.Validators.Delegate = new RoundClosedBy(checker, "win-validator");
+        await Conductor.RunPassAsync();
+        await SettledAsync();
+        _hub.Validators.Delegate = null;
+        (await owner.PostActionAsync(id, "implemented", new ImplementedRequest("task/T-1-feature"))).EnsureSuccessStatusCode();
+
+        // One further round of genuine nothing, and those surviving strikes take the pair to the cap.
+        await Conductor.RunPassAsync();
+        await SettledAsync();
+
+        var events = await _hub.EventsWhenAsync(e => e.Count(x => x.Type == "conductor.no_verdict") == 6,
+            "the four rounds nobody decided were never charged to both pairs");
+        Assert.Single(events, e => e.Type == "conductor.round_closed");
+        Assert.Equal(3, events.Count(e => e.Type == "conductor.no_verdict" && RoleOf(e) == "web-validator"));
+        Assert.True(events.Any(e => e.Type == "conductor.stalled" && RoleOf(e) == "web-validator"),
+            "web-validator had two strikes, ran in a round win-validator closed under it, and then recorded nothing " +
+            "a third time - which is the cap, so it should have stalled. It did not, so the closed round credited " +
+            "the pair with a verdict it never reached and cleared strikes it had no evidence to clear.");
+        Assert.Single(events, e => e.Type == "conductor.stalled");   // win-validator's verdict cleared its own
+    }
+
+    [Fact]
+    public async Task A_verdict_still_clears_the_strikes_a_closed_round_would_have_left_alone()
+    {
+        // The other side of that decision: reaching a verdict is evidence the pair works, and it still clears.
+        _hub.Settings["Muthur:ConductorMaxAttempts"] = "3";
+        await SetUpAsync("win-validator");
+        await DefineAsync("win-validator");
+        var (owner, id) = await OwnedTaskInValidationAsync();
+        var checker = await _hub.RegisterAgentAsync("checker");
+
+        for (var pass = 0; pass < 2; pass++)
+        {
+            await Conductor.RunPassAsync();
+            await SettledAsync();
+        }
+        await _hub.EventsWhenAsync(e => e.Count(x => x.Type == "conductor.no_verdict") == 2,
+            "two sessions without a verdict were never recorded");
+
+        _hub.Validators.Delegate = new VerdictSession(checker);
+        await Conductor.RunPassAsync();
+        await SettledAsync();
+        _hub.Validators.Delegate = null;
+        (await owner.PostActionAsync(id, "implemented", new ImplementedRequest("task/T-1-feature"))).EnsureSuccessStatusCode();
+
+        await Conductor.RunPassAsync();
+        await SettledAsync();
+
+        var events = await _hub.EventsWhenAsync(e => e.Count(x => x.Type == "conductor.no_verdict") == 3,
+            "the round after the verdict was never recorded");
+        Assert.Equal(1, events.Where(e => e.Type == "conductor.no_verdict").MaxBy(e => e.Seq)!
+            .Payload.GetProperty("attempt").GetInt32());
+        Assert.DoesNotContain(events, e => e.Type is "conductor.stalled" or "conductor.round_closed");
+        Assert.Empty(await FounderMessagesAsync());
+    }
+
+    [Fact]
+    public async Task Every_validator_passing_reads_as_a_verdict_rather_than_a_round_somebody_closed()
+    {
+        // The trap in the order of the two checks. A task that reached validated because every validator passed is
+        // not validating either, so a classifier that asked about the task's state first would read every passing
+        // validator's session as a round closed under it - and the cap would stop seeing real nothings entirely.
+        await SetUpAsync("win-validator", "web-validator");
+        await DefineAsync("win-validator", "web-validator");
+        var id = await TaskInValidationAsync();
+        var checkers = new Dictionary<string, HttpClient>
+        {
+            ["win-validator"] = await _hub.RegisterAgentAsync("win-checker"),
+            ["web-validator"] = await _hub.RegisterAgentAsync("web-checker"),
+        };
+        _hub.Validators.Delegate = new PassingSession(role => checkers[role]);
+
+        Assert.Equal(2, await Conductor.RunPassAsync());
+        await SettledAsync();
+
+        var events = await _hub.EventsWhenAsync(e => e.Any(x => x.Type == "task.validated"),
+            "the task never passed both validators");
+        Assert.Equal(TaskState.Validated, (await _hub.Founder().GetTaskAsync(id)).Task.State);
+        Assert.DoesNotContain(events, e => e.Type == "conductor.round_closed");
+        Assert.DoesNotContain(events, e => e.Type == "conductor.no_verdict");
     }
 
     [Theory]

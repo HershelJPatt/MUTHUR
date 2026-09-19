@@ -57,6 +57,17 @@ public sealed class ConductorService(Ledger ledger, MuthurOptions options, TimeP
     /// <summary>Why a session produced nothing. The founder is sent to a different place for each.</summary>
     private enum Unproductive { NeverStarted, RanAndFailed, NoVerdict }
 
+    /// <summary>What a session that exited cleanly actually left behind.</summary>
+    private enum RoundEnd
+    {
+        /// <summary>This pair recorded a verdict. The pair is working.</summary>
+        Verdict,
+        /// <summary>Another validator decided the task first, so there was nothing left for this pair to record.</summary>
+        Closed,
+        /// <summary>The round is still open and this pair recorded nothing. That is the defect the cap catches.</summary>
+        Nothing,
+    }
+
     private sealed record Stall(int Failures, DateTimeOffset? StalledAt, bool Announced, Unproductive Last);
 
     /// <param name="Failures">Times this task has ever been failed — the ledger is append-only, so this only rises.</param>
@@ -279,15 +290,27 @@ public sealed class ConductorService(Ledger ledger, MuthurOptions options, TimeP
                 await UnproductiveAsync(assignment, key,
                     ex is ValidatorSessionException ? Unproductive.RanAndFailed : Unproductive.NeverStarted, ex.Message);
             }
-            else if (await ReachedAVerdictAsync(assignment))
+            else switch (await RoundEndAsync(assignment))
             {
-                lock (_stalls) _stalls.Remove(key);   // including a probe: the pair is working again
-            }
-            else
-            {
-                // It started, it exited cleanly, and it recorded nothing. That is not progress: it is the loop that
-                // spent five harness sessions in twenty-eight minutes on a task no unattended validator could do.
-                await UnproductiveAsync(assignment, key, Unproductive.NoVerdict, null);
+                case RoundEnd.Verdict:
+                    lock (_stalls) _stalls.Remove(key);   // including a probe: the pair is working again
+                    break;
+                case RoundEnd.Closed:
+                    // Another validator decided the task while this session was running, so there was nothing left
+                    // to record. Not charged, because the session did nothing wrong. Not cleared either: a pair that
+                    // only ever runs in rounds closed by others must not be laundered clean without ever reaching a
+                    // verdict. The event is recorded rather than swallowed because the session still spent a slot.
+                    await ledger.MutateAsync(Caller.Founder, m =>
+                    {
+                        m.Record("conductor.round_closed", assignment.TaskId, new { role = assignment.RoleKey });
+                        return Task.CompletedTask;
+                    }, CancellationToken.None);
+                    break;
+                default:
+                    // It started, it exited cleanly, and it recorded nothing. That is not progress: it is the loop that
+                    // spent five harness sessions in twenty-eight minutes on a task no unattended validator could do.
+                    await UnproductiveAsync(assignment, key, Unproductive.NoVerdict, null);
+                    break;
             }
         }
         finally
@@ -296,13 +319,32 @@ public sealed class ConductorService(Ledger ledger, MuthurOptions options, TimeP
         }
     }
 
-    /// <summary>Whether the session left a verdict behind for its pair — the only evidence that it did its job.</summary>
-    private Task<bool> ReachedAVerdictAsync(ConductorAssignment assignment) =>
+    /// <summary>
+    /// What a session that exited cleanly actually left behind. A pair's own row is not enough to tell: sessions are
+    /// started one per pending validation and run concurrently, so the first validator to fail a task takes it out of
+    /// <see cref="TaskState.Validating"/> and leaves every sibling's row <see cref="Verdict.Pending"/> with nothing
+    /// left for it to record.
+    /// </summary>
+    private Task<RoundEnd> RoundEndAsync(ConductorAssignment assignment) =>
         ledger.ReadAsync(async (db, _) =>
-            !await db.TaskValidations.AnyAsync(v =>
-                v.TaskId == assignment.TaskId && v.ValidatorKey == assignment.RoleKey && v.Verdict == Verdict.Pending,
-                CancellationToken.None),
-            CancellationToken.None);
+        {
+            var round = await db.Tasks
+                .Where(t => t.Id == assignment.TaskId)
+                .Select(t => new
+                {
+                    t.State,
+                    Pending = db.TaskValidations.Any(v =>
+                        v.TaskId == t.Id && v.ValidatorKey == assignment.RoleKey && v.Verdict == Verdict.Pending),
+                })
+                .SingleOrDefaultAsync(CancellationToken.None);
+
+            // The verdict first, and only then the task's state. A task that reached Validated because every
+            // validator passed is not Validating either, and reading those pairs as closed rounds would credit
+            // each of them with having done nothing. A row that is gone — the next round wiped it, because
+            // ImplementedAsync removes the previous round's rows — is not pending, so it is not the cap's business.
+            if (round is not { Pending: true }) return RoundEnd.Verdict;
+            return round.State == TaskState.Validating ? RoundEnd.Nothing : RoundEnd.Closed;
+        }, CancellationToken.None);
 
     /// <summary>
     /// One session produced nothing: count it, and when the pair has run out of attempts stall it half-open and tell
