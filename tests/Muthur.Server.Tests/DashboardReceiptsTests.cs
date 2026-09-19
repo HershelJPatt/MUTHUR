@@ -240,6 +240,37 @@ public sealed class DashboardReceiptsTests : IDisposable
         }
     }
 
+    /// <summary>
+    /// T-52: the lit control is the window the page is showing, not the one that was asked for. The service
+    /// clamps to 1..720, so an out-of-range request used to render thirty days of receipts with nothing lit
+    /// at all — on a page whose whole job is to be read at a glance, leaving a date as the only clue.
+    /// </summary>
+    [Theory]
+    [InlineData("100000", 720)]
+    [InlineData("9999999999999", 720)]
+    [InlineData("721", 720)]
+    public async Task An_out_of_range_window_lights_the_control_it_was_clamped_to(string requested, int lit)
+    {
+        var row = WindowRow(await (await TypedAsync(requested)).Content.ReadAsStringAsync());
+
+        Assert.Matches($"<a class=\"btn btn-on\"[^>]*href=\"/receipts\\?hours={lit}\"", row);
+        Assert.Single(Regex.Matches(row, "btn-on"));   // exactly one, so no second control claims the window too
+    }
+
+    /// <summary>
+    /// The floor is one hour, and no control names it. Nothing lit is the honest answer there and a different
+    /// thing from the ceiling, where a control does name the window the page ended up on.
+    /// </summary>
+    [Fact]
+    public async Task A_window_no_control_names_lights_nothing_rather_than_the_nearest()
+    {
+        var row = WindowRow(await (await TypedAsync("0")).Content.ReadAsStringAsync());
+
+        Assert.DoesNotContain("btn-on", row);
+        foreach (var (hours, label) in new[] { (24, "24h"), (168, "7d"), (720, "30d") })
+            Assert.Matches($"<a [^>]*href=\"/receipts\\?hours={hours}\"[^>]*>{label}</a>", row);
+    }
+
     /// <summary>The selector row alone, so "no button here" means in the selector and not elsewhere on the page.</summary>
     private static string WindowRow(string page)
     {

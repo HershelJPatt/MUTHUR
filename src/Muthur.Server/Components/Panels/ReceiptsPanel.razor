@@ -14,7 +14,7 @@
                that only fetches markup. *@
             @foreach (var (hours, label) in Windows)
             {
-                <a class="btn @(Window == hours ? "btn-on" : "")" href="/receipts?hours=@hours">@label</a>
+                <a class="btn @(Effective == hours ? "btn-on" : "")" href="/receipts?hours=@hours">@label</a>
             }
         </div>
         <div class="stats">
@@ -129,6 +129,18 @@
     [Parameter] public int? Hours { get; set; }
 
     private int Window => Hours ?? Windows[0].Hours;
+
+    /// <summary>
+    /// The window actually being shown, which is what the service clamped the request to. Read back off the
+    /// report rather than re-clamped here: the panel marking the requested window meant that anything out of
+    /// range rendered thirty days of receipts with no control lit at all, and a second copy of the bounds
+    /// would go on lighting the old answer the day they moved. <c>At - Since</c> is what the service did.
+    /// <para>
+    /// Before the first read, the report is all-default and the difference is zero, which would light
+    /// nothing; until it arrives, the requested window is the best answer available.
+    /// </para>
+    /// </summary>
+    private int Effective => _report.At == default ? Window : (int)Math.Round((_report.At - _report.Since).TotalHours);
 
     // The window's edge moves with time alone, so re-read on the clock as well as on events.
     protected override TimeSpan? ClockInterval => TimeSpan.FromSeconds(60);
