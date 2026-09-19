@@ -407,3 +407,37 @@ code path that consumes it most. Unit A is therefore extended by two lines and o
   reaches the built `WorkerRequest` with that value, and that a candidate without one yields `null`.
 
 `Muthur.Cli` is added to Unit A's file list. Nothing else about Unit A changes.
+
+## Amendment 2 — the README must not keep saying the ceiling is config-only
+
+Unit B's implementer reported that `README.md` line 171 documents `Muthur:ConductorMaxSessions` as
+"validator sessions running at once", with no hint that the founder can now override it at runtime. Unit B's
+file list does not include the README, so it was correctly left alone and reported.
+
+It has to change, for the same reason Amendment 1 existed: a knob documented one way and implemented another
+is a knob that lies. The row immediately above it already shows the exact phrasing this project uses for a
+setting the database overrides:
+
+> `Muthur:ConductorEnabled` | false | the starting value only; `muthur conductor on --founder` is stored in
+> the database and outlives a restart
+
+Unit B is extended by documentation only — no code, no tests:
+
+- `README.md`: the `Muthur:ConductorMaxSessions` row becomes "the starting value only; `muthur conductor
+  sessions <n> --founder` is stored in the database and outlives a restart", and the table gains a row for
+  the unattended window naming `muthur conductor unattended --from --to --sessions`.
+- `kit/briefs/` and `kit/core/`: wherever the conductor's session budget is described to an agent, say that
+  the ceiling is readable from `muthur conductor status` as `ceiling` with `ceilingReason`, and that it is
+  not the same number as `maxSessions`.
+
+The three judgment calls Unit B's implementer flagged are all accepted as built, and recorded here so the
+next reader does not have to rediscover them:
+
+1. **`CeilingReason` substitutes the effective ceiling, not the window's own number.** When a window is open
+   but wider than the founder's standing number, the sentence still reports what the pass will enforce. A
+   reason that contradicted the `Ceiling` field beside it would be worse than a slightly loose sentence.
+2. **A request carrying both a standing number and a window writes both**, and `Clear` wins over everything
+   in the same request. The CLI never sends the combination; the API allowing it costs nothing.
+3. **A malformed stored `conductor_unattended` reads as no window rather than throwing.** Only
+   `SetCeilingAsync` writes that key and it validates first, so this can only be reached by editing the
+   database by hand — and a hub that refuses to start because someone did is worse than one that ignores it.
