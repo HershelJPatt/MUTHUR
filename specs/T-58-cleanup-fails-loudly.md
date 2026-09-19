@@ -204,3 +204,72 @@ No browser is needed and none should be used.
   If another one ever does, this mechanism is per-assembly and would need repeating.
 - **`kept` still does not redden the run**, by design. If the two directories that legitimately log errors
   ever become many, the question of whether a growing kept count deserves attention is a different one.
+
+## Amendment 1 — the named risk was the real one, and a mechanism that reaches the shell (2026-09-19)
+
+The spec said `Environment.ExitCode` in a `ProcessExit` handler *"may or may not survive the VSTest host"* and
+told the implementer to measure it and report rather than substitute. **Step 3 came back 0.** The implementer
+stopped, which is exactly right, and measured the finding three ways rather than asserting it:
+
+1. **The handler runs and sets the code.** Re-running step 3 with `-v n` printed, from that same lambda,
+   `301 removed, 0 kept, 1 could not be removed` and the `failed` line naming the held directory. The summary
+   write and `Environment.ExitCode = ExitCode()` are consecutive statements, so the assignment executed with
+   a value of 1.
+2. **`dotnet test` still exits 0**, plain and at `-v n`.
+3. **The mechanism is not broken in general** — a minimal .NET app with the identical handler exits 1.
+
+So the failure is specific to the runner: `dotnet test` derives its exit code from the **test results**, not
+from the test host's exit code. A run where every test passed is reported as success whatever the host
+returns. Design section 2 is wired exactly as frozen and is **inert**.
+
+### The replacement: fail the test whose hub leaked
+
+If the only thing that reddens `dotnet test` is a failing test, then a cleanup failure has to *be* one.
+
+`TestHubDirectories.Release` is called from `HubFactory.Dispose`, and `HubFactory` is an `IDisposable` field
+on each test class — so xUnit disposes it as part of that test's lifecycle. **Throw from `Release` when a
+delete has finally failed**, and the test whose hub leaked fails.
+
+That is better than the global exit code it replaces, not merely equivalent: an exit code says *this run
+leaked something*, while a thrown exception says *this test's hub leaked, here is the path and the
+exception*. The founder's sentence — *"A test run that leaked the state the suite promised to clean up is not
+a clean run"* — is satisfied either way, and only one of the two tells you where to look.
+
+Required shape:
+
+- Throw only after the retry budget is spent, from the `Failed` path and nowhere else. `Kept` and `Removed`
+  throw nothing.
+- The outcome is still recorded before throwing, so the summary still names the directory and the count is
+  still right.
+- The exception message names the directory and carries the last exception's message.
+- **Verify xUnit surfaces it.** A `Dispose` that throws is reported as a test failure by xUnit 2.9.3 — but
+  that is a claim about the runner, and this spec has already been wrong once about exactly that class of
+  claim. Measure it before relying on it, and report if it does not hold.
+
+### `Environment.ExitCode` stays, and here is why that is not dead code
+
+Keep the `ExitCode()` function and the assignment. It costs one line, it is correct, and it is the right
+answer the moment anything runs this suite through a runner that honours a host exit code. Say in its comment
+that it is currently inert under `dotnet test` and why, so the next reader does not spend the afternoon
+rediscovering it — that comment is the most valuable line in this task.
+
+### The acceptance criteria I wrote were unsatisfiable
+
+The implementer found that two of the spec's own acceptance bullets contradict its Verification. `ExitCode()`
+answers for the **whole run**, so a test asserting it is zero fails as soon as any other directory in that
+run has legitimately failed — which Verification step 3 deliberately arranges. Their first step-3 run showed
+exactly that: `Failed: 3, Passed: 368`, three `Expected: 0, Actual: 1`.
+
+Their replacement is correct and is ratified: the two "zero" tests assert the outcome **did not change**
+`ExitCode()`, which is the causal claim those bullets were reaching for and is immune to what other test
+classes are doing in parallel.
+
+### Also ratified
+
+- **A lower-bound timing assertion** (`spent.Elapsed >= 40ms`) in the released-within-budget test. Without it
+  the test passes vacuously whenever the handle happens to be released before the first attempt, silently
+  degrading into a happy-path test. It can only fail in the direction a loaded machine cannot cause.
+- **The deterministic retry fixture.** A recursive `Directory.Delete` that throws still removes every file it
+  can, so a marker file's disappearance is an observable "one attempt was made and lost" — the handle is
+  released on that condition rather than on a clock, which is what the house rule requires. The watcher gets
+  a dedicated `Thread` because the pool is saturated by the rest of the suite.
