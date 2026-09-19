@@ -158,3 +158,45 @@ muthur task spec T-n specs/T-n-x.md     # run from the worktree, no --branch
 ```
 
 Passing is exit 0 and a `specPath` of `specs/T-n-x.md`, with the file never present in the main checkout.
+
+## Proof
+
+`dotnet build`: clean, 0 warnings. `dotnet test`: 3708 Core, 23 Launch, 60 Cli, 275 Server — all green.
+Four of the six new tests fail with the resolution reverted to working-tree-only, which is the whole
+behaviour this task changes; the other two guard rules that must survive it.
+
+### The case this task exists for, on an installed build
+
+Build `9f998bc` installed to `artifacts/t50`, a scratch `MUTHUR_HOME` and a scratch project repository —
+never the live hub. A project, a claimed task, and the spec committed **only** on a task branch in a
+worktree, exactly as `kit/core/orchestrate.md` tells an orchestrator to work:
+
+```
+git worktree add ../proj-wt -b task/T-1-thing main
+printf '# T-1 — Build the thing\n' > ../proj-wt/specs/T-1-thing.md ; git add -A ; git commit
+test -f <main checkout>/specs/T-1-thing.md   ->  no
+
+cd ../proj-wt
+muthur task spec T-1 specs/T-1-thing.md      ->  exit 0, "specPath":"specs/T-1-thing.md"
+```
+
+No `--branch`, no copying anything into the shared checkout, and the file is genuinely not in it. The CLI
+sent `task/T-1-thing` because that is the branch the worktree is standing on.
+
+And when the spec really is nowhere, the message now says where it looked instead of asking for what the
+caller has already done:
+
+```
+muthur task spec T-1 specs/typo.md
+{"code":"spec_missing","message":"No file at 'specs/typo.md' in <repo>: not on branch 'task/T-1-thing',
+ and not in the working tree. If the spec is committed on a different branch, pass --branch <that branch>."}
+```
+
+The failure this replaces was reproduced against the live hub one iteration earlier, attaching T-45's spec:
+`No file at 'specs/T-45-validation-staffing.md' in C:\WorkSrc\MUTHUR. Commit the spec on the task branch first.`
+— said of a spec that was committed on its task branch at the time.
+
+### Note for whoever lands this
+
+This task's own spec cannot be attached with `muthur task spec` until this change is running on the live
+hub, for precisely the reason the task describes. That is the bug, not a gap in the work.
