@@ -1,6 +1,6 @@
 ---
 name: muthur-implementer
-description: Implements one unit of a frozen MUTHUR spec in its own isolated git worktree, verifies it, commits, and reports back. Spawned by an orchestrator (muthur-orchestrate skill). Give it the spec path, the unit it owns, the base branch it should be on by name, and the exact verification commands.
+description: Implements one unit of a frozen MUTHUR spec in its own isolated git worktree, verifies it, commits, and reports back. Spawned by an orchestrator (muthur-orchestrate skill). Give it the spec path, the unit it owns, the base branch it should be on by name, the default branch to measure that base against, and the exact verification commands.
 model: opus
 isolation: worktree
 disallowedTools:

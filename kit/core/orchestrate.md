@@ -30,7 +30,8 @@ Every `muthur` call renews your leases. When idle for long stretches, run
    Your harness may have a native way to do this; `muthur worker run --tier implementer --spec … --unit …` works from any
    harness and staffs the tier with whichever model and account is available.
    Give it: the spec path, the unit it owns, the branch you committed the frozen spec to and no other, the
-   exact verification commands. Nothing else — no hub access, no authority to merge or push. Use a stronger
+   default branch it should measure that base against, the exact verification commands. Nothing else — no
+   hub access, no authority to merge or push. Use a stronger
    (mastermind-tier) sub-orchestrator instead of an implementer when the unit is itself a large or risky
    problem space.
 

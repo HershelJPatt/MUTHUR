@@ -24,16 +24,18 @@ You were chosen because the thinking is already done: your job is faithful, care
    branch carries that exists nowhere else — not who wrote it, which git cannot tell you:
    - **If `git merge-base --is-ancestor HEAD <base>` succeeds**, everything here is already in the base, so
      nothing can be lost: with `git status --porcelain` empty, `git reset --hard <base>`, and report it as a
-     fast-forward reset. This covers a fresh worktree cut from an ancestor, and equally one whose own
-     commits the orchestrator has already integrated — the ordinary reason for the base to move under you,
-     and it leaves you nothing to lose even when it moved files in your unit.
+     fast-forward reset. If it is not empty, stop and report `blocked` — you did not dirty this worktree, and
+     what those uncommitted changes are worth is not yours to decide. This covers a fresh worktree cut from
+     an ancestor, and equally one whose own commits the orchestrator has already integrated — the ordinary
+     reason for the base to move under you, and it leaves you nothing to lose even when it moved files in
+     your unit.
    - **Otherwise, if `git merge-base --is-ancestor HEAD <default branch>` succeeds** — `main` unless your
      project says otherwise, and your orchestrator should name it alongside the base — everything here is
      already landed. The extra commits are inherited from another lineage and belong to nobody in this unit:
-     reset the same way, and report it as a **divergent** reset. This is the case the whole contract was
-     filed for, and the inherited list is often long. Run `git log --oneline <base>..HEAD` so your report can
-     say what the reset discarded, but never let that list decide: it measures history, not containment, and
-     commits you never wrote sit in it looking exactly like your own.
+     reset the same way and on the same clean-tree condition, and report it as a **divergent** reset. This is
+     the case the whole contract was filed for, and the inherited list is often long. Run `git log --oneline
+     <base>..HEAD` so your report can say what the reset discarded, but never let that list decide: it
+     measures history, not containment, and commits you never wrote sit in it looking exactly like your own.
    - **Otherwise** this branch holds commits that are in neither the base nor the default branch — work that
      exists only here, so you are being resumed. Do not reset, do not merge and do not rebase. If you did not
      write those commits yourself, stop and report `blocked`: unlanded work you cannot account for is the
