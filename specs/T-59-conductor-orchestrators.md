@@ -380,3 +380,30 @@ yesterday apart from the two new fields.
 - `harnesses.json` on an existing hub keeps whatever it has, so the `gpt-6-astra` / `high` correction
   reaches only new hubs. Whether `muthur doctor` should notice a codex candidate with no model is worth its
   own task.
+
+## Amendment 1 — `muthur worker run` carries the effort too
+
+Unit A's implementer reported two things about the spec as frozen. Both are recorded here rather than
+fixed silently, because the spec is the record of what was asked.
+
+**The spec said "both construction sites in `HarnessService.TiersAsync`". There is one.** Exactly one
+`new HarnessCandidateDto(...)` exists in the repository, at `HarnessService.cs:34`. The sentence was wrong
+and cost nothing; the implementer updated the one site. There are three `new HarnessCandidate(...)` sites,
+which is probably what the sentence was reaching for.
+
+**The CLI worker path drops the field, and that is a defect this task must not leave behind.**
+`src/Muthur.Cli/Commands/WorkerCommands.cs:119` builds `new HarnessCandidate(c.Harness, c.Model, c.Account)`
+from the tier DTO, and line 153 builds its `WorkerRequest` without the field. So `muthur worker run` would
+launch codex workers at the harness's own default effort while the catalog says `high` — and the
+**implementer** tier's codex entry is one of the two this task changes, so the tier most affected is the one
+delegated units actually run on.
+
+That is the same class of untruth as `codex/default`: a catalog the founder edits, silently ignored by the
+code path that consumes it most. Unit A is therefore extended by two lines and one test:
+
+- `WorkerCommands.cs:119` becomes `new HarnessCandidate(c.Harness, c.Model, c.Account, c.ReasoningEffort)`.
+- The `WorkerRequest` at line 153 gains `ReasoningEffort: c.ReasoningEffort` as its final argument.
+- A test in `tests/Muthur.Cli.Tests/` asserts that a tier whose candidate carries `"reasoningEffort": "high"`
+  reaches the built `WorkerRequest` with that value, and that a candidate without one yields `null`.
+
+`Muthur.Cli` is added to Unit A's file list. Nothing else about Unit A changes.
