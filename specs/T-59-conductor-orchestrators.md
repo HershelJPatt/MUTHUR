@@ -603,3 +603,30 @@ work in the branch survives; only the process is lost.
 The validator's end-to-end reproduction is the real acceptance: `down` and `up` with a stand-in harness
 holding a session must leave no surviving child, and must not produce two `conductor.staffing` events for one
 task.
+
+## Amendment 6 — three things Amendment 5 should have asked for
+
+Amendment 5 named four changes. The implementer made three more, each in service of those four, and each
+accepted. The first is not optional: without it Amendment 5 would have introduced a worse defect than the
+one it cured.
+
+**A cancelled session is not charged to its pair.** With sessions now cancelled on shutdown, `StartAsync`
+throws `OperationCanceledException`, which `RunSessionAsync` would have classified as
+`Unproductive.NeverStarted`. Every session in flight would take a strike and write `conductor.failed` during
+shutdown, and three restarts would stall a pair that was never given the chance to fail — a hub that
+punishes the founder for turning it off and on again. Both runners therefore return early when the session
+lifetime is already cancelled, before classification, with the `finally` still clearing `_running`.
+
+**The stop waits for the kills it ordered**, bounded at ten seconds. `CancellationTokenSource.Cancel()`
+returns before `ProcessRunner`'s `catch (OperationCanceledException) { process.Kill(entireProcessTree: true); }`
+runs, so without the wait the host can exit first and the ledger event records an intention rather than an
+outcome. This amendment's acceptance is "`down` and `up` must leave no surviving child", and probably-killed
+is not that. The bound is real time because it is a hang detector that nothing in a test reaches; a stop
+that never returns is worse than a child that lingers a moment.
+
+**`RunPassAsync` returns 0 once the stop has begun.** A pass already in flight would otherwise launch a
+child with nobody left to cancel it — the shutdown creating the very orphan it exists to prevent.
+
+Accepted without change: `ConductorService` is deliberately **not** `IDisposable`. Cancelling a disposed
+source throws, the class already holds an undisposed `SemaphoreSlim`, and disposing here would add a class
+of shutdown-ordering bug rather than remove one.
