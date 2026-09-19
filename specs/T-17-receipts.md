@@ -699,3 +699,56 @@ hub as the panel's own `since` line.
 
 Whether `?hours=7d` should *mean* a week — the page prints that label, after all — is a product decision about
 a new URL vocabulary, not a bug fix. Filed separately rather than guessed at.
+
+## Proof of Amendment 5 (2026-09-19)
+
+Integrated branch on current `main`:
+
+```
+dotnet build   →  0 Warning(s), 0 Error(s)
+dotnet test
+  Muthur.Launch.Tests    23/23
+  Muthur.Core.Tests      3736/3736
+  Muthur.Cli.Tests       70/70
+  Muthur.Server.Tests    308/308
+```
+
+The validator's own sweep, re-run by the orchestrator against an installed CLI from this branch on a scratch
+hub (port 7485). `since` is the panel's own line, so it reports the **effective** window and is direct
+evidence of where the clamp landed:
+
+```
+hours            status  since
+24                  200  Fri Sep 18 · 03:30
+7d                  200  Fri Sep 18 · 03:30
+24h                 200  Fri Sep 18 · 03:30
+abc                 200  Fri Sep 18 · 03:30
+1e9                 200  Fri Sep 18 · 03:30
+24,168              200  Fri Sep 18 · 03:30
+null                200  Fri Sep 18 · 03:30
+%20                 200  Fri Sep 18 · 03:30
+(empty)             200  Fri Sep 18 · 03:30
+9999999999999       200  Thu Aug 20 · 03:30
+0                   200  Sat Sep 19 · 02:30
+-9                  200  Sat Sep 19 · 02:30
+100000              200  Thu Aug 20 · 03:30
+168                 200  Sat Sep 12 · 03:30
+720                 200  Thu Aug 20 · 03:30
+
+Error-level lines in the scratch muthur.log: 0
+```
+
+Every one of the eight values that returned 500 now returns 200. `9999999999999`, `100000` and `720` all read
+from the same instant — thirty days back — so saturating in the page and clamping in the service does what the
+design promises. `168` reads seven days back, `0` and `-9` one hour. The log is clean, which was the third of
+the validator's three reasons.
+
+Before this fix, the same sweep produced eight 500s and eight `Error` lines with stack traces.
+
+### A note that belongs with Amendment 2 of T-5
+
+The `since` line comes back as `Fri Sep 18 &#xB7; 03:30` — Blazor encodes the middot `·` as a numeric entity
+while emitting the em dash `—` literally. Two characters, two treatments, in the same framework. It is a small
+thing and it is exactly why a verification is not finished until it has been *run*: no amount of reasoning
+about what the markup "should" look like would have predicted that split, and T-5 shipped a check that failed
+on precisely this.
