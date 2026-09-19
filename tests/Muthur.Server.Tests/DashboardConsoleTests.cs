@@ -25,6 +25,8 @@ public sealed class DashboardConsoleTests : IDisposable
 
     private AgentService Agents => _hub.Services.GetRequiredService<AgentService>();
 
+    private HarnessService Harnesses => _hub.Services.GetRequiredService<HarnessService>();
+
     private Task<string> PageAsync() => _hub.CreateClient().GetStringAsync("/console");
 
     // -- the page and its tab ----------------------------------------------------------------------------------
@@ -45,11 +47,65 @@ public sealed class DashboardConsoleTests : IDisposable
             Assert.Matches($"<label for=\"agent-[a-z]+\">{label}</label>", page);
         Assert.Matches("<button class=\"btn btn-go\"[^>]*>Register</button>", page);
 
-        // The harness is chosen, not typed: a misspelled harness registers an agent whose kit does not exist.
-        foreach (var harness in new[] { "claude", "codex", "generic" })
-            Assert.Matches($"<option value=\"{harness}\"[^>]*>{harness}</option>", page);
-        foreach (var tier in new[] { "mastermind", "implementer", "utility" })
-            Assert.Matches($"<option value=\"{tier}\"[^>]*>{tier}</option>", page);
+        // Harness and tier are typed with suggestions behind them, not chosen from a closed set. The service
+        // takes any non-empty harness, and a <select> here would be quietly narrower than the API behind it.
+        Assert.Matches("<input id=\"agent-harness\"[^>]*list=\"agent-harnesses\"", page);
+        Assert.Matches("<input id=\"agent-tier\"[^>]*list=\"agent-tiers\"", page);
+        Assert.Contains("<datalist id=\"agent-harnesses\">", page);
+        Assert.Contains("<datalist id=\"agent-tiers\">", page);
+        Assert.DoesNotContain("<select", page, StringComparison.OrdinalIgnoreCase);
+    }
+
+    /// <summary>
+    /// Where the suggestions come from, which is the only reason this page can offer any without naming a
+    /// harness itself: the founder's own catalog, read through the service <c>muthur harness tiers</c> reads
+    /// it with, and the harnesses the agents in the ledger were actually registered on. Config and ledger —
+    /// so the list is what this organization uses rather than what was true when the file was written.
+    /// </summary>
+    [Fact]
+    public async Task The_harness_and_tier_suggestions_come_from_the_catalog_and_from_the_agents_already_registered()
+    {
+        var catalog = await Harnesses.TiersAsync();
+        var fromCatalog = catalog.SelectMany(t => t.Candidates).Select(c => c.Harness).Distinct(StringComparer.Ordinal).ToList();
+        Assert.NotEmpty(fromCatalog);
+        Assert.NotEmpty(catalog);
+
+        var before = await PageAsync();
+
+        foreach (var harness in fromCatalog) Assert.Contains($"<option value=\"{harness}\"></option>", before);
+        foreach (var tier in catalog.Select(t => t.Tier)) Assert.Contains($"<option value=\"{tier}\"></option>", before);
+
+        // A harness the catalog has never heard of is the case a closed list would have shut the founder out
+        // of. The service takes it, so from then on the console offers it too rather than pretending that a
+        // harness this organization demonstrably runs on does not exist.
+        Assert.DoesNotContain("<option value=\"handwritten\"></option>", before);
+        await Agents.RegisterAsync(Caller.Founder, new RegisterAgentRequest("scribe", "handwritten", "quill", "scriptorium"));
+
+        var after = await PageAsync();
+        Assert.Contains("<option value=\"handwritten\"></option>", after);
+        Assert.Contains("<option value=\"scriptorium\"></option>", after);
+    }
+
+    /// <summary>
+    /// A catalog the founder has mistyped costs suggestions and nothing else. The Tiers panel on /operations
+    /// is where that error is reported; a console that went down with it would take away the page the founder
+    /// would use to register the agent that fixes it.
+    /// </summary>
+    [Fact]
+    public async Task A_broken_harness_catalog_costs_suggestions_rather_than_the_page()
+    {
+        await Agents.RegisterAsync(Caller.Founder, new RegisterAgentRequest("scribe", "handwritten", "quill", "scriptorium"));
+        Harnesses.EnsureCatalogExists();
+        await File.WriteAllTextAsync(Path.Combine(_hub.DataDir, MuthurEnvironment.HarnessFile), "{ not json at all");
+
+        var response = await _hub.CreateClient().GetAsync("/console");
+
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        var page = await response.Content.ReadAsStringAsync();
+        Assert.DoesNotContain("An unhandled error", page);
+        Assert.Matches("<button class=\"btn btn-go\"[^>]*>Register</button>", page);
+        // What the ledger knows still suggests; only the catalog's half of the list is gone.
+        Assert.Contains("<option value=\"handwritten\"></option>", page);
     }
 
     /// <summary>

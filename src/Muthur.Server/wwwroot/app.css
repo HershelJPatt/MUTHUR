@@ -51,6 +51,10 @@ b { font-weight: 600; }
 .side { display: flex; flex-direction: column; gap: 14px; min-height: 0; }
 .stack { display: flex; flex-direction: column; gap: 14px; min-height: 0; }
 .page { max-width: 1100px; margin: 0 auto; height: 100%; display: flex; flex-direction: column; gap: 14px; min-height: 0; }
+/* Panels stacked down one column that scrolls as a whole, each sized to its content (with .panel-fit).
+   For pages of forms: a form that has to be scrolled inside its own panel is a form with a field the
+   founder cannot see they have not filled in. Feeds want the opposite and keep the default .page. */
+.stack-scroll { display: flex; flex-direction: column; gap: 14px; flex: 1; min-height: 0; overflow-y: auto; }
 @media (max-width: 1250px) { .dashboard { grid-template-columns: 250px minmax(0, 1fr); } .side-right { display: none; } }
 @media (max-width: 800px) { .dashboard { grid-template-columns: 1fr; height: auto; } .shell { height: auto; min-height: 100vh; } .topbar { flex-wrap: wrap; height: auto; padding: 10px 14px; gap: 12px; } .stats { margin-left: 0; gap: 14px; flex-wrap: wrap; } }
 

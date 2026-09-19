@@ -1,5 +1,6 @@
 @page "/console"
 @inject AgentService Agents
+@inject HarnessService Harnesses
 
 @*
     Founder-only work, done by reading labels instead of remembering flags. Every control calls the same
@@ -16,63 +17,75 @@
 <PageTitle>MUTHUR · Console</PageTitle>
 
 <div class="page">
-    <section class="panel">
-        <div class="panel-head">
-            <span class="panel-title">Agents</span>
-            <span class="panel-sub">register a session and take away its paste-line</span>
-        </div>
-        <div class="panel-body">
-            <dl class="kv">
-                <dt><label for="agent-name">Name</label></dt>
-                <dd><input id="agent-name" class="input" @bind="_name" @bind:event="oninput" /></dd>
-                <dt><label for="agent-harness">Harness</label></dt>
-                <dd>
-                    <select id="agent-harness" class="select" @bind="_harness">
-                        @foreach (var harness in Harnesses)
-                        {
-                            <option value="@harness">@harness</option>
-                        }
-                    </select>
-                </dd>
-                <dt><label for="agent-model">Model</label></dt>
-                <dd><input id="agent-model" class="input" @bind="_model" @bind:event="oninput" /></dd>
-                <dt><label for="agent-tier">Tier</label></dt>
-                <dd>
-                    <select id="agent-tier" class="select" @bind="_tier">
-                        @foreach (var tier in Tiers)
-                        {
-                            <option value="@tier">@tier</option>
-                        }
-                    </select>
-                </dd>
-                <dt><label for="agent-account">Account</label></dt>
-                <dd><input id="agent-account" class="input" @bind="_account" @bind:event="oninput" placeholder="optional" /></dd>
-            </dl>
-            <div class="btn-row">
-                <button class="btn btn-go" @onclick="RegisterAsync">Register</button>
+    <div class="stack-scroll">
+        <section class="panel panel-fit">
+            <div class="panel-head">
+                <span class="panel-title">Agents</span>
+                <span class="panel-sub">register a session and take away its paste-line</span>
             </div>
-            @if (_error is { } error)
-            {
-                <div class="error-text">@error</div>
-            }
-            @if (_registered is { } agent && _token is { } token)
-            {
-                <div class="section-note">Registered @agent.Name (@agent.Harness/@agent.Model, @agent.Tier).</div>
-                <pre class="code">@PasteLine(agent, token)</pre>
-            }
-        </div>
-    </section>
+            <div class="panel-body">
+                <dl class="kv">
+                    <dt><label for="agent-name">Name</label></dt>
+                    <dd><input id="agent-name" class="input" @bind="_name" @bind:event="oninput" /></dd>
+                    @*
+                        Suggested, never constrained. RegisterAsync takes any non-empty harness, so a fixed
+                        list here would be quietly narrower than the API behind it — and the one it left out
+                        would be whichever harness this organization adopted most recently.
+                    *@
+                    <dt><label for="agent-harness">Harness</label></dt>
+                    <dd>
+                        <input id="agent-harness" class="input" list="agent-harnesses" @bind="_harness" @bind:event="oninput" />
+                        <datalist id="agent-harnesses">
+                            @foreach (var harness in _harnesses)
+                            {
+                                <option value="@harness"></option>
+                            }
+                        </datalist>
+                    </dd>
+                    <dt><label for="agent-model">Model</label></dt>
+                    <dd><input id="agent-model" class="input" @bind="_model" @bind:event="oninput" /></dd>
+                    <dt><label for="agent-tier">Tier</label></dt>
+                    <dd>
+                        <input id="agent-tier" class="input" list="agent-tiers" @bind="_tier" @bind:event="oninput" />
+                        <datalist id="agent-tiers">
+                            @foreach (var tier in _tiers)
+                            {
+                                <option value="@tier"></option>
+                            }
+                        </datalist>
+                    </dd>
+                    <dt><label for="agent-account">Account</label></dt>
+                    <dd><input id="agent-account" class="input" @bind="_account" @bind:event="oninput" placeholder="optional" /></dd>
+                </dl>
+                <div class="btn-row">
+                    <button class="btn btn-go" @onclick="RegisterAsync">Register</button>
+                </div>
+                @if (_error is { } error)
+                {
+                    <div class="error-text">@error</div>
+                }
+                @if (_registered is { } agent && _token is { } token)
+                {
+                    <div class="section-note">Registered @agent.Name (@agent.Harness/@agent.Model, @agent.Tier).</div>
+                    <pre class="code">@PasteLine(agent, token)</pre>
+                }
+            </div>
+        </section>
+    </div>
 </div>
 
 @code {
     private string _name = "";
-    private string _harness = Harnesses[0];
+    private string _harness = "";
     private string _model = "";
-    private string _tier = Tiers[0];
+    private string _tier = "";
     private string _account = "";
 
     private AgentDto? _registered;
     private string? _error;
+
+    private IReadOnlyList<string> _harnesses = [];
+    private IReadOnlyList<string> _tiers = [];
 
     /// <summary>
     /// The registration token, shown exactly once and then gone. The hub keeps only its hash, so once this
@@ -88,13 +101,42 @@
     /// </summary>
     private string? _token;
 
-    // The harnesses an agent can be registered as: the kit directories under kit/, which is what a session
-    // reads its procedures from. Not the worker adapters in Muthur.Launch — those are the harnesses the hub
-    // can start headless, a shorter list that has no generic.
-    private static readonly string[] Harnesses = ["claude", "codex", "generic"];
+    protected override Task OnInitializedAsync() => SuggestAsync();
 
-    // The tiers in the harness catalog; a tier is what staffing picks a model by.
-    private static readonly string[] Tiers = ["mastermind", "implementer", "utility"];
+    /// <summary>
+    /// What to offer in the harness and tier fields: the harnesses and tiers this organization already uses.
+    /// Both come from the founder's own <c>harnesses.json</c>, read through the service <c>muthur harness
+    /// tiers</c> reads it with, plus whatever the agents in the ledger were actually registered as — so
+    /// nothing on this page has to name a harness itself, and a harness adopted after this file was written
+    /// appears in the list the moment one agent runs on it.
+    /// <para>
+    /// On a hub with no agents and an untouched catalog the list is short. That is honest: it says what this
+    /// organization uses, and the field is free text either way.
+    /// </para>
+    /// </summary>
+    private async Task SuggestAsync()
+    {
+        var registered = await Agents.ListAsync();
+        var harnesses = registered.Select(a => a.Harness);
+        var tiers = registered.Select(a => a.Tier).OfType<string>();
+        try
+        {
+            var catalog = await Harnesses.TiersAsync();
+            harnesses = harnesses.Concat(catalog.SelectMany(t => t.Candidates).Select(c => c.Harness));
+            tiers = tiers.Concat(catalog.Select(t => t.Tier));
+        }
+        catch (Muthur.Core.MuthurException)
+        {
+            // The catalog is a file the founder edits by hand and a typo in it must not take this page down.
+            // The Tiers panel on /operations is where that error is reported and fixed; here it costs only
+            // suggestions, and both fields go on accepting anything that is typed into them.
+        }
+        _harnesses = Suggestions(harnesses);
+        _tiers = Suggestions(tiers);
+    }
+
+    private static IReadOnlyList<string> Suggestions(IEnumerable<string> values) =>
+        values.Where(v => v.Length > 0).Distinct(StringComparer.Ordinal).Order(StringComparer.Ordinal).ToList();
 
     private async Task RegisterAsync()
     {
@@ -107,6 +149,9 @@
                 new RegisterAgentRequest(_name, _harness, _model, _tier, _account is { Length: > 0 } a ? a : null));
             _registered = registered.Agent;
             _token = registered.Token;
+            // Re-read after a successful action and at no other time: an agent on a harness nobody had used
+            // before is exactly the one the next registration will want suggested.
+            await SuggestAsync();
         }
         catch (Muthur.Core.MuthurException ex)
         {
@@ -117,9 +162,9 @@
     }
 
     /// <summary>
-    /// What the founder pastes into a terminal to become the agent just registered. The harness word is the
-    /// harness that was registered, not a fixed <c>claude</c>: a codex session started by typing claude is a
-    /// different agent from the one the ledger now holds a token for.
+    /// What the founder pastes into a terminal to become the agent just registered. The third line is the
+    /// harness this agent was registered on and never a fixed one: a session started by typing the name of
+    /// some other harness is a different agent from the one the ledger now holds this token for.
     /// </summary>
     private static string PasteLine(AgentDto agent, string token) =>
         $"""
