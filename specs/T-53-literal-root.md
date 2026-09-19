@@ -95,8 +95,12 @@ New-Item -ItemType Directory -Force (Join-Path $b 'plain\hub') | Out-Null
 ./scripts/clean-test-temp.ps1 -Root (Join-Path $b 'plain') -All -OlderThanMinutes 0
 ```
 
-Passing is: 1 deletes, 2 and 3 say "does not exist" and exit 0 leaving the sibling in place, 4 is unchanged
-from today, and every run prints its counts.
+Passing is: 1 deletes, 2 and 3 say "does not exist" and exit 0 leaving the sibling in place, and 4 is
+unchanged from today.
+
+**2 and 3 print no counts, and that is correct.** The missing-root branch returns before the loop and has
+always done so; this task explicitly does not change it. Runs 1 and 4, which examine something, print their
+counts as always.
 
 ## Proof
 
@@ -104,6 +108,8 @@ from today, and every run prints its counts.
 which is the point: nothing in the solution references this script, and the change must not pretend to.
 
 ### The four shapes, run
+
+(1 and 4 print counts; 2 and 3 return before the loop and print the sentence instead.)
 
 ```
 1. bracketed root that EXISTS
@@ -133,3 +139,36 @@ The fix is load-bearing, checked by putting `Test-Path $Root` back and running t
 
 Both match the validator's report exactly, including that neither loses data — which is why T-53 was filed
 as non-blocking and why the reason to fix it is the half-applied rule rather than the damage.
+
+## Amendment after the first validation round (2026-09-19, top-right)
+
+`conductor-validator` confirmed the behaviour and failed the task on my own acceptance sentence:
+
+> real pwsh runs confirm bracket-root deletion and missing bracket sibling behavior work, but Verification
+> explicitly requires every run to print counts; cases 2 and 3 print only Nothing to clean and exit 0 with
+> no counts. Please reconcile frozen acceptance contract with implementation.
+
+Correct, and the contract was the wrong half. Verification ended "and every run prints its counts", which
+contradicts the Design section three paragraphs above it — "Nothing else changes: same message, same
+`return`, same exit code" — about a branch that has returned before the loop since T-29 and that this task
+deliberately does not touch. A validator holding a frozen spec to its word is doing exactly its job; the
+word was mine and it was wrong.
+
+**No change to the fix.** The Verification section now says that 2 and 3 print no counts and why.
+
+### One line of the script did change, and deliberately
+
+The header says "Every run ends with its counts… Losing the count is the defect this script exists to fix".
+Read as written, that promises counts on a run that examined nothing, which is what the validator read and
+what nobody could deliver without changing the missing-root branch. It now reads "Every run **that examines
+anything**…", with the missing-root case named as the one run with nothing to count.
+
+That is a widening of a task scoped to one line, taken on purpose: the defect T-53 exists to close is a rule
+stated in one place and not applied in another, and leaving a header that promises what the file does not do
+is the same defect in prose. It is a comment; no behaviour moves.
+
+### Not reconciled, because it is not mine
+
+The validator reported "Server incomplete (validator stopped remaining host after prolonged run)". The
+Server suite passes here — 340 tests, run again after this amendment — and nothing in this task touches code
+the solution compiles. Recorded rather than argued: if it recurs on an unrelated task it is worth its own.

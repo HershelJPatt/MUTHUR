@@ -7,8 +7,10 @@
   age guard and not the ownership check: someone reaching for it wants the logs gone, not to race a live
   test run. A hub whose log another process still holds open is never deleted, whatever the flags say.
 
-  Every run ends with its counts, whatever happened to any one directory, and names every directory it held
-  back or failed on. Losing the count is the defect this script exists to fix; it does not get to repeat it.
+  Every run that examines anything ends with its counts, whatever happened to any one directory, and names
+  every directory it held back or failed on. Losing the count is the defect this script exists to fix; it
+  does not get to repeat it. A root that does not exist is the one run with nothing to count: it says so in
+  a sentence and stops, which is the whole report rather than a missing one.
 .EXAMPLE
   ./scripts/clean-test-temp.ps1 -DryRun    # count what would go; delete nothing
   ./scripts/clean-test-temp.ps1            # keep a directory only when its log holds an Error or Critical line
