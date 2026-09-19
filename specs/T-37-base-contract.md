@@ -286,3 +286,59 @@ than reading it: the validator installed the kit and drove it against git; this 
 tree and watched the check pass. Reading would have caught none of the three, because each version *looks*
 right. That is the argument for adversarial verification of documentation, which is normally the artefact
 least likely to get it.
+
+## Amendment 3 — the ring outside the spec, and where this stops (2026-09-18)
+
+A third adversarial round broke the step again, less deeply, and the implementer's own assessment is the one
+I am acting on: the spec-read path is now sound and it could not break it; everything it found is one ring
+outward. Two of those are cheap and close here. The rest are recorded as known limits, and **the adversarial
+loop stops at this amendment** — four rounds have produced four real findings, and the remaining three are
+outside what a contract written for an implementer can reach.
+
+### Closing: the rest of the working tree
+
+`git show <base>:<spec>` secures the *spec*. Nothing secures any other file, demonstrated:
+
+```
+git checkout <old-sha> -- src/Config.cs   # HEAD untouched
+HEAD == base : True
+spec via show: "spec v2 AMENDED"      <- Amendment 2 works
+code on disk : "int Limit = 10; // v1"   <- stale, unchecked
+```
+
+This is worse than a stale read. Step 2 says "read the code you will touch and the code next to it", from
+disk; the implementer then edits that stale file and commits, so the diff **silently reverts** the base's
+change and looks like a deliberate edit. You cannot `git show` your way out of it, because the work must
+happen in the working tree.
+
+Add to step 1: **`git status --porcelain` must be empty before you begin.** The command is already in the
+step, used only inside the failure branch; this promotes it to a precondition. `git show` secures a read; a
+clean tree is the only thing that secures an edit.
+
+### Closing: a resumed round runs on a stale code tree
+
+Proven on the implementer's own branch this round. The step correctly tells a resumed implementer not to
+reset, merge or rebase, and `git show` gets it the right spec bytes — but its commits sit on the old base
+while the branch has moved. Had the amendment also touched `kit/core/implementer.md`, the file it was
+editing, it would have edited the pre-amendment version and its branch would have clobbered it at merge,
+with no check anywhere firing. It was safe only because the base moved the spec file alone — which it
+verified by hand with `git diff --stat <start>..<base>`, and which the contract never asks for.
+
+Add to the resumed bullet: **run `git diff --stat <your starting commit>..<base>` and say in your report
+whether it touched any file in your unit.** If it did, stop and report `blocked` rather than guessing.
+
+### Recorded, not closed
+
+- **The base *name* is unverifiable by the implementer.** Every check is consistency with the named base. An
+  orchestrator who names a base carrying an *older* copy of the spec — an earlier task branch, or `main`
+  after a spec has landed — passes toplevel, branch-ness, identity and `git show`, and the implementer
+  builds the wrong thing with four green checks. The orchestrator's prompt is the single point of trust and
+  no contract written for the implementer can check it. The mitigation belongs in `orchestrate.md`: name the
+  branch you committed the frozen spec to, and no other. Added there as a clause, not a mechanism.
+- **A detached HEAD passes everything.** `rev-parse HEAD == base` is satisfied at the base commit; work
+  commits, `git branch --show-current` is empty, and the orchestrator merges the named branch and gets
+  nothing. Only the blank `BRANCH:` line in the report catches it. Harness worktrees are created with `-b`,
+  so this is latent rather than live.
+- **The local base ref can be behind its remote.** Airtight while one `.git` is shared — commits from any
+  worktree are visible instantly — and an exact reproduction of the stale-spec failure the day orchestration
+  crosses clones or machines. Worth knowing as the next one, not worth text today.
