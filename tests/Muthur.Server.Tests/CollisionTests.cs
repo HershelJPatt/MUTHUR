@@ -41,7 +41,7 @@ public sealed class CollisionTests : IDisposable
         var owner = await _hub.RegisterAgentAsync(agent);
         var task = await owner.AddTaskAsync(title);
         (await owner.ClaimAsync(task.Id)).EnsureSuccessStatusCode();
-        (await owner.PostActionAsync(task.Id, "spec", new SetSpecRequest($"specs/{task.Id}.md"))).EnsureSuccessStatusCode();
+        (await owner.PostActionAsync(task.Id, "spec", new SetSpecRequest(_repo.WriteSpec(task.Id)))).EnsureSuccessStatusCode();
         return (owner, await (await owner.PostActionAsync(task.Id, "implemented", new ImplementedRequest(branch))).ReadTaskAsync());
     }
 

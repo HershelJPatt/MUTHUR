@@ -29,7 +29,7 @@ public sealed class LandConflictTests : IDisposable
         var owner = await _hub.RegisterAgentAsync($"owner-{++_owners}");
         var task = await owner.AddTaskAsync(title);
         (await owner.ClaimAsync(task.Id)).EnsureSuccessStatusCode();
-        (await owner.PostActionAsync(task.Id, "spec", new SetSpecRequest($"specs/{task.Id}.md"))).EnsureSuccessStatusCode();
+        (await owner.PostActionAsync(task.Id, "spec", new SetSpecRequest(_repo.WriteSpec(task.Id)))).EnsureSuccessStatusCode();
         (await owner.PostActionAsync(task.Id, "implemented", new ImplementedRequest(branch))).EnsureSuccessStatusCode();
         return (owner, task.Id);
     }

@@ -445,3 +445,28 @@ validator**, the same as T-5 — and `muthur task attended` cannot be set becaus
 2. `dotnet build` and `dotnet test`; the rest of the suite was green before this merge.
 3. `muthur task implemented T-16 --branch task/T-16-collisions`.
 4. Flag it attended once the hub is upgraded, for the same reason as T-5.
+
+## Pickup (2026-09-19, top-right)
+
+The handover's fix was applied verbatim: `LandConflictTests` and `CollisionTests` now pass
+`_repo.WriteSpec(task.Id)` to the `spec` action instead of a hardcoded `specs/{id}.md` that nobody wrote.
+Nothing under `src/` changed. `main` was merged in first (T-36, clean).
+
+`dotnet build`: clean, 0 warnings. `dotnet test`: Core 3708, Launch 23, Cli 55, Server 244 — all green.
+
+### One flake, named rather than buried
+
+On the first full-suite run, `A_caller_that_arrives_mid_pass_takes_the_cached_answer_instead_of_queueing_behind_it`
+failed alone with `Assert.Single() Failure: The collection was empty`, and took 14s to do it. It passes in
+isolation and passed on the immediately following full run.
+
+The cause is real time, and it is the service's own design: `GitTimeout` is 5 seconds of wall clock per git
+call, and that test is the only one that serializes a real `git merge-tree` behind a gate while 243 other
+tests hammer the same machine. A git call that overruns 5s returns 124, `ConflictAsync` correctly reads
+"anything but exit 1 is not evidence", and the pass reports no collision — exactly what the panel is
+supposed to do when git will not answer in time. The production behaviour is right; the test inherits its
+wall clock, so under enough load it can observe the miss.
+
+It is not worth loosening `GitTimeout` for: that constant is the whole reason a slow repository cannot hold
+a render. If this recurs, the honest fix is to let the test inject a longer per-call timeout into its own
+`GatedProcessRunner` — a hang-detector budget, which the test rules permit — not to change the service.
