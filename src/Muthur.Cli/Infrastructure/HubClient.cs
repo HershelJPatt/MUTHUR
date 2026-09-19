@@ -20,6 +20,8 @@ public sealed record ApiResult(int Status, string Body)
         (int)HttpStatusCode.Conflict => ExitCodes.Conflict,
         (int)HttpStatusCode.NotFound => ExitCodes.NotFound,
         (int)HttpStatusCode.Unauthorized or (int)HttpStatusCode.Forbidden => ExitCodes.Unauthorized,
+        // A hub that is stopping and a hub that has stopped need the same thing from the caller.
+        (int)HttpStatusCode.ServiceUnavailable => ExitCodes.NotRunning,
         _ => ExitCodes.Error,
     };
 }
