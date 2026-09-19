@@ -2528,6 +2528,24 @@ public sealed class ConductorTests : IDisposable
     /// </summary>
     private void OwnerGoesQuiet() => _hub.Clock.Advance(TimeSpan.FromMinutes(4));
 
+    /// <summary>
+    /// The default branch checked out with uncommitted changes, which is the refusal that fires most often on a
+    /// machine that is also worked in. Unlike a deleted branch it leaves the task branch alone, so a test can
+    /// move its head while the cause persists.
+    /// </summary>
+    private void DirtyTheCheckout() => _repo.Write("README.md", "somebody is part-way through editing this\n");
+
+    private void CleanTheCheckout() => _repo.Git("checkout", "--", "README.md");
+
+    /// <summary>A real commit on the task branch: what "fix the cause and push" actually does to the head.</summary>
+    private void CommitOnBranch(string branch)
+    {
+        _repo.Git("checkout", "-q", branch);
+        _repo.Write("fix.txt", $"fixed at {_repo.Git("rev-parse", "HEAD")}\n");
+        _repo.Commit($"{branch}: another go");
+        _repo.Git("checkout", "-q", "main");
+    }
+
     [Fact]
     public async Task A_validated_task_whose_owner_has_gone_is_landed_by_the_hub()
     {
@@ -2728,10 +2746,52 @@ public sealed class ConductorTests : IDisposable
         Assert.Equal(2, (await EventsAsync()).Count(e => e.Type == "conductor.land_refused"));
         Assert.Single(await FounderMessagesAsync());
 
-        // Whatever was wrong is put right outside the hub, and the next probe finds out by itself: nobody has to
-        // know an incantation to resume.
+        // The branch comes back, and no clock moves: a missing branch reads as an empty head, so restoring it
+        // is itself a head that has moved, and the cooldown is cleared rather than waited out.
         _repo.Git("branch", Branch(id), head);
-        _hub.Clock.Advance(TimeSpan.FromMinutes(31));
+        Assert.Equal(0, await Conductor.RunPassAsync());
+
+        Assert.Equal(TaskState.Done, (await _hub.Founder().GetTaskAsync(id)).Task.State);
+        Assert.Single(await EventsAsync(), e => e.Type == "conductor.landed");
+    }
+
+    [Fact]
+    public async Task A_commit_on_the_branch_is_what_clears_the_cooldown_not_a_call_to_implemented()
+    {
+        // The defect validation failed this on. The cooldown used to be keyed on the head in the last
+        // `task.implemented` event, which moves when somebody calls the CLI again - not when somebody makes a
+        // commit. So the recovery the message advertises, fix the cause and push, did not happen: the task
+        // waited out the full probe interval anyway, and the probe recorded a commit that was no longer the
+        // branch's. The key is now what git answers.
+        _hub.Settings["Muthur:ConductorStallProbeMinutes"] = "30";
+        await SetUpAsync();
+        var owner = await _hub.RegisterAgentAsync("owner");
+        var id = await ValidatedTaskAsync(owner);
+        DirtyTheCheckout();   // the refusal that fires most often here, and it leaves the branch alone
+        OwnerGoesQuiet();
+
+        Assert.Equal(0, await Conductor.RunPassAsync());
+        Assert.Equal("dirty_checkout",
+            Assert.Single(await EventsAsync(), e => e.Type == "conductor.land_refused").Payload.GetProperty("code").GetString());
+
+        // Nothing has changed, so nothing is tried: the cooldown holds on an unmoved head.
+        Assert.Equal(0, await Conductor.RunPassAsync());
+        Assert.Equal(1, (await EventsAsync()).Count(e => e.Type == "conductor.land_refused"));
+
+        // A real commit on the branch - not a call to `task implemented`, which is what the old key needed.
+        // The cause is deliberately still there, so what the next pass proves is that it tried at all.
+        CleanTheCheckout();
+        CommitOnBranch(Branch(id));
+        DirtyTheCheckout();
+
+        Assert.Equal(0, await Conductor.RunPassAsync());   // the very next pass, with no clock moved
+        Assert.Equal(2, (await EventsAsync()).Count(e => e.Type == "conductor.land_refused"));
+        Assert.Equal(2, (await FounderMessagesAsync()).Count);   // a commit nobody has tried is worth saying again
+
+        // And "fix the cause and push" is one act, so do both: the head moves again, and it lands on the very
+        // next pass with the probe interval still nowhere near.
+        CleanTheCheckout();
+        CommitOnBranch(Branch(id));
         Assert.Equal(0, await Conductor.RunPassAsync());
 
         Assert.Equal(TaskState.Done, (await _hub.Founder().GetTaskAsync(id)).Task.State);
@@ -2741,20 +2801,23 @@ public sealed class ConductorTests : IDisposable
     [Fact]
     public async Task Turning_the_conductor_on_again_retries_a_land_the_environment_refused()
     {
-        // What the message arming the cooldown tells the founder to do, so it had better be true.
+        // What the message arming the cooldown tells the founder to do, so it had better be true. The head does
+        // not move here - the cause is the checkout, not the branch - so the cooldown is the only thing in the
+        // way and the toggle is the only thing that clears it.
         _hub.Settings["Muthur:ConductorStallProbeMinutes"] = "30";
         await SetUpAsync();
         var owner = await _hub.RegisterAgentAsync("owner");
         var id = await ValidatedTaskAsync(owner);
-        var head = _repo.Git("rev-parse", Branch(id));
-        _repo.Git("branch", "-D", Branch(id));
+        DirtyTheCheckout();
         OwnerGoesQuiet();
 
         Assert.Equal(0, await Conductor.RunPassAsync());
-        Assert.Equal(0, await Conductor.RunPassAsync());   // inside the cooldown: nothing tried
         Assert.Equal(1, (await EventsAsync()).Count(e => e.Type == "conductor.land_refused"));
 
-        _repo.Git("branch", Branch(id), head);
+        CleanTheCheckout();
+        Assert.Equal(0, await Conductor.RunPassAsync());   // fixed, but inside the cooldown: nothing tried
+        Assert.Equal(TaskState.Validated, (await _hub.Founder().GetTaskAsync(id)).Task.State);
+
         var founder = _hub.Founder();
         (await founder.PostAsJsonAsync(Routes.Conductor, new ConductorSwitch(false))).EnsureSuccessStatusCode();
         (await founder.PostAsJsonAsync(Routes.Conductor, new ConductorSwitch(true))).EnsureSuccessStatusCode();
