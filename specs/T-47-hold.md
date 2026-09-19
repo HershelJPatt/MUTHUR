@@ -188,3 +188,49 @@ task.landed            { …, overrodeHold: { by, reason, placedAt } }
 `task.hold_overridden` is the row request #16 asked for: "the event you actually wanted counted — a hold
 that a land later overrode — exists in the ledger, and the next time someone asks this question they can
 answer it with a number instead of a sketch."
+
+## Amendment after the first validation round (2026-09-19, top-right)
+
+`conductor-validator-t-47` failed this with two findings, and the first is the founder's own condition
+unmet:
+
+> installed CLI land gives no explicit hold warning/age, and self-holder receives no override notification
+> (founder only).
+
+Request #16 said "the warning on land must name who held it, when, and the reason verbatim". I put that in
+the ledger and in two messages and called it done — but the person doing the overriding gets back a JSON
+task and no sentence, and messages arrive in an inbox they are not reading at that moment. A warning nobody
+is shown is not a warning.
+
+**`muthur task land` now says it on stderr**, where `role define --brief-file` already puts its provenance
+note, so stdout stays the JSON an agent parses:
+
+```
+Warning: bottom-left held T-1 until 14:32 — "it collides with T-23's migration" — and you landed it anyway.
+Clear it when it stops being true: muthur task hold T-1 --clear
+```
+
+Derived from the response the land already returns, needing no contract change: a land deliberately does not
+clear the hold it overrode, so a task that comes back `done` still carrying an unexpired hold is one that was
+landed over.
+
+**That closes the second finding too.** The hub still does not message you about your own act — a message
+telling you what you just did is noise in an inbox. But the CLI line is printed whether or not the lander is
+the holder, so somebody who holds a task and then lands it now sees that the two halves of what they did were
+in tension. That was previously silent in every channel, which is the part that was wrong.
+
+### Tests
+
+`TaskHoldWarningTests` — the warning names the holder, the reason verbatim and the way to clear it; an
+expired hold, an unheld task, a response that is not a completed land (a PR-mode project leaves it
+`validated`), a refusal, unparseable JSON and an empty body all say nothing rather than throwing.
+
+### Not exercised, and not worked around
+
+The validator could not test landing at the exact moment of expiry: "approval review rejected checkout of the
+disposable default branch under the user prohibition; no workaround attempted." That was the right call —
+the boundary is covered by `An_expired_hold_is_not_a_hold` at the service and by
+`A_hold_that_has_expired_is_not_warned_about` in the CLI, both on a fake clock, which is where a boundary
+belongs.
+
+`dotnet build`: clean, 0 warnings. `dotnet test`: 3736 Core, 23 Launch, 180 Cli, 389 Server — all green.
