@@ -234,3 +234,29 @@ three times would, so the cooldown arms on the first refusal and there is no `Co
 
 The residual `task.land_refused` from `LifecycleService` is bounded as a consequence — one per probe instead
 of one per pass — without touching `LifecycleService.cs` or `GitLander.cs`.
+
+## Amendment 3 — the head must be the branch's head, not the one the ledger remembers
+
+Validation failed T-69 on the one sentence both earlier amendments turned on. Amendment 1 asked for a probe
+keyed on `(task, branch head)`; Amendment 2 accepted that "a head that moves clears the cooldown outright
+rather than waiting it out, because a new commit is new information". The implementation takes that head from
+the most recent `task.implemented` ledger event.
+
+That value does not move when a commit is made. It moves when somebody calls `muthur task implemented` again.
+So the recovery the amendment promised — fix the cause, push, and it lands on the next pass — does not
+happen: a genuine new commit earns neither an immediate retry nor a fresh notification, and even the timed
+probe thirty minutes later records a head that is no longer the branch's.
+
+The validator reproduced it on the installed product with a scratch hub, a disposable repository and a
+deleted default branch to force `branch_missing`, rather than reading it off the diff.
+
+**The fix:** the cooldown key reads the branch's actual head. `ITaskLander.BranchHeadAsync(project, branch, ct)`
+already exists and already returns null for a branch that is gone — which is the same condition that produced
+the refusal in the first place, so a missing branch keeps its cooldown and a restored one clears it.
+
+It costs one `git rev-parse` per orphaned-validated task per pass, and only for tasks already in a cooldown,
+which is a cost worth paying for the property the amendment claimed. If it turns out to be measurably worse
+than that, say so rather than working around it.
+
+Everything else in Amendment 2 stands: a conflict still arms no cooldown, the count is still absent, the
+founder message is still once per head, and `SetEnabledAsync` still clears the land cooldowns.
