@@ -440,3 +440,125 @@ No browser is needed and none should be used.
   repository. Rollback inherits containment from rule 14 and does not repair it.
 - **A killed process leaves the journal unread.** An on-disk journal, replayed by the next `kit install`, is the
   only thing that would close it. File it if anyone ever hits it; nobody has.
+
+## Amendment 1 — "could not be restored" is a claim about the file, not about the call (2026-09-19)
+
+Unit A reported `spec-problem` before building and was right. The Design's `Rollback()` builds its failure list
+from *the restore call threw*, while the sentence that list feeds says *could not be restored*. Those are
+different claims, and they come apart exactly when the write being undone never landed — which is the commonest
+failure of all, because **the restore fails for the same reason the write did**.
+
+Traced by Unit A from this spec's own Context table and then measured by the orchestrator:
+
+```
+WriteAllBytes restore over ReadOnly file        UnauthorizedAccessException
+  content still the original?                   True
+File.Delete on a path that is a directory       UnauthorizedAccessException
+  directory still there?                        True
+File.Delete on an absent path                   OK
+WriteAllBytes restore over locked file          IOException
+```
+
+So as frozen, `measure.ps1 -Fail readonly` — **this spec's own primary verification case** — journals `c.md`'s
+prior bytes, fails to write over it, then fails to write the same bytes back over the same read-only file, and
+tells the founder the repository *"is part-installed: c.md could not be restored"* when `c.md` is byte-perfect
+and nothing was left behind. That is a false alarm, and it fails the pass condition this spec states
+(`"code":"install_failed"`).
+
+Unit A found a second, independent path to the same false positive, which is what makes it structural rather
+than a one-off: a repository holding a *directory* named `.gitignore` (T-56's F2, which the Non-goals keep in
+scope for a *clean* failure). `File.Exists` is false there, so the path is journaled as absent, and rollback
+calls `File.Delete` on a directory, which throws. The directory was there before and is there after.
+
+### The rule: attempt, then ask the filesystem
+
+Both loops in `Rollback()` take the same shape — try the restore, swallow the exception, then **check the
+claim**:
+
+```csharp
+foreach (var undo in files in reverse)
+{
+    try
+    {
+        if (undo.Content is null) File.Delete(undo.Path);
+        else File.WriteAllBytes(undo.Path, undo.Content);
+    }
+    catch (Exception) { }
+    if (!IsAsRecorded(undo)) failed.Add(Path.GetRelativePath(root, undo.Path));
+}
+
+foreach (var directory in directories in reverse)
+{
+    try { if (Directory.Exists(directory)) Directory.Delete(directory); }
+    catch (Exception) { }
+    if (Directory.Exists(directory)) failed.Add(Path.GetRelativePath(root, directory));
+}
+```
+
+```csharp
+/// <summary>
+/// Whether the path is in the state the journal recorded — which is the question the failure list's own
+/// sentence asks, and not the question "did the call throw". A write that failed before it landed leaves the
+/// path exactly as journaled and the restore then fails for the same reason the write did, so blaming it
+/// would be a false alarm on the commonest failure there is.
+/// </summary>
+private static bool IsAsRecorded(Undo undo)
+{
+    try
+    {
+        return undo.Content is null
+            ? !File.Exists(undo.Path)
+            : File.Exists(undo.Path) && File.ReadAllBytes(undo.Path).SequenceEqual(undo.Content);
+    }
+    catch (Exception)
+    {
+        return false;
+    }
+}
+```
+
+Three points where the predicate has to be exactly this and not the obvious thing:
+
+- **`Content is null` asks `!File.Exists`, and says nothing about a directory.** Unit A's own proposal added
+  `&& !Directory.Exists(Path)`, which would have left its second case still falsely reported: the directory
+  named `.gitignore` was there before we ran and is not ours to account for. If we had created a directory at
+  that path it would be in `directories` and loop 2 would own it. Measured above: `File.Exists` on a directory
+  is false, so the path is correctly seen as holding no file of ours.
+- **A read that throws returns false**, so a file we genuinely cannot inspect is reported rather than assumed
+  clean. This is reachable only as a race — `Record` cannot journal a locked file in the first place, because
+  its own `ReadAllBytes` throws — and the conservative answer is right for a race.
+- **The directory loop needs no predicate helper**: `Directory.Exists` after the attempt *is* the claim. A
+  directory we created that survives is residue whatever the reason, including the non-empty case.
+
+The catches swallow rather than record, which is the opposite of what a catch usually earns. It is right here
+precisely because the very next line asks the filesystem what actually happened, so the exception carries no
+information the check does not already have.
+
+### And `Writing` stops blaming the wrong file
+
+Unit A also found that `Install` reads `.gitignore` to decide whether `.worktrees/` is already listed, and
+reads `File.Exists(projectFile)`, **outside** `transaction.Write`. A `.gitignore` held by another process throws
+there while `Writing` still holds the last kit entry's path, and the message names a file that was written
+fine. Note that Unit B's listed read-only-`.gitignore` case does *not* catch this — that read succeeds — so it
+would have survived the sweep.
+
+Make the setter `internal` and have `Install` set `transaction.Writing` to the installer file it is about to
+look at, immediately before each of the two reads. Two lines, and the message stops lying.
+
+### Acceptance, added
+
+- `InstallTransactionTests`: roll back over a destination made read-only after the transaction wrote it, and
+  assert the returned failure list is **empty** because the bytes are as recorded; and roll back a path
+  journaled as absent that now holds a directory nobody journaled, and assert the same.
+- `KitInstallRollbackTests`: the read-only end-to-end case asserts `install_failed`, not `install_not_undone`.
+  It already did; it would have failed against the frozen Design, and that failing test was the report.
+- Unit B adds a row for a **locked** `.gitignore`, which is the `Writing` case, and one for a repository holding
+  a directory named `.gitignore` — asserting `install_failed` and an untouched repository, not a successful
+  install. Making it succeed is T-56's.
+
+### Recorded
+
+The spec asserted a rollback mechanism it had not measured, one paragraph after a Context section that had
+measured everything else — including the two rows that disprove it. T-8's closing note says a spec that states
+a mechanism it has not measured is a spec that will cost a round. This one did, and it was caught the same way:
+an implementer traced the frozen Design against the spec's own table before building.
