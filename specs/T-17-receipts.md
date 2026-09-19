@@ -571,3 +571,51 @@ This branch was rebased onto `main` after T-13 landed. One conflict, in
 `tests/Muthur.Server.Tests/SystemTests.cs`, where T-41's shutdown tests and T-17's two receipts endpoint tests
 were added at the same place. Both sides kept; the receipts tests sit with the other `[Fact]` methods and the
 `DisposedChannel` fixture class stays last in the file.
+
+## Proof of Amendment 4 (2026-09-19)
+
+Branch rebased onto `main` after T-13 landed. Verified by the orchestrator, `TEMP`/`TMP` on a fresh scratch
+root:
+
+```
+dotnet build   →  0 Warning(s), 0 Error(s)
+dotnet test
+  Muthur.Launch.Tests    23/23
+  Muthur.Core.Tests      3736/3736
+  Muthur.Cli.Tests       70/70
+  Muthur.Server.Tests    291/291
+```
+
+The check this task failed on, run the way a validator runs it — an installed CLI from this branch, a scratch
+hub on its own `MUTHUR_HOME` and port 7455, `Invoke-WebRequest` against the page:
+
+```
+--- /receipts?hours=24 ---
+<div class="btn-row"><a class="btn btn-on" href="/receipts?hours=24">24h</a><a class="btn " href="/receipts?hours=168">7d</a><a class="btn " href="/receipts?hours=720">30d</a></div>
+
+--- /receipts?hours=168 ---
+<div class="btn-row"><a class="btn " href="/receipts?hours=24">24h</a><a class="btn btn-on" href="/receipts?hours=168">7d</a><a class="btn " href="/receipts?hours=720">30d</a></div>
+
+buttons in window row : 0
+window hrefs present  : 3
+```
+
+Against what the validator saw — `<button class="btn ">24h</button>…`, no `href` anywhere — every control now
+carries the URL it leads to, and `btn-on` moves from the first to the second. Scratch hub stopped afterwards
+and confirmed gone; the live hub's `processId`, `startedAt` and `instanceId` are unchanged from the
+validator's own baseline (`63224`, `2026-09-19T04:23:29.3877314+00:00`, `25c38c19…`).
+
+The revert check, run by the implementer: putting the buttons back failed only
+`Every_window_is_an_anchor_to_its_own_url_and_the_row_holds_no_button`, while the six existing tests — including
+`Switching_the_window_to_seven_days_re_reads_and_changes_the_numbers` — stayed green on buttons. That is
+Amendment 4's diagnosis reproduced exactly: the old assertion matches the class attribute, which an anchor and
+a button satisfy alike, so nothing pinned the property the acceptance demanded.
+
+**The Verification bullet itself was corrected**, not only the amendment. An amendment is the reasoning; the
+bullet is the instruction, and only one of them gets followed by a validator reading top to bottom.
+
+### Note for whoever measures leftovers here
+
+A full `dotnet test` on this branch leaves temp hub directories behind. That is not a T-17 defect: this branch
+is based on `main`, and the handle leaks are fixed on `task/T-29-temp-hub-leak`, still in validation. Measured
+here at 239 after one run, consistent with T-29's pre-fix numbers.
