@@ -479,3 +479,111 @@ branch back to an implementer.
   because Windows normalises the trailing character, while the result JSON echoes what the manifest said.
   Harmless today and contained, but a result that names a file which does not exist under that name is worth
   its own task.
+
+## Amendment 4 — enumeration is not closing the class (2026-09-19)
+
+`conductor-validator` failed T-8 a second time. Rules 16–18 hold: all sixteen Proof rows plus fifty-three
+further manifests refuse cleanly, nothing escapes the repository, the shipped kits install unchanged. Twelve
+further shapes, in three families, still crash with an address dump at exit 1. All twelve crash the pre-change
+binary too, so none is a regression — they are the same class, still open.
+
+**Two of the three families are not path-string problems**, so rules 16–18 could not have caught them.
+
+### Family A — a `to` that names a directory (4 shapes)
+
+`"to": "docs/"` satisfies every rule 1–18: a non-empty, unrooted string, inside the repository, no component
+over 255, and `UnusableCharacter` splits on the separator so the empty trailing component holds nothing
+forbidden. `WriteFile` then creates `repo\docs` and calls `File.WriteAllText` on a path ending in a separator.
+
+```
+exit=1  DirectoryNotFoundException   repository afterwards: dir docs
+```
+
+Also `"docs\\"`, `"a/b/"` (leaves `a` **and** `a\b`), `"briefs/"`. Each leaves a half-installed repository,
+which the Goal forbids in its own sentence.
+
+### Family B — two entries that collide as file vs directory (4 shapes)
+
+`[{"to":"docs/x.md"},{"to":"docs"}]`. **Each entry is individually valid; the fault is the pair.** Nothing in
+`TryReadManifest` looks at one entry in the light of another, so the write loop meets the collision with
+earlier entries already on disk.
+
+```
+docs/x.md then docs   →  UnauthorizedAccessException   left: dir docs, file docs\x.md
+docs then docs/x.md   →  IOException                   left: file docs
+```
+
+### Family C — a lone surrogate escape (4 shapes)
+
+`"to": "docs/x\ud800.md"`. `JsonDocument.Parse` accepts it — a legal JSON escape — and `GetString()` refuses
+to return an unpaired surrogate, throwing *after* the `ValueKind` check has said "string".
+
+```
+exit=1  InvalidOperationException: Cannot read incomplete UTF-16 JSON text as string with missing low surrogate.
+```
+
+Also through `from` and through `mode`. Rule 16 cannot reach it: it wraps `Path.GetFullPath`, and this throws
+two statements earlier, before any path exists. As the validator put it — *the thing that exists to turn a bad
+manifest into a sentence is itself the thing that crashes.*
+
+### The rules
+
+**Rule 19 — a `to` that names a directory.** Decidable from the string, before anything is written. Refuse a
+`to` whose last component is empty, i.e. one ending in `/` or `\`:
+
+```
+"<manifestPath>: entry <n> writes \"<to>\", which names a directory, not a file."
+```
+
+**Rule 20 — destinations that collide.** The first rule in this spec that reads the manifest as a whole rather
+than an entry at a time. After every entry validates individually, compare the resolved `to` paths: refuse
+when one is an ancestor directory of another, naming **both** entries:
+
+```
+"<manifestPath>: entry <a> writes \"<to-a>\" and entry <b> writes \"<to-b>\"; one cannot be both a file and a directory."
+```
+
+Two entries writing the *same* path are not an error — that is last-one-wins, which the manifest format has
+always allowed. Only file-versus-directory collides.
+
+**Rule 21 — a string the reader will not hand back.** Wrap each `GetString()` in `TryReadEntry`. The
+`ValueKind` check has already established the element is a string, so the only remaining cause is an escape
+`System.Text.Json` will parse but not materialise:
+
+```
+"<manifestPath>: entry <n> has a \"<field>\" that is not readable text: <ex.Message>"
+```
+
+Catch `InvalidOperationException` **around the `GetString()` call alone**, never around a block.
+
+### And a guard, because three rounds say enumeration will not close this
+
+Amendment 2 told the implementer not to widen rule 16's catch to `Exception`, and that was right: the fix for
+a *known, reachable* shape is a rule with a message, not a silence. It is still right. But three rounds have
+each found "one more family", and the Goal's sentence — *no unhandled exception, no address stack* — is a
+categorical claim that a list of rules cannot keep.
+
+So `TryReadManifest` gains a last-resort guard **around its whole body**, outside every rule:
+
+```
+"<manifestPath> could not be read: <ex.GetType().Name>: <ex.Message>. This is a defect in MUTHUR's manifest
+ reader, not necessarily in your manifest — please report it."
+```
+
+`invalid_manifest`, exit 2, and no file written, because it is still inside the validation pass. Three things
+make this different from the widening Amendment 2 refused:
+
+- it is **outside** the rules, not inside one, so it never shortens a specific message into a generic one;
+- it **names the exception type** and says the reader is at fault, so a crash-shaped bug stays legible in a
+  bug report instead of reading as "your JSON is bad";
+- it bounds the **message**, not the filesystem. It cannot un-write a file, which is exactly why families A
+  and B must be caught by rules 19 and 20 pre-flight and may not be left to it.
+
+The guard is a floor, not a ceiling. A shape that reaches it is still a missing rule and should be filed.
+
+### The write phase is still not guarded, deliberately
+
+Families A and B die in `WriteFile`, after files exist. Rules 19 and 20 stop the twelve known shapes before
+the write begins. A guard around the write loop would turn a future write-phase crash into a sentence but
+would still leave a half-installed repository, so it would satisfy half the Goal and hide the worse half.
+Making the write phase transactional is the honest fix and remains the follow-up this spec already records.
