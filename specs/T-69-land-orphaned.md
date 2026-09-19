@@ -260,3 +260,35 @@ than that, say so rather than working around it.
 
 Everything else in Amendment 2 stands: a conflict still arms no cooldown, the count is still absent, the
 founder message is still once per head, and `SetEnabledAsync` still clears the land cooldowns.
+
+## Amendment 4 — accepted, and one consequence said out loud
+
+The cooldown now reads the branch's real head through `ITaskLander.BranchHeadAsync`, taken outside the ledger
+read — a subprocess does not belong inside a DB read callback — with the whole plan judged against a single
+`clock.GetUtcNow()` so staleness and the cooldown agree about when "now" is.
+
+The test that proves it is the one the earlier suite could not: a `dirty_checkout` refusal, then **a real
+commit on the branch with the checkout still dirty**, and the very next pass tries again and refuses again.
+That second refusal is the evidence it tried at all. The implementer's first attempt at that test cleaned the
+checkout without moving the head and expected a land; the cooldown correctly held and the test failed. "Fix
+the cause and push" is one act, and the test now says so.
+
+### The consequence, recorded rather than discovered
+
+**The hub can now land a commit no validator saw.** A validator passes head A, somebody commits B, and the
+next pass merges B.
+
+This is not new — the timed probe already landed whatever the branch held thirty minutes later, and
+`muthur task land` has always merged the current branch rather than a remembered sha. Amendment 3 makes it
+happen sooner and more often, which is enough of a change to write down.
+
+It is also not separable from the recovery this amendment exists for: fixing a `dirty_checkout` by committing
+is precisely the case, so a hub that refused a head differing from the validated one would refuse the only
+route out of the refusal it was built to handle. If that trade is ever worth revisiting — pinning a land to
+the exact commit a validator passed — it is a real design decision and its own task, and it interacts with
+T-63's push and with how a bounce-back re-validates.
+
+### Also worth keeping
+
+Warnings-as-errors caught a mutation attempt (`CS9113: Parameter 'lander' is unread`) before it could produce
+a misleading result. The rule earning its place.
