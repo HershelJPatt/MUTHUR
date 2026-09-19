@@ -230,3 +230,41 @@ Per `CLAUDE.md`, build the CLI with `scripts/install.ps1 -Destination ./artifact
   case. A test comparing the two files directly would be stronger.
 - **The hub cannot see this rule.** `muthur task implemented` accepts any spec. Whether the organization wants
   a gate there — and what it could possibly check — is a product question, not this one.
+
+## Amendment 1 — the acceptance check named a marker that cannot fail (2026-09-19)
+
+The implementer ran the acceptance check as written, reported that it did **not** fail, and did not adjust the
+test to make it look otherwise. The spec was wrong.
+
+`is a defect in the spec` is written twice in `kit/core/orchestrate.md` on purpose — section 1 teaches it,
+section 3 enforces it. So deleting the section leaves the `## Rules` bullet carrying the marker and the test
+still passes. The acceptance sentence "the two new tests fail if the rule is removed" was wrong twice over:
+only one of the two tests is about the rule at all (the other guards `Expand` and should not move when prose
+changes), and the marker could not distinguish the two halves.
+
+Replaced by: the installed procedure is asserted to contain all three of
+
+| String | Where it appears | What its absence means |
+|---|---|---|
+| `no browser, no GUI, no hands` | the section, line 76, only | the section is gone |
+| `no browser, no GUI and no human` | the `## Rules` bullet, line 100, only | the rule is gone |
+| `is a defect in the spec` | both | the defect-class phrasing is gone |
+
+each with a message naming which half went missing. The acceptance check becomes three steps: remove the
+section only and the first must fail while the second passes; remove the bullet only and the reverse; restore
+both and the suite is green.
+
+`No_installed_file_is_left_holding_an_unexpanded_include` is not expected to move when a rule is deleted. It
+guards the mechanism, not the text, which is the whole reason it exists.
+
+### Also added
+
+Pinning `kit/core/spec-template.md` and `specs/_TEMPLATE.md` to each other, which this spec had listed as a
+follow-up. It is two lines in a test file already open, and a known gap left open next to the change that
+creates it is worse than the scope.
+
+### Not changed
+
+`Invoke` registers `Globals.AddTo(root)` alongside `KitCommands.AddTo(root)`. Section 5 named only the latter;
+`Output.Emit` reads `Globals.Pretty` off the parse result, and `HubIsolationTests.Invoke` — the idiom this spec
+told the implementer to follow — registers it for that reason. The spec was underspecified; the code is right.
