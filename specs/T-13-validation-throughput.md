@@ -735,3 +735,54 @@ waits — so the fix frees the slot that was double-charged without turning the 
 all. It fails on the previous commit with the second task unplanned.
 
 `dotnet build`: clean, 0 warnings. `dotnet test`: 3708 Core, 23 Launch, 60 Cli, 269 Server — all green.
+
+## Amendment after the fourth validation round (2026-09-19, top-right)
+
+`conductor-validator` passed every functional check at `a7dec4b` — the double-counting fix confirmed on a
+real hub with two sessions at capacity 2, and the whole role/claim/queue surface exercised — and failed the
+task on the startup log:
+
+> A fresh installed startup emitted two EF migration warnings from this task's ValidatorConcurrency and
+> ValidationClaim migrations. Both report PRAGMA foreign_keys = 0 cannot execute in a transaction and
+> interruption may leave migration partially applied, requiring manual recovery.
+
+That is a real statement about a founder's database, not log noise. SQLite cannot change a primary key or
+add a foreign key in place, so EF rebuilds the table, and its rebuild brackets the swap with
+`PRAGMA foreign_keys = 0` — which SQLite refuses inside a transaction. EF therefore drops the transaction
+for the whole migration, and an upgrade interrupted at the wrong moment leaves the hub half-migrated and
+needing hands. These two are the only migrations in the repository that rebuild a table on the way *up*;
+every other `DropColumn` in the tree is in a `Down`.
+
+### The fix: write the rebuilds out
+
+Both migrations now perform their own rebuild in plain DDL — create, copy, drop, rename, recreate indexes —
+instead of letting EF scaffold one. EF generates no pragma for SQL it did not plan, so both run inside the
+migration's transaction, where SQLite's DDL is atomic.
+
+The pragma was buying nothing here in the first place: **nothing in the schema points a foreign key at
+`role_holds` or `task_validations`**, so dropping either breaks no reference. Their own foreign keys are
+declared on the new table and satisfied by the rows copied into it.
+
+`ValidationClaim` also collapses from three `AddColumn`s plus an `AddForeignKey` into the one rebuild it was
+always going to be, which lets `waiting_since` be filled in the copy rather than defaulted to 1970 and then
+corrected by a follow-up `UPDATE`. The reasoning about that value is unchanged and the comment moved with it.
+
+`ValidatorConcurrency`'s `Down` needs one judgment it did not need before: a role several agents hold cannot
+fit a primary key of `role_key` alone, so the earliest hold survives. That is what a capacity of one meant
+before this migration existed.
+
+### Proof
+
+The suite runs the real migration path (`Startup` calls `MigrateAsync`; nothing uses `EnsureCreated`), so
+4060 green tests are 4060 exercises of these migrations on a fresh database. Two things tests do not cover
+were checked by hand on installed builds:
+
+- **Clean start.** New build, empty `MUTHUR_HOME`: the log is five `Information` lines from
+  `Microsoft.Hosting.Lifetime` and nothing else. Both warnings are gone.
+- **Upgrade.** A hub created and populated by the installed `main` build (`03cee01`) — `win-validator`
+  defined, agent `v1` holding it — then started with this build. The log is clean, `v1`'s hold survived the
+  rebuild, the role read back at capacity 1, raising it to 2 admitted `v2`, and both are listed. The
+  upgraded schema for both tables and all their indexes is byte-identical, modulo whitespace, to the schema
+  a fresh database gets.
+
+`dotnet build`: clean, 0 warnings. `dotnet test`: 3708 Core, 23 Launch, 60 Cli, 269 Server — all green.
