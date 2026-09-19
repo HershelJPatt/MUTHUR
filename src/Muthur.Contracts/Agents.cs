@@ -21,4 +21,12 @@ public sealed record AgentDto(
     string? Tier,
     string? Account,
     IReadOnlyList<string> Roles,
-    int OpenTasks);
+    int OpenTasks,
+    bool ConductorStaffed);
+
+/// <summary>
+/// The roster as one view: the rows it shows, and how many it left out. The count is part of the payload
+/// rather than a thing the reader recomputes, because a filtered list that does not say what it dropped
+/// reads exactly like a quiet organization. Zero when <c>all</c> was asked for — nothing was omitted.
+/// </summary>
+public sealed record AgentRosterDto(IReadOnlyList<AgentDto> Agents, int ConductorHidden);

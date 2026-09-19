@@ -28,7 +28,7 @@ namespace Muthur.Contracts;
 [JsonSerializable(typeof(HeartbeatRequest))]
 [JsonSerializable(typeof(LimitedRequest))]
 [JsonSerializable(typeof(AgentDto))]
-[JsonSerializable(typeof(IReadOnlyList<AgentDto>))]
+[JsonSerializable(typeof(AgentRosterDto))]
 [JsonSerializable(typeof(AddProjectRequest))]
 [JsonSerializable(typeof(UpdateProjectRequest))]
 [JsonSerializable(typeof(ProjectDto))]
