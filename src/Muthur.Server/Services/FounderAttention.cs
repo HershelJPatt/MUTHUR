@@ -10,6 +10,23 @@ public sealed record FounderAttentionDto(
     int Unread)
 {
     public int Total => Requests.Count + Outbound.Count + Unread;
+
+    /// <summary>
+    /// When the longest-waiting thing started waiting, or null when nothing is. "210 waiting" and "210
+    /// waiting, the oldest since Tuesday" are different facts, and only the second says how bad it is.
+    /// <para>
+    /// Unread messages count towards <see cref="Total"/> but deliberately not towards this: a message blocks
+    /// nobody, and letting one set the headline age would report the queue as older than it is.
+    /// </para>
+    /// </summary>
+    public DateTimeOffset? OldestWaitingSince
+    {
+        get
+        {
+            var waiting = Requests.Select(r => r.CreatedAt).Concat(Outbound.Select(o => o.CreatedAt)).ToList();
+            return waiting.Count == 0 ? null : waiting.Min();
+        }
+    }
 }
 
 public sealed class FounderAttention(RequestService requests, OutboundService outbound, MessageService messages)

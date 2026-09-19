@@ -1,18 +1,34 @@
 @inherits LivePanel
 @inject FounderAttention Attention
+@inject TimeProvider Clock
 
 @if (_count > 0)
 {
     <span class="badge">@_count</span>
+    @if (_oldest is { } since)
+    {
+        <span class="badge-age">@Format.Age(since, _now)</span>
+    }
 }
 
 @code {
     private int _count;
+    private DateTimeOffset? _oldest;
+    private DateTimeOffset _now;
+
+    // The age moves on its own, so refresh occasionally even when nothing is written.
+    protected override TimeSpan? ClockInterval => TimeSpan.FromSeconds(30);
 
     protected override bool IsRelevant(Muthur.Core.Entities.LedgerEvent e) =>
         e.Type.StartsWith("request.", StringComparison.Ordinal) || e.Type.StartsWith("message.", StringComparison.Ordinal)
         || e.Type.StartsWith("outbound.", StringComparison.Ordinal);
 
     // The same read the Needs you page renders, so the two can never disagree.
-    protected override async Task LoadAsync() => _count = (await Attention.ReadAsync()).Total;
+    protected override async Task LoadAsync()
+    {
+        var attention = await Attention.ReadAsync();
+        _now = Clock.GetUtcNow();
+        _count = attention.Total;
+        _oldest = attention.OldestWaitingSince;
+    }
 }

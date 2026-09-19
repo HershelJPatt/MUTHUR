@@ -91,6 +91,12 @@ public sealed class RequestService(Ledger ledger, LeasePolicy leases)
             return ToDto(entity, title);
         }, ct);
 
+    /// <summary>
+    /// Open requests come back in the order of what they are costing, not of when they were asked: a question
+    /// three tasks are stopped behind is not the same size of thing as one nobody is waiting on, and at two
+    /// hundred of them an id order is no order at all. Closed ones keep the id order — nothing is waiting on
+    /// an answered question, so there is nothing to rank.
+    /// </summary>
     public Task<IReadOnlyList<FounderRequestDto>> ListAsync(bool openOnly, int limit = 200, CancellationToken ct = default) =>
         ledger.ReadAsync<IReadOnlyList<FounderRequestDto>>(async (db, _) =>
         {
@@ -98,8 +104,34 @@ public sealed class RequestService(Ledger ledger, LeasePolicy leases)
             if (openOnly) query = query.Where(r => r.Status == RequestStatus.Open);
             var rows = await query.OrderByDescending(r => r.Id).Take(Math.Clamp(limit, 1, 1000)).ToListAsync(ct);
             var taskIds = rows.Where(r => r.TaskId != null).Select(r => r.TaskId!.Value).Distinct().ToList();
-            var titles = await db.Tasks.Where(t => taskIds.Contains(t.Id)).ToDictionaryAsync(t => t.Id, t => t.Title, ct);
-            return rows.OrderBy(r => r.Id).Select(r => ToDto(r, r.TaskId is { } t ? titles.GetValueOrDefault(t) : null)).ToList();
+            var tasks = await db.Tasks.Where(t => taskIds.Contains(t.Id)).ToDictionaryAsync(t => t.Id, t => t, ct);
+
+            // Only tasks that are actually blocked have work stopped behind them, and only their unfinished
+            // children are waiting: a done or cancelled child is not costing anybody anything.
+            var blocked = tasks.Values.Where(t => t.State == TaskState.Blocked).Select(t => t.Id).ToList();
+            var dependents = blocked.Count == 0
+                ? []
+                : await db.Tasks
+                    .Where(t => t.ParentId != null && blocked.Contains(t.ParentId!.Value)
+                        && t.State != TaskState.Done && t.State != TaskState.Cancelled)
+                    .GroupBy(t => t.ParentId!.Value)
+                    .Select(g => new { Parent = g.Key, Count = g.Count() })
+                    .ToDictionaryAsync(x => x.Parent, x => x.Count, ct);
+
+            var dtos = rows.Select(r =>
+            {
+                var task = r.TaskId is { } id ? tasks.GetValueOrDefault(id) : null;
+                var blocks = task is { State: TaskState.Blocked };
+                return ToDto(r, task?.Title, blocks, blocks ? dependents.GetValueOrDefault(task!.Id) : 0);
+            });
+
+            return openOnly
+                ? dtos.OrderByDescending(r => r.Dependents)
+                    .ThenByDescending(r => r.BlocksTask)
+                    .ThenBy(r => r.CreatedAt)
+                    .ThenBy(r => r.Id)          // a total order, so two reads of the same queue never disagree
+                    .ToList()
+                : dtos.OrderBy(r => r.Id).ToList();
         }, ct);
 
     /// <summary>A task that leaves its owner's hands takes its open questions with it; nobody is waiting for the answer any more.</summary>
@@ -130,7 +162,7 @@ public sealed class RequestService(Ledger ledger, LeasePolicy leases)
         return task.Title;
     }
 
-    private static FounderRequestDto ToDto(FounderRequest r, string? taskTitle) =>
+    private static FounderRequestDto ToDto(FounderRequest r, string? taskTitle, bool blocksTask = false, int dependents = 0) =>
         new(r.Id, r.TaskId is { } id ? Wire.TaskId(id) : null, taskTitle, r.AgentName, r.Question, r.Options,
-            r.Status.ToString().ToLowerInvariant(), r.Answer, r.CreatedAt, r.AnsweredAt);
+            r.Status.ToString().ToLowerInvariant(), r.Answer, r.CreatedAt, r.AnsweredAt, blocksTask, dependents);
 }

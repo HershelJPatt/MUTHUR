@@ -108,7 +108,7 @@ Groups are ordered by their best-ranked member, so the ordering rule above decid
 Every request row already shows `Format.Age(request.CreatedAt, _now)`. Two additions:
 
 - A blocking request also shows what it is holding up: `<span class="tag tag-blocked">blocking T-n</span>`,
-  and when `Dependents > 0`, `+N behind it`.
+  and when `Dependents > 0`, `N behind it`. (No leading `+`: Razor emits one as `&#x2B;`, which is correct HTML and an unpleasant thing to assert against.)
 - The group header shows the oldest wait in the group.
 
 "Since when the agent has been idle because of it" is `CreatedAt`. A request is created at the moment its
@@ -163,7 +163,7 @@ overstate the queue.
   - `GET /needs-you` contains the group header and the count for two alike requests, and contains **both**
     agents' rows — the group did not swallow either.
   - `GET /needs-you` for one request contains no group header, so the ordinary case is untouched.
-  - The blocking tag and `+N behind it` appear in that HTML.
+  - The blocking tag and `N behind it` appear in that HTML.
   - Answering a group answers every request in it: each is `answered`, each task unblocks, and the ledger
     holds one `request.answered` per request, not one for the group.
 - **Depends on:** Units A–C.
@@ -188,3 +188,22 @@ And against a running scratch hub — never the live one — with two alike requ
 ```
 
 Passing is 0 warnings, 0 errors, every test green, and those patterns present.
+
+## Proof
+
+`dotnet build`: clean, 0 warnings. `dotnet test`: 3708 Core, 23 Launch, 65 Cli, 286 Server — all green,
+including the existing `DashboardNeedsYouTests`, which is what says the single-request page did not change.
+
+Load-bearing checked by a **targeted** revert rather than by deleting the feature: putting back
+`OrderBy(r => r.Id)` in `ListAsync`, and replacing the panel's `GroupBy` with one group per request, while
+leaving the DTO and everything else in place. Exactly two tests fail —
+`Questions_come_back_in_the_order_of_what_they_are_costing` and
+`A_question_two_agents_asked_in_the_same_words_is_one_group_that_still_shows_both` — which are the two claims
+this task rests on. Reverting the whole of `src/` instead only proves the tests reference the new members,
+which is not the same thing and is not worth the confidence it looks like.
+
+### One thing the rendering decided
+
+The spec said the dependents tag would read `+N behind it`. Razor emits a literal leading `+` as `&#x2B;`,
+so the prerendered HTML said `&#x2B;2 behind it` — correct HTML, and a poor thing to ask a validator to
+match. The tag reads `N behind it` instead. The `+` was decoration; the number is the fact.
