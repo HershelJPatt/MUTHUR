@@ -844,3 +844,74 @@ replayed all 23 cases through a checker that greps raw stderr before reporting t
 
 That is the same discipline as this spec's earlier note about a table where everything fails — a harness that
 *cannot show* the thing being measured is worse than one that fails loudly, because it reads as evidence.
+
+## Proof of Amendment 7, and the end of this task (2026-09-19)
+
+```
+dotnet build   →  0 Warning(s), 0 Error(s)
+dotnet test
+  Muthur.Launch.Tests    23/23
+  Muthur.Core.Tests      3736/3736
+  Muthur.Cli.Tests       159/159    (65 before T-8)
+  Muthur.Server.Tests    349/349
+```
+
+Amendment 7's measurement table, re-run by the orchestrator against an installed AOT CLI from this branch:
+
+```
+FIXTURE good.md exists: True
+docs /x.md     exit=2 clean  repo=0
+a /b /x.md     exit=2 clean  repo=0
+docs.../x.md   exit=2 clean  repo=0
+docs /y/x.md   exit=0 clean  repo=5      <- an intermediate component may end in a space
+docs./x.md     exit=0 clean  repo=4      <- GetFullPath already removed the single dot
+OUTSIDE entries: 0
+```
+
+Nothing narrowed, nothing deleted: no passing manifest broke.
+
+The implementer additionally re-ran every sweep from every round — `six`, `shapes`, `regress`, `attack`,
+`attack2`, `kits` — with `attack2` now showing **5** crashes rather than 6, all five repository-decided and
+filed as T-56.
+
+### The guard, four times
+
+| Unit | Manifests | Fires |
+|---|---|---|
+| C | 70 | 0 |
+| D | 136 | 0 |
+| E | 111 | 0 |
+| F | 127 | 0 |
+
+**444 manifests, zero fires.** Unit F went further than reporting the number: it put a logging shim in front
+of `muthur.exe` and replayed all seven scripts through it, so the measurement is raw untruncated stderr rather
+than a table that might not have been able to show a fire — the trap Unit E found in `regress.ps1`.
+
+Amendment 5 concluded the guard was "a floor nobody has stood on". Four samples later the stronger statement
+is warranted: **nothing in scope is capable of making it fire**, because the guard is around the reader and
+every remaining crash is in the write phase. It stays, because its absence is what let the surrogate family
+escape for two rounds and a future reader-phase shape would otherwise crash. But it was never the answer to
+this task, and Amendment 4 added it on reasoning that the evidence has since overturned.
+
+### What T-8 delivers
+
+> Every manifest shape anyone has found — across five rounds, two validators and roughly 450 hostile
+> manifests — is refused before a byte is written, with `invalid_manifest`, exit 2 and a sentence naming the
+> file, the entry and the field.
+
+What it does not deliver, all filed: **T-56** (five crashes decided by repository state, one of which needs no
+manifest at all), **T-57** (containment does not survive a junction), **T-55** (the write phase is not
+transactional).
+
+### What this task cost, and what that is worth recording for
+
+Five implementation rounds and two validator failures for what was filed as "a malformed kit.json crashes".
+The rounds were not waste — each found real defects, and two of them found defects in *my own spec*: a rule
+that could not match the shape it named, and a predicate that would have refused five working manifests.
+Both were caught because an implementer measured before building and reported a `spec-problem` instead of
+quietly making the tests pass.
+
+The pattern worth carrying: **the orchestrator theorised a mechanism three times and was wrong twice.**
+`NUL` versus the whole device list, and `docs ` trimming "to nothing". Both were settled in minutes by someone
+calling `Directory.CreateDirectory` and looking. A spec that states a mechanism it has not measured is a spec
+that will cost a round.
