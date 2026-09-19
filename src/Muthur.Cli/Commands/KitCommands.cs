@@ -367,7 +367,7 @@ public static partial class KitCommands
     /// but cannot be created, so the manifest is refused here instead of halfway through the write loop.</summary>
     private const int MaxPathComponent = 255;
 
-    /// <summary>Rule 17. The first component of <paramref name="value"/> that no filesystem would accept, or null.</summary>
+    /// <summary>Rule 17. The first component of <paramref name="value"/> that is over the limit, or null.</summary>
     private static string? TooLongComponent(string value) =>
         value.Split(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar)
             .FirstOrDefault(part => part.Length > MaxPathComponent);
