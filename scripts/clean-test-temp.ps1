@@ -7,8 +7,10 @@
   age guard and not the ownership check: someone reaching for it wants the logs gone, not to race a live
   test run. A hub whose log another process still holds open is never deleted, whatever the flags say.
 
-  Every run ends with its counts, whatever happened to any one directory, and names every directory it held
-  back or failed on. Losing the count is the defect this script exists to fix; it does not get to repeat it.
+  Every run that examines anything ends with its counts, whatever happened to any one directory, and names
+  every directory it held back or failed on. Losing the count is the defect this script exists to fix; it
+  does not get to repeat it. A root that does not exist is the one run with nothing to count: it says so in
+  a sentence and stops, which is the whole report rather than a missing one.
 .EXAMPLE
   ./scripts/clean-test-temp.ps1 -DryRun    # count what would go; delete nothing
   ./scripts/clean-test-temp.ps1            # keep a directory only when its log holds an Error or Critical line
@@ -27,7 +29,12 @@ param(
 )
 $ErrorActionPreference = 'Stop'
 
-if (-not (Test-Path $Root)) {
+# [IO.Directory]::Exists, not Test-Path: brackets in a path are a wildcard class to Test-Path, so a root
+# that exists could report missing and a root that does not could match a sibling and throw at line 91.
+# Same family as the [IO.File]::Exists below and the -LiteralPath on the delete -- one rule, applied once.
+# It is also the right question: the next thing done with $Root is enumerating its directories, and a plain
+# file sitting at that path satisfies Test-Path and then throws.
+if (-not [IO.Directory]::Exists($Root)) {
     Write-Host "Nothing to clean: $Root does not exist."
     return
 }
