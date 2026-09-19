@@ -21,6 +21,10 @@
                         <span class="agent-name">@p.Key</span>
                         <span class="agent-model">@p.Name</span>
                         <span class="pill @(p.LandMode == LandMode.Pr ? "pill-role" : "pill-verdict-yes")">land: @p.LandMode.ToWire()</span>
+                        @if (p.RequiredValidators.Count == 0)
+                        {
+                            <span class="pill pill-ungated">ungated</span>
+                        }
                     </div>
                     <dl class="kv" style="margin: 8px 0 0">
                         <dt>Repository</dt><dd>@p.RepoPath</dd>
@@ -29,7 +33,7 @@
                         <dd>
                             @if (p.RequiredValidators.Count == 0)
                             {
-                                <span class="panel-sub">none required</span>
+                                <span class="panel-sub">none required — implemented goes straight to validated</span>
                             }
                             @foreach (var v in p.RequiredValidators)
                             {
