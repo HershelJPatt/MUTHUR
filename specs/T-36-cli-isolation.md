@@ -140,3 +140,62 @@ involves the live hub's real address.
 - `MuthurEnvironment.DefaultUrl` being the live hub is correct for the CLI and is the reason this fixture
   must set rather than clear. Whether a test-time default should exist at all is a larger question about
   `Muthur.Contracts` and is not this task's.
+
+## Proof (2026-09-18)
+
+```
+dotnet build   0 warnings, 0 errors
+dotnet test    Launch 23 + Cli 43 (was 40) + Core 3708 + Server 228, all passing
+git diff --stat -- src/   empty
+```
+
+### The hostile-environment run, which is the only one that tests the claim
+
+Run by the orchestrator, since it involves the live hub's real address and a real founder token. The claim
+under test is that a module initializer **overrides an inherited value** — proving it against a clean
+environment proves only that it fills an absent one.
+
+```
+live ledger seq before: 907
+MUTHUR_URL=http://127.0.0.1:7420  MUTHUR_TOKEN=<real founder token>  MUTHUR_HOME=<the live home>
+  dotnet test tests/Muthur.Cli.Tests   ->  43 passed, 0 failed
+live ledger seq after:  907
+```
+
+The suite passed with the live hub's address and a real founder credential exported, and the live ledger did
+not move. That is the property this task exists for.
+
+### The fixture is not theoretical
+
+The implementer checked, with existence probes only and no requests: its own shell had `MUTHUR_URL`,
+`MUTHUR_HOME`, `MUTHUR_TOKEN` and `MUTHUR_AGENT` **all unset** — the clean-environment case this spec warns
+is the dangerous one — while port 7420 was listening and `founder.token` and `muthur.db` existed. So before
+this commit, `task attended T-1 --clear --founder` from that assembly would have cleared the flag on the
+live hub, authenticated as the founder.
+
+### Exit 4 means nothing was reached, not that parsing failed
+
+Both, because the spec flagged that a parse failure would pass a careless assertion:
+
+- **In the test**: `Assert.Empty(parse.Errors)` runs *before* `InvokeAsync`, so a command that fails to parse
+  cannot reach the exit-code assertion at all.
+- **Observed**: detailed output printed one body per action test —
+  `{"code":"not_running","message":"MUTHUR is not reachable at http://127.0.0.1:1. ..."}` — a string produced
+  only inside `HubClient.SendAsync`'s catch of `HttpRequestException`, i.e. only after a real connection
+  attempt, and naming `127.0.0.1:1` rather than 7420.
+
+### An honest gap in the coverage
+
+`src/Muthur.Cli/Program.cs` is a top-level program, so its root command is built inside the compiler-generated
+`<Main>$` and no test can call it. Rather than duplicate the tree — which would drift and prove nothing about
+the real one — the helper calls the same real factories `Program` calls (`Globals.AddTo`, `TaskCommands.AddTo`)
+onto a fresh `RootCommand`. Every command, option and action under test is the production object. **What is
+not covered is `Program`'s composition order**, and adding a `BuildRoot()` to reach it would have meant
+changing `src/`, which this spec forbids. Recorded rather than quietly accepted.
+
+### The load-bearing proof, done at the safest moment
+
+`Isolate()`'s body was emptied *before the two action tests existed in the file*, so nothing that could run
+in the unsafe state was present. The environment test then failed with
+`Expected: "http://127.0.0.1:1"  Actual: "http://127.0.0.1:7420"` — this spec's central claim demonstrated
+literally — and was restored immediately.
