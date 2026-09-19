@@ -1,0 +1,141 @@
+@page "/console"
+@inject AgentService Agents
+
+@*
+    Founder-only work, done by reading labels instead of remembering flags. Every control calls the same
+    service the CLI calls, with Caller.Founder — the hub runs on the founder's machine and this page is a
+    second client of those services, not a second authority. Nothing here is an endpoint of its own.
+
+    This page deliberately does not inherit LivePanel. These are forms: a live re-render arriving while the
+    founder is halfway through typing would wipe the field, which is the mistake RequestsPanel already keeps
+    per-request drafts to avoid. Re-read after a successful action, never on someone else's event.
+
+    Roles, Projects, Outbound and Tasks follow the Agents section, in that order.
+*@
+
+<PageTitle>MUTHUR · Console</PageTitle>
+
+<div class="page">
+    <section class="panel">
+        <div class="panel-head">
+            <span class="panel-title">Agents</span>
+            <span class="panel-sub">register a session and take away its paste-line</span>
+        </div>
+        <div class="panel-body">
+            <dl class="kv">
+                <dt><label for="agent-name">Name</label></dt>
+                <dd><input id="agent-name" class="input" @bind="_name" @bind:event="oninput" /></dd>
+                <dt><label for="agent-harness">Harness</label></dt>
+                <dd>
+                    <select id="agent-harness" class="select" @bind="_harness">
+                        @foreach (var harness in Harnesses)
+                        {
+                            <option value="@harness">@harness</option>
+                        }
+                    </select>
+                </dd>
+                <dt><label for="agent-model">Model</label></dt>
+                <dd><input id="agent-model" class="input" @bind="_model" @bind:event="oninput" /></dd>
+                <dt><label for="agent-tier">Tier</label></dt>
+                <dd>
+                    <select id="agent-tier" class="select" @bind="_tier">
+                        @foreach (var tier in Tiers)
+                        {
+                            <option value="@tier">@tier</option>
+                        }
+                    </select>
+                </dd>
+                <dt><label for="agent-account">Account</label></dt>
+                <dd><input id="agent-account" class="input" @bind="_account" @bind:event="oninput" placeholder="optional" /></dd>
+            </dl>
+            <div class="btn-row">
+                <button class="btn btn-go" @onclick="RegisterAsync">Register</button>
+            </div>
+            @if (_error is { } error)
+            {
+                <div class="error-text">@error</div>
+            }
+            @if (_registered is { } agent && _token is { } token)
+            {
+                <div class="section-note">Registered @agent.Name (@agent.Harness/@agent.Model, @agent.Tier).</div>
+                <pre class="code">@PasteLine(agent, token)</pre>
+            }
+        </div>
+    </section>
+</div>
+
+@code {
+    private string _name = "";
+    private string _harness = Harnesses[0];
+    private string _model = "";
+    private string _tier = Tiers[0];
+    private string _account = "";
+
+    private AgentDto? _registered;
+    private string? _error;
+
+    /// <summary>
+    /// The registration token, shown exactly once and then gone. The hub keeps only its hash, so once this
+    /// field is cleared the string cannot be recovered from anywhere — which is the point, and the same
+    /// contract the CLI keeps when it writes the token and never prints it again.
+    /// <para>
+    /// It is cleared by <see cref="ClearOnce"/> before any other action on this page runs, and it dies with
+    /// the circuit when the page is left or reloaded. <b>Do not persist it</b>: not in a field that survives
+    /// a reload, not in browser storage, not in the ledger, not "just until the founder has copied it". The
+    /// next reader's instinct is to keep it for convenience, and that instinct is the defect — it turns a
+    /// credential the founder saw once into one that is sitting somewhere nobody is watching.
+    /// </para>
+    /// </summary>
+    private string? _token;
+
+    // The harnesses an agent can be registered as: the kit directories under kit/, which is what a session
+    // reads its procedures from. Not the worker adapters in Muthur.Launch — those are the harnesses the hub
+    // can start headless, a shorter list that has no generic.
+    private static readonly string[] Harnesses = ["claude", "codex", "generic"];
+
+    // The tiers in the harness catalog; a tier is what staffing picks a model by.
+    private static readonly string[] Tiers = ["mastermind", "implementer", "utility"];
+
+    private async Task RegisterAsync()
+    {
+        ClearOnce();
+        _error = null;
+        try
+        {
+            var registered = await Agents.RegisterAsync(
+                Caller.Founder,
+                new RegisterAgentRequest(_name, _harness, _model, _tier, _account is { Length: > 0 } a ? a : null));
+            _registered = registered.Agent;
+            _token = registered.Token;
+        }
+        catch (Muthur.Core.MuthurException ex)
+        {
+            // The service's own words. A console that reworded a refusal would drift from what the CLI says
+            // about the same one, and the founder would have two accounts of a single rule.
+            _error = ex.Message;
+        }
+    }
+
+    /// <summary>
+    /// What the founder pastes into a terminal to become the agent just registered. The harness word is the
+    /// harness that was registered, not a fixed <c>claude</c>: a codex session started by typing claude is a
+    /// different agent from the one the ledger now holds a token for.
+    /// </summary>
+    private static string PasteLine(AgentDto agent, string token) =>
+        $"""
+        $env:MUTHUR_AGENT = '{agent.Name}'
+        $env:MUTHUR_TOKEN = '{token}'
+        {agent.Harness,-18}# then: /muthur-orchestrate next
+        """;
+
+    /// <summary>
+    /// Called first by every action on this page, including the ones that come after Agents: the one-shot
+    /// token belongs to the action that produced it and to no later one, so pressing any other control is
+    /// what takes it off the screen.
+    /// </summary>
+    private void ClearOnce()
+    {
+        _registered = null;
+        _token = null;
+    }
+}
