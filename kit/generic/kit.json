@@ -37,6 +37,11 @@
       "mode": "create"
     },
     {
+      "from": "../briefs/knowledge-oncall.md",
+      "to": "briefs/knowledge-oncall.md",
+      "mode": "create"
+    },
+    {
       "from": "../briefs/observability-oncall.md",
       "to": "briefs/observability-oncall.md",
       "mode": "create"
