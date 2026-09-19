@@ -149,6 +149,13 @@ b { font-weight: 600; }
 .request { border: 1px solid var(--line); border-left: 2px solid var(--amber); border-radius: 6px; background: var(--panel-2); padding: 12px; margin-bottom: 10px; }
 .request-head { display: flex; align-items: center; gap: 8px; font: 11px var(--mono); color: var(--dim); margin-bottom: 6px; }
 .request-question { font-size: 14px; margin-bottom: 8px; }
+.badge-age { font: 10px var(--mono); color: var(--dim); margin-left: 6px; }
+.group { border: 1px solid var(--line); border-radius: 6px; background: var(--panel-2); padding: 10px; margin-bottom: 12px; }
+.group-head { display: flex; align-items: baseline; gap: 8px; flex-wrap: wrap; margin-bottom: 8px; }
+.group-question { font-size: 14px; font-weight: 600; }
+.group-count { font: 700 10px var(--mono); letter-spacing: .08em; text-transform: uppercase; color: var(--amber); }
+.group-all { border-top: 1px dashed var(--line); margin-top: 8px; padding-top: 8px; }
+.tag-blocking { background: var(--red-bg); color: var(--red); }
 .error-text { color: var(--red); font: 12px var(--mono); margin-top: 6px; }
 
 #blazor-error-ui { display: none; position: fixed; left: 0; right: 0; bottom: 0; padding: 10px 16px; background: var(--red); color: #fff; font: 12px var(--mono); z-index: 100; }
