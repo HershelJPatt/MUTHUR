@@ -111,6 +111,13 @@ Open with `new FileStream(path, FileMode.Append, FileAccess.Write, FileShare.Rea
 writing a byte. **Do not delete the file afterwards** — the hub is writing to it, and T-14 learned that a
 probe which deletes what it created can discard what a concurrent writer appended.
 
+**What the fail branch is actually for.** A hub whose log path is unwritable *at startup* never starts:
+`FileLoggerProvider` opens it before anything else, and `muthur doctor` against it answers `not_running`.
+Verified by hand — pointing `MUTHUR_HOME` at a directory containing a directory named `muthur.log` produced
+a hub that would not come up, not a `logging` `fail`. So the fail branch covers the case where the log
+*becomes* unwritable while the hub runs: a full disk, a revoked permission, someone replacing the file. That
+is the case worth reporting, and it is why acceptance 3 drives the check directly rather than through a hub.
+
 **This check ignores `DoctorContext.Probe` and always runs.** `Probe` gates network calls — a `gh` invocation,
 an HTTP request to Discord — because those are slow, cost someone's quota, and should not fire on the
 dashboard's timer. Opening a local file for append and closing it is none of those things, and the panel
