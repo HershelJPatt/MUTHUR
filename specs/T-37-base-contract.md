@@ -90,6 +90,22 @@ orchestrator's task branch". That sentence has been false in all nine observed c
 implementer reads the new step and then reads a reassurance that the step exists to distrust. Change "based
 on" to "intended to be based on", and nothing else in that file.
 
+**`kit/claude/agents/muthur-implementer.md` frontmatter, line 3.** Its `description` says *"Give it the
+spec path, the unit it owns, and the exact verification commands"* — the same list `orchestrate.md` step 4
+is amended to extend, and **the copy an orchestrator actually meets at the moment of delegation**, since the
+agent card is what the harness surfaces when spawning while `orchestrate.md` is read once at the start of a
+loop. Add the base branch to that list too. Found by the implementer after the first amendment closed the
+gap in one file and left it open in the more-read one.
+
+**`kit/core/orchestrate.md`, the stale count.** Lines 56-58 say the worktree tooling "has handed
+implementers a stale base **three times in a row** here". It is now nine, and this is the only place in the
+kit carrying a number. Remove the count rather than correcting it — a figure in a procedure drifts the day
+after it is written, and "repeatedly" carries the same weight without going stale.
+
+**`kit/core/implementer.md`, the residual in step 1.** It opens "Your orchestrator names a base branch",
+stated as a fact about the world — the same shape of sentence the agent-card fix was about. Add: if it did
+not, ask before starting. The implementer flagged this against its own work.
+
 **`kit/core/orchestrate.md`** — the recovery path substitutes a `<base>` the prompt must have supplied. The
 step detects a bad base robustly (the spec file is either present or it is not) but cannot *recover* from
 one unless the orchestrator named the branch. Add to step 4's list of what to give an implementer: the base
