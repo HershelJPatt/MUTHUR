@@ -163,6 +163,20 @@ And against a running scratch hub — never the live one — with staffing on an
 
 Passing is 0 warnings, 0 errors, every test green, and those patterns present.
 
+**What "the switch works" and "it refreshes" mean here, exactly — do not go looking for a browser.**
+
+- *The switch.* Pressing it is one call to `ConductorService.SetEnabledAsync(Caller.Founder, …)` and nothing
+  else. What that call does is covered by `Turning_staffing_on_clears_the_stalls_the_page_was_showing` and by
+  `ConductorTests`, and what the page renders on either side of it by
+  `The_switch_reads_the_state_it_is_about_to_change`. The only thing a click would additionally exercise is
+  Blazor's event dispatch, which is not this task's work and is not what a founder is relying on.
+- *Live refresh.* The panel's whole contribution is which events it reloads for, and that decision is a
+  public static, `ConductorPanel.Watches`, asserted over ten event types by
+  `The_panel_reloads_for_conductor_events_and_nothing_else`. The coalescing, the timer and the subscription
+  are `LivePanel`, which every panel on the board already inherits and which this task does not touch.
+
+Nothing on this panel is inside a `<Virtualize>`, so every value it shows is in the fetched HTML above.
+
 ### A note for whoever rebases this
 
 T-6 lands `<RolesPanel />` into the same two `aside` blocks. The conflict is one adjacent line in each file
@@ -190,3 +204,33 @@ switch and the last pass, which is right: those read fields that already existed
 `Turning_staffing_on_clears_the_stalls_the_page_was_showing` exists because a new read of old state is where
 a list starts outliving its source. Turning staffing on already clears `_stalls`; the panel had to be shown
 to clear with it rather than keep a row the conductor no longer believes.
+
+## Amendment after the first validation round (2026-09-19, top-right)
+
+`conductor-validator` blocked this at `22565ef`: build clean, but
+
+> this unattended Codex session exposes no browser… The role brief requires a browser for live behavior, so
+> dashboard switch/live refresh remain unexercised.
+
+The build and the HTML assertions were all available to it; what it could not do was press the button or
+watch a circuit reload. The same fault as T-18's first round, and the same fix: a behaviour only a click can
+reach is a spec defect written one layer down, whatever the Verification section says.
+
+- **`IsRelevant` became `ConductorPanel.Watches`**, a public static the test calls directly over ten event
+  types — six `conductor.*` that must reload it and four that must not. The panel's own contribution to
+  "live" is that predicate; the timer, the coalescing and the subscription are `LivePanel`, shared by every
+  panel and untouched here.
+- **The switch needed no change.** It was already one call to `SetEnabledAsync`, which three tests cover
+  between them, with the rendered state asserted on both sides. Verification now says so in advance, so the
+  next validator is not sent looking for a browser to press a one-line button.
+
+### Not fixed here, and it is not this task's to fix
+
+This is the third dashboard task blocked on the same sentence in the validator role brief (T-16, T-18's
+first round, and this). The brief requires a browser for "live behavior" on any dashboard task, so every
+dashboard task will block on it regardless of what its spec establishes. That is exactly the structural
+problem T-45 was filed about, and T-45 is blocked on founder request #15. Recorded here rather than worked
+around: editing a standing role brief to unblock my own task is not a thing an orchestrator should do
+quietly.
+
+`dotnet build`: clean, 0 warnings. `dotnet test`: 3736 Core, 23 Launch, 77 Cli, 364 Server — all green.

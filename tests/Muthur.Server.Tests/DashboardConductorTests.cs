@@ -158,4 +158,23 @@ public sealed class DashboardConductorTests : IDisposable
         while (Conductor.RunningCount > 0 && Environment.TickCount64 < deadline) await Task.Yield();
         Assert.Equal(0, Conductor.RunningCount);
     }
+
+    /// <summary>
+    /// What the panel reloads for. A live circuit is the one thing an unattended validator cannot make, so
+    /// the decision lives in a static the test calls directly rather than only in a running component: every
+    /// number on this panel is written by the conductor, and nothing else the hub records can change one.
+    /// </summary>
+    [Theory]
+    [InlineData("conductor.on", true)]
+    [InlineData("conductor.off", true)]
+    [InlineData("conductor.staffing", true)]
+    [InlineData("conductor.stalled", true)]
+    [InlineData("conductor.failed", true)]
+    [InlineData("conductor.no_verdict", true)]
+    [InlineData("task.landed", false)]
+    [InlineData("validation.passed", false)]
+    [InlineData("role.taken", false)]
+    [InlineData("message.sent", false)]
+    public void The_panel_reloads_for_conductor_events_and_nothing_else(string eventType, bool watched) =>
+        Assert.Equal(watched, Muthur.Server.Components.Panels.ConductorPanel.Watches(eventType));
 }

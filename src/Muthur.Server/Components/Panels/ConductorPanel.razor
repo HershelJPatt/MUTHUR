@@ -80,8 +80,14 @@
     // The last-pass age and the next-probe time move on their own, so refresh even when nothing is written.
     protected override TimeSpan? ClockInterval => TimeSpan.FromSeconds(30);
 
-    protected override bool IsRelevant(Muthur.Core.Entities.LedgerEvent e) =>
-        e.Type.StartsWith("conductor.", StringComparison.Ordinal);
+    protected override bool IsRelevant(Muthur.Core.Entities.LedgerEvent e) => Watches(e.Type);
+
+    /// <summary>
+    /// Which ledger events this panel reloads for. A public static so the decision is reachable by a test
+    /// rather than only by a live circuit: everything the panel shows is written by the conductor, and
+    /// nothing else the hub records can change it.
+    /// </summary>
+    public static bool Watches(string eventType) => eventType.StartsWith("conductor.", StringComparison.Ordinal);
 
     protected override async Task LoadAsync()
     {
