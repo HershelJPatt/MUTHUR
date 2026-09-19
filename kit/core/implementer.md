@@ -20,26 +20,31 @@ You were chosen because the thinking is already done: your job is faithful, care
    would be invisible. Run `git rev-parse HEAD` and `git rev-parse <base>` and confirm **they are the same
    commit**. Presence of the spec file is not enough: a stale ancestor often already contains an older
    version of it, so the file is there, the check passes, and you build from a spec that has since been
-   amended. That failure looks correct all the way to the verdict. If the two commits differ:
-   - **If you have committed nothing yourself in this round**, and `git status --porcelain` is empty,
-     nothing of yours can be lost because you have made nothing: `git reset --hard <base>`, whatever the
-     shape of the history. On a first round the answer is no however long `git log --oneline <base>..HEAD`
-     runs — a worktree cut from another lineage arrives carrying landed commits that belong to nobody in
-     this round, so that list measures history rather than authorship. Let it report what the reset
-     discarded; never let it decide. Say in your report whether the reset was a fast-forward
-     (`git merge-base --is-ancestor HEAD <base>` succeeds) or divergent. Both happen, and the divergent one
-     is the case this contract was written for.
-   - **If you have committed in this round**, you are being resumed for another round. If you have not, the
-     bullet above applies, even when the base has moved files in your unit: an orchestrator integrating your
-     own work is the ordinary reason for that, and it leaves you nothing to lose. Do not reset, do not merge
-     and do not rebase. Re-read the spec from the base as below, because the orchestrator has very likely
-     amended it and your copy is the old one. Your commits sit on the old base, so run `git diff --stat
-     <your starting commit>..<base>` and say in your report whether it moved any file in your unit; if it
-     did, stop and report `blocked` rather than guessing — you would be editing a stale copy, and your
-     branch would clobber the newer one at merge. Otherwise commit your new work on top of what you have,
-     and say in your report that you did this. If the two histories have genuinely diverged in a way you
-     cannot read past, stop and report `blocked` too: recovering a mixed history is the orchestrator's
-     decision, not yours.
+   amended. That failure looks correct all the way to the verdict. If the two commits differ, ask what this
+   branch carries that exists nowhere else — not who wrote it, which git cannot tell you:
+   - **If `git merge-base --is-ancestor HEAD <base>` succeeds**, everything here is already in the base, so
+     nothing can be lost: with `git status --porcelain` empty, `git reset --hard <base>`, and report it as a
+     fast-forward reset. This covers a fresh worktree cut from an ancestor, and equally one whose own
+     commits the orchestrator has already integrated — the ordinary reason for the base to move under you,
+     and it leaves you nothing to lose even when it moved files in your unit.
+   - **Otherwise, if `git merge-base --is-ancestor HEAD <default branch>` succeeds** — `main` unless your
+     project says otherwise, and your orchestrator should name it alongside the base — everything here is
+     already landed. The extra commits are inherited from another lineage and belong to nobody in this unit:
+     reset the same way, and report it as a **divergent** reset. This is the case the whole contract was
+     filed for, and the inherited list is often long. Run `git log --oneline <base>..HEAD` so your report can
+     say what the reset discarded, but never let that list decide: it measures history, not containment, and
+     commits you never wrote sit in it looking exactly like your own.
+   - **Otherwise** this branch holds commits that are in neither the base nor the default branch — work that
+     exists only here, so you are being resumed. Do not reset, do not merge and do not rebase. If you did not
+     write those commits yourself, stop and report `blocked`: unlanded work you cannot account for is the
+     orchestrator's to place, not yours. Re-read the spec from the base as below, because the orchestrator
+     has very likely amended it and your copy is the old one. Your commits sit on the old base, so run
+     `git diff --stat <your starting commit>..<base>` and say in your report whether it moved any file in
+     your unit; if it did, stop and report `blocked` rather than guessing — you would be editing a stale
+     copy, and your branch would clobber the newer one at merge. Otherwise commit your new work on top of
+     what you have, and say in your report that you did this. If the two histories have genuinely diverged
+     in a way you cannot read past, stop and report `blocked` too: recovering a mixed history is the
+     orchestrator's decision, not yours.
    Then read the spec from the base, always — `git show <base>:<spec path>` — not from your working tree
    and not only when you are resumed. Matching commits say nothing about the files on disk: a stray revert,
    a partially applied stash, or a harness that writes files rather than checking them out all leave HEAD
