@@ -556,6 +556,28 @@ look at, immediately before each of the two reads. Two lines, and the message st
   a directory named `.gitignore` — asserting `install_failed` and an untouched repository, not a successful
   install. Making it succeed is T-56's.
 
+### Accepted as built — the amendment's own acceptance clause could not match its own case
+
+Added after the build, because the same fault recurred one level down. The acceptance above reads *"roll back
+over a destination made read-only **after** the transaction wrote it, and assert the returned failure list is
+empty **because the bytes are as recorded**"*. Those two clauses contradict each other, and Unit A reported it
+rather than picking one silently:
+
+> If the write **succeeds** and the file is made read-only afterwards, the bytes on disk are the kit's, the
+> journal holds the repository's originals, `WriteAllBytes` throws, and `IsAsRecorded` then correctly answers
+> **false**. The file genuinely is not as recorded, and reporting it is right.
+
+The state where the bytes *are* as recorded is the one where the write never landed — set the file read-only
+first, let `Apply` throw, then roll back. That is `measure.ps1 -Fail readonly` exactly, and it is the case
+Amendment 1 exists for, so it is what the test does. **The "after" ordering is struck.**
+
+Also accepted: `IsAsRecorded` is written as an early return rather than the amendment's ternary, because
+`undo.Content is not { } content ? … : …` binds `content` only in the negated branch. Same semantics, and the
+better code.
+
+This is the second clause in a T-55 spec that could not match the case it named, after Amendment 1's own
+defect. Both were found by an implementer reading the frozen text against a measurement before building.
+
 ### Recorded
 
 The spec asserted a rollback mechanism it had not measured, one paragraph after a Context section that had
