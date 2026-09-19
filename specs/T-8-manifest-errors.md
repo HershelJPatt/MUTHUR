@@ -761,3 +761,86 @@ paths.
 The guard caught **nothing in 136 manifests** — double the previous unit's sample, same result, same reason.
 And `to: "."`, `to: "briefs/.."` and `to: "   "` never reach rule 19 because rule 14 refuses them one step
 earlier as outside the repository, which is the better sentence; left alone deliberately.
+
+## Amendment 7 — I theorised the mechanism twice; here is the measurement (2026-09-19)
+
+Unit E reported `spec-problem` and it is right. Change 1 of Amendment 6 (narrowing the device rule to `NUL`)
+is built and correct. **Change 2's rule is wrong in both directions**, and the implementer implemented it as
+frozen, measured what it actually did, and said so rather than quietly fixing my sentence.
+
+### It does not close the shape it names
+
+Amendment 6 gave the mechanism as *"Win32 trims trailing spaces and dots from a path component; a component
+made only of them trims to nothing"*. True of `...` and `   `. **Not true of `docs `**, which trims to `docs`,
+not to nothing — so the frozen predicate cannot match the very shape the amendment lists first, and
+`docs /x.md` still crashes and still leaves an entry behind.
+
+The real mechanism, measured against `Directory.CreateDirectory` and `File.WriteAllText` as `WriteFile` calls
+them, over 26 shapes:
+
+```
+docs /x.md      CRASHES   leaves repo\docs
+docs /y/x.md    INSTALLS  3 entries   <-- "docs " is fine as an INTERMEDIATE component
+a /b /x.md      CRASHES   leaves a , a \b
+docs.../x.md    CRASHES   GetFullPath keeps "docs..."
+docs./x.md      INSTALLS  GetFullPath normalises a single trailing dot away
+```
+
+`Directory.CreateDirectory` trims trailing spaces off **the last component it is given**; `File.WriteAllText`
+does not trim interior ones. So `WriteFile` creates `repo\docs` and then writes into `repo\docs `, which does
+not exist. The class is therefore **the file's immediate parent component**, not any component — which is why
+`docs /y/x.md` installs and must keep installing.
+
+### And read literally it refuses manifests that work
+
+`TrimEnd(' ', '.')` of `""`, `"."` and `".."` is empty, so the frozen predicate refuses five shapes that
+install today, two of them asserted by green tests:
+
+```
+docs//x.md      ./docs/x.md      docs/./x.md      a/../docs/x.md      docs/../x.md
+```
+
+`Path.GetFullPath` *resolves* those away rather than trimming them to nothing, and the rule's own sentence —
+*"is only spaces and dots"* — is false of an empty component and false of what the platform does to `.` and
+`..`. The implementer excluded exactly those three spellings and nothing else.
+
+**That exclusion is ratified.** It is the same over-refusal Amendment 6 was written to correct, one rule over,
+and I wrote it two paragraphs after correcting the first one.
+
+### The rules, stated from the measurement
+
+**Keep the existing rule, with the exclusions**, for a component that is *only* spaces and dots (`...`,
+`   `), excluding `""`, `"."` and `".."`. It is what repairs the `to: "   "` sentence, and Unit E verified
+that.
+
+**Add a second rule** for the file's immediate parent. After resolving the destination, take the final
+component of its parent directory; on Windows, refuse when it ends with a space or a dot:
+
+```
+"<manifestPath>: entry <n> writes \"<to>\", whose parent directory \"<component>\" ends in a space or a dot, which this platform cannot create."
+```
+
+Checked **after** `Path.GetFullPath`, which is what makes `docs./x.md` install (the dot is already gone) and
+`docs.../x.md` refuse (the dots are kept). Only the immediate parent, which is what keeps `docs /y/x.md`
+installing.
+
+Both rules stay gated on `OperatingSystem.IsWindows()`. Unit E gated the first without being told to and was
+right: the trimming is a Win32 behaviour, `"   "` is a legal directory name on Linux, and both messages say
+*"this platform"*. Refusing it elsewhere would refuse a manifest that installs — the sin Change 1 corrects.
+
+### Two corrections to Amendment 6's own prose
+
+- It said the residual crashes are "on 3 — all repository-decided". As *families* that reads correctly; as a
+  row count `attack2.ps1` shows **6** (F1×2, F2×2, F3×1, plus `docs /x.md`). Row count is what a reader will
+  check, so: six rows, three repository-decided families, plus the one shape this amendment closes.
+- The guard measurement is now **nothing in 111 manifests**, a third independent sample after 70 and 136.
+
+### A methodological finding worth more than the rule
+
+Unit E noticed that **`regress.ps1` could not have answered the guard question at all**: it truncates its
+message column at 110 characters, every message opens with the full manifest path, and the guard's sentence
+falls past the cut. Its table would have looked identical whether the guard fired or not. The implementer
+replayed all 23 cases through a checker that greps raw stderr before reporting the measurement.
+
+That is the same discipline as this spec's earlier note about a table where everything fails — a harness that
+*cannot show* the thing being measured is worse than one that fails loudly, because it reads as evidence.
