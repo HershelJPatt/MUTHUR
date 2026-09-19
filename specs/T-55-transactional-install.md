@@ -620,3 +620,101 @@ So the two tasks are separated along the line that actually divides them:
 Amendment 1's second motivating case — a directory named `.gitignore` — is likewise pre-flighted away by T-56.
 Amendment 1's fix stays: it is reachable today, the unit tests pin it directly, and "report the claim, not the
 call" was wrong code regardless of which inputs happen to reach it.
+
+## Amendment 3 — T-56 landed, and we integrate second (2026-09-19)
+
+Amendment 2 said "whoever integrates second re-points it". That is us: `086fee9 Land T-56` is on `main`, and
+this branch is behind it. This amendment is the whole of Unit C and changes nothing a validator was promised —
+the Goal, the error codes, the rollback and `install_not_undone` are all as frozen.
+
+`git merge main` into this branch conflicts in exactly one hunk: the block at the end of `KitCommands` holding
+the write primitives. Unit A deleted them (they became `InstallTransaction`); T-56 rewrote them in place. Both
+sides are right about their half, so neither side of the conflict is the answer.
+
+### What T-56 actually did, and why it matters here
+
+T-56's pre-flight `Writes(…)` originally answered from an entry's **mode**, while the write answers from its
+**content** — `WriteFile` returns `unchanged` without writing when the bytes already match — so a read-only file
+a re-install would have left alone was refused anyway. T-56 fixed that by making **one function the single
+answer**: `Rendered(path, content, mode)` returns exactly what the install would leave in a file, or null when
+it would not write at all. `WriteKitFile` became `Rendered(…) is { } bytes ? WriteFile(path, bytes) : "kept"`,
+and `WriteSection` became `SectionDocument(path, content)`, which returns the document instead of writing it.
+
+That property is the thing to preserve. A transactional write phase still wants one answer to "what would end
+up in this file", and losing it is how T-56's defect comes back.
+
+### The resolution
+
+**`Rendered` and `SectionDocument` move into `InstallTransaction`, and the pre-flight calls them there.** The
+dependency runs `Commands` → `Infrastructure`, which is the direction that already exists; the reverse would
+have `Infrastructure` reaching back into `Commands`. Concretely:
+
+- `KitCommands` keeps `Unwritable` and `Writes` unchanged in behaviour. `Writes` calls
+  `InstallTransaction.Rendered(d.Resolved, content, entry.Mode)`. One character of the call site moves; the
+  question it asks does not.
+- `KitCommands.WriteKitFile`, `KitCommands.Rendered`, `KitCommands.WriteFile` and `KitCommands.SectionDocument`
+  are deleted. After this, `KitCommands` writes no bytes at all — which is Unit A's point restated.
+- `InstallTransaction` gains `internal static string? Rendered(string path, string content, string? mode)` and
+  `private static string SectionDocument(string path, string content)`, taken **verbatim** from `main`.
+  `InstallTransaction.WriteSection` is deleted: `SectionDocument` replaces it, and the transaction's own
+  instance `WriteFile` does the writing.
+- `Apply` takes T-56's shape, keeping Unit A's `Writing = path`:
+
+  ```csharp
+  internal string Apply(string path, string content, string? mode)
+  {
+      Writing = path;
+      return Rendered(path, content, mode) is { } bytes ? WriteFile(path, bytes) : "kept";
+  }
+  ```
+
+  `WriteFile` stays the transaction's instance method — comparing, then delegating to `Write`, which journals.
+  It re-normalises line endings that `Rendered` already normalised; that is a no-op, it is what `main` does, and
+  it is not this task's to tidy.
+- `main` carries **two** `<summary>` tags on `SectionDocument`, one left from the rename. Carry a single one
+  saying what the method now does. This is a doc comment inside a block we are moving, not a drive-by edit.
+
+### The read-only test dies honestly, as Amendment 2 said it would
+
+`KitInstallRollbackTests.A_read_only_destination_leaves_the_repository_exactly_as_it_was_found` asserts exit 1
+and `install_failed`. After T-56, `Unwritable`'s F3 refuses that destination at validation. Re-point it, do not
+delete it:
+
+- rename it for what it now proves — a read-only destination is refused *before* the write phase, and the
+  repository is untouched;
+- assert `ExitCodes.RuleViolation` (2) and `invalid_manifest`, a message naming `c.md`, and `AsItWasFound()`
+  exactly as it does now. `AsItWasFound` is the assertion that carries across both mechanisms and does not
+  change;
+- keep the `InstallsCompletely()` re-run at the end: safe to re-run is half the Goal under either mechanism;
+- update the class doc comment's third paragraph from a prediction to a record — T-56 landed at `086fee9`, this
+  is what it did, and the lock test below is the one that proves *this* task.
+
+Nothing else in that class changes, and the **lock** test must pass with no edit whatsoever. If it needs one,
+stop and report: that is the case T-55 exists for, and T-56 cannot have touched it.
+
+`InstallTransactionTests` and `KitWriteModeTests` are untouched by this amendment. `KitPreflightTests` arrives
+from `main` and must pass unedited — if a preflight test needs changing to accommodate this merge, the
+resolution above is wrong somewhere and the answer is a report, not an edited assertion.
+
+### Unit B, restated after the merge
+
+Unit B has not run yet and runs against the merged branch, not against Unit A's tip. Two rows change and the
+rest of its list stands:
+
+- the **read-only** rows now expect exit 2 / `invalid_manifest` with an untouched repository, and
+  `measure.ps1 -Fail readonly` reads `exit : 2`. That is the two tasks composing.
+- the row for **a repository holding a directory named `.gitignore`** likewise now expects exit 2 /
+  `invalid_manifest` — T-56's F2 — rather than a clean write-phase failure.
+
+The **lock** row is unchanged and is the row the task turns on. Unit B must still show, in raw stderr, that no
+case prints `Unhandled exception` or `muthur!<BaseAddress>`, and that no case leaves the repository altered.
+
+### Unit C — integrate T-56
+
+- **Files:** `src/Muthur.Cli/Commands/KitCommands.cs`, `src/Muthur.Cli/Infrastructure/InstallTransaction.cs`,
+  `tests/Muthur.Cli.Tests/KitInstallRollbackTests.cs`, and the merge commit itself.
+- **Does:** everything in this amendment.
+- **Depends on:** Unit A (merged).
+- **Acceptance:** `dotnet build` clean (warnings are errors) and `dotnet test` green, with
+  `KitPreflightTests`, `KitInstallTests`, `KitManifestTests`, `KitWriteModeTests` and `InstallTransactionTests`
+  all passing unedited, and the lock test passing unedited.
