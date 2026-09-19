@@ -150,9 +150,11 @@ End to end, against a scratch hub — never the live one. Install first
 (`pwsh ./scripts/install.ps1 -Destination ./artifacts/t5`), then use a scratch `MUTHUR_HOME` and
 `MUTHUR_URL`:
 
+On a **clean** hub, two projects — one gated, one not. The order matters: `set` is exercised *after* the
+page has been read, because it is what takes the gate away again.
+
 ```
-muthur project add solo --repo <path> --founder      # response contains "ungated": true
-muthur project set solo --validator win-validator --founder   # response contains "ungated": false
+muthur project add solo --repo <path> --founder                              # "ungated": true
 muthur project add gated --repo <path> --validator win-validator --founder   # "ungated": false
 ```
 
@@ -168,8 +170,17 @@ HTML carries everything:
 
 ```powershell
 $html = (Invoke-WebRequest "$env:MUTHUR_URL/projects" -UseBasicParsing).Content
-[regex]::Matches($html, 'pill-ungated').Count   # 1 - the ungated project, and only it
+[regex]::Matches($html, 'pill-ungated').Count   # 1 - solo, and only solo
 $html -match 'goes straight to validated'       # True - the consequence sentence
+```
+
+Then give `solo` a gate and read the same page again. The pill goes away, which is the other half of the
+claim and the only thing `project set` is here to show:
+
+```powershell
+muthur project set solo --validator win-validator --founder                  # "ungated": false
+$html = (Invoke-WebRequest "$env:MUTHUR_URL/projects" -UseBasicParsing).Content
+[regex]::Matches($html, 'pill-ungated').Count   # 0 - nothing on the hub is ungated now
 ```
 
 Match the sentence **without its dash**. `Projects.razor` is written with a literal `—` (U+2014) and Blazor
@@ -425,3 +436,69 @@ $html -match 'goes straight to validated'     = True
 Every line of the section passes as published. Scratch hub stopped afterwards; the live hub untouched.
 
 The suite is unchanged from Amendment 1's proof (4,066 tests, 0 failed) — this round edited the spec only.
+
+## Amendment 3 — the fourth wrong instruction, and a proof that was not what it claimed (2026-09-19)
+
+`conductor-validator` failed T-5 a second time. The product is correct — they attacked it on two scratch hubs
+and could not break it. The section failed, again, and this time the fault is worse than a wrong pattern.
+
+**The commands contradicted the prose beneath them.** The block ran, in order:
+
+```
+project add solo                                  -> ungated: true
+project set solo --validator win-validator        -> ungated: false      <- solo is now gated
+project add gated --validator win-validator       -> ungated: false
+```
+
+After those three there is **no ungated project on the hub**, so the page correctly carries zero
+`pill-ungated` — while the next line asserts `1` and the prose says "`solo` carries the pill". Amendment 1
+had already documented this exact mistake as retired:
+
+> it added a validator to `solo` before reading the page, so both projects were gated and no pill appeared.
+
+That is a description of the block that was still there.
+
+**And the proof attached to Amendment 2 was not the section it claimed to have run.** Its transcript reads:
+
+```
+add solo   -> ungated: True
+set solo   -> ungated: False
+add gated  -> ungated: False
+add nogate -> ungated: True          <- appears nowhere in the Verification section
+```
+
+`add nogate` is the command that makes the count `1`. I added it while running, without noticing, and then
+wrote *"Every line of the section passes as published."* It did not, and the evidence I attached shows it
+did not. Amendment 2 was right about the em dash and wrong about itself: it diagnosed the habit of writing
+down a check without running it, and then demonstrated the subtler version — running something adjacent to
+the check and reporting it as the check.
+
+### The fix
+
+The sequence now leaves the hub in the state the assertions describe, and `project set` earns its place by
+demonstrating the other direction rather than quietly undoing the first one:
+
+```
+add solo, add gated          -> read the page: 1 pill, consequence sentence present
+set solo --validator ...     -> read the page: 0 pills
+```
+
+Both halves of the claim — a gate's absence shows, and adding a gate takes the mark away — are now checked,
+and neither assertion is made about a hub state the commands did not produce.
+
+### How this one was run
+
+The lines were **extracted from this file** and executed, rather than retyped from memory:
+
+```powershell
+$sect = <the Verification section of this spec>
+$exec = $sect | Where-Object { $_ -match '^muthur |^\$html |^\[regex\]::' }
+# only two substitutions, both placeholders the section itself marks: `muthur` -> the installed CLI, <path> -> a repo
+```
+
+Anything not in the file could not be in the run. That is the only way I can honestly write "verbatim" after
+Amendment 2, and it is what the next person should do to this section rather than trusting a transcript.
+
+Four wrong instructions in one Verification section, across three owners: the field that was said to be
+absent, "open" for "fetch", `&#8212;` for a literal dash, and now a command order that contradicts its own
+assertions. Every one was fluent prose about a check nobody had executed as written.
