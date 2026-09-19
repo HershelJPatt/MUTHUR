@@ -24,7 +24,7 @@ public interface IDoctorCheck
 public sealed class DoctorService(IEnumerable<IDoctorCheck> checks, TimeProvider clock, MuthurOptions options)
 {
     // A hub that cannot write its own log is read before anything that depends on reading it.
-    private static readonly string[] Order = ["secret", "logging", "ingest", "outbound", "project", "repo", "role"];
+    private static readonly string[] Order = ["secret", "logging", "ingest", "outbound", "project", "repo", "role", "harness", "agent"];
 
     public async Task<DoctorDto> RunAsync(bool probe, CancellationToken ct = default)
     {

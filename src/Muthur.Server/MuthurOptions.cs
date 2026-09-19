@@ -11,6 +11,12 @@ public sealed class MuthurOptions
     /// <summary>Optional override; by default SQLite lives at {DataDir}/muthur.db.</summary>
     public string? ConnectionString { get; set; }
 
+    /// <summary>
+    /// Where the agent kit is. Empty means: $MUTHUR_KIT, else kit/ beside the hub, else kit/ beside its parent —
+    /// which is how install.ps1 lays an install out, with the server in server/ and the kit next to it.
+    /// </summary>
+    public string? KitDir { get; set; }
+
     public int ClaimLeaseMinutes { get; set; } = 30;
     public int RoleLeaseMinutes { get; set; } = 30;
     /// <summary>
