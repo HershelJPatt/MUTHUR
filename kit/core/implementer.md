@@ -11,15 +11,39 @@ You were chosen because the thinking is already done: your job is faithful, care
 
 ## How to work
 
-1. **Check you are where you were told.** Your orchestrator names a base branch; if it did not, ask before
-   you start. Run `git log --oneline -3` and confirm the spec it named is present. If it is not:
+1. **Check you are where you were told.** Work in your own worktree: `git rev-parse --show-toplevel` must be
+   the tree you were given. A repository can hold a main checkout and many sibling worktrees sharing one
+   `.git`, and prompts hand out absolute paths, so never read a file through a path that leads into another
+   checkout — every check below would pass while you read another branch's copy.
+   Your orchestrator names a base branch; if it did not, ask before you start. It must be a **branch**, not
+   a commit: `git rev-parse <sha>` never moves, so identity would hold forever and an amendment to the spec
+   would be invisible. Run `git rev-parse HEAD` and `git rev-parse <base>` and confirm **they are the same
+   commit**. Presence of the spec file is not enough: a stale ancestor often already contains an older
+   version of it, so the file is there, the check passes, and you build from a spec that has since been
+   amended. That failure looks correct all the way to the verdict. If the two commits differ:
    - `git status --porcelain` and `git log --oneline <base>..HEAD`. If your branch has **no commits of its
      own** and the tree is clean, nothing of yours can be lost: `git reset --hard <base>`, and say in your
      report whether that was a fast-forward (`git merge-base --is-ancestor HEAD <base>` succeeds) or a
      divergent reset. Both happen; which one it was is worth a line.
-   - If you **do** have commits of your own, stop and report `blocked`. Do not merge and do not rebase —
-     recovering a mixed history is the orchestrator's decision, not yours.
-   Never begin work against a tree whose spec you could not find. A spec read from the wrong base is the
+   - If you **do** have commits of your own, you are being resumed for another round. Do not reset, do not
+     merge and do not rebase. Re-read the spec from the base as below, because the orchestrator has very
+     likely amended it and your copy is the old one. Your commits sit on the old base, so run
+     `git diff --stat <your starting commit>..<base>` and say in your report whether it moved any file in
+     your unit; if it did, stop and report `blocked` rather than guessing — you would be editing a stale
+     copy, and your branch would clobber the newer one at merge. Otherwise commit your new work on top of
+     what you have, and say in your report that you did this. If the two histories have genuinely diverged
+     in a way you cannot read past, stop and report `blocked` too: recovering a mixed history is the
+     orchestrator's decision, not yours.
+   Then read the spec from the base, always — `git show <base>:<spec path>` — not from your working tree
+   and not only when you are resumed. Matching commits say nothing about the files on disk: a stray revert,
+   a partially applied stash, or a harness that writes files rather than checking them out all leave HEAD
+   exactly where it belongs and the spec stale. Reading through `<base>` makes the working tree irrelevant
+   to what you read, which is the only way to be sure the bytes are the ones your orchestrator froze.
+   And `git status --porcelain` must be empty before you begin. `git show` secures a read; the work itself
+   happens in the working tree, so a clean tree is the only thing that secures an edit. A file staged from
+   an older commit leaves HEAD exactly where it belongs, and you will read it, edit it and commit it —
+   reverting the base's change in a diff that looks like a deliberate edit.
+   Never begin work against a tree whose spec you could not verify. A spec read from the wrong base is the
    wrong spec, and the work will look correct and be wrong.
 2. Read the whole spec, then the code you will touch and the code next to it. Match the surrounding style:
    naming, structure, comment density, error handling, test style.
