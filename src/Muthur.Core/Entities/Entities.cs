@@ -54,6 +54,13 @@ public sealed class WorkTask
     public int? ParentId { get; set; }
     /// <summary>Why this task needs a human validator. Null means it does not; the conductor staffs it as usual.</summary>
     public string? AttendedReason { get; set; }
+
+    /// <summary>Why somebody would rather this was not landed yet. Information, never a lock: land warns and proceeds.</summary>
+    public string? HoldReason { get; set; }
+    /// <summary>Who placed it. A hold whose holder is anonymous tells the next lander nothing they can weigh.</summary>
+    public string? HoldBy { get; set; }
+    /// <summary>When it stops counting. A note nobody cleared is text the next lander learns to skip.</summary>
+    public DateTimeOffset? HoldExpires { get; set; }
     public DateTimeOffset CreatedAt { get; set; }
     public DateTimeOffset UpdatedAt { get; set; }
     public DateTimeOffset? DoneAt { get; set; }

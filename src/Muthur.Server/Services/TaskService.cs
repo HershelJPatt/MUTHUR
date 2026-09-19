@@ -10,7 +10,7 @@ namespace Muthur.Server.Services;
 
 public sealed record TaskQuery(IReadOnlyList<TaskState>? States = null, string? Project = null, string? Owner = null, bool OpenOnly = false, int Limit = 500);
 
-public sealed partial class TaskService(Ledger ledger, LeasePolicy leases, ITaskLander lander)
+public sealed partial class TaskService(Ledger ledger, LeasePolicy leases, ITaskLander lander, MuthurOptions options)
 {
     [GeneratedRegex(@"^#\s*(T-\d+)\b")]
     private static partial Regex SpecHeadingPattern();
@@ -187,6 +187,50 @@ public sealed partial class TaskService(Ledger ledger, LeasePolicy leases, ITask
             else m.Record("task.attended", task.Id, new { reason });
             return task.ToDto();
         }, ct);
+
+
+    /// <summary>
+    /// "Do not land this yet, and here is why." Information the next lander sees, never a lock — <c>land</c>
+    /// warns and proceeds, which is the founder's T-16 answer applied to intentions rather than to files.
+    /// <para>
+    /// Any identified agent may hold any task, owned or not, and that is the difference from
+    /// <see cref="SetAttendedAsync"/>: the whole point is that somebody other than the owner has an intention
+    /// about it. The one on this task was an orchestrator holding another orchestrator's work.
+    /// </para>
+    /// </summary>
+    public Task<TaskDto> SetHoldAsync(Caller caller, string id, HoldRequest request, CancellationToken ct = default) =>
+        ledger.MutateAsync(caller, async m =>
+        {
+            caller.RequireIdentified();
+            var task = await LoadAsync(m.Db, id, ct);
+            var reason = string.IsNullOrWhiteSpace(request.Reason) ? null : request.Reason.Trim();
+            if (reason is null)
+            {
+                // Clearing what is not held is not an error, and neither is clearing one that has lapsed:
+                // both leave the task without a live hold, which is what the caller asked for.
+                var was = task.HoldReason;
+                if (was is null) return task.ToDto();
+                task.HoldReason = null;
+                task.HoldBy = null;
+                task.HoldExpires = null;
+                task.UpdatedAt = m.Now;
+                m.Record("task.hold_cleared", task.Id, new { was, by = caller.Name });
+                return task.ToDto();
+            }
+
+            task.HoldReason = reason;
+            task.HoldBy = caller.Name;
+            task.HoldExpires = m.Now + TimeSpan.FromMinutes(options.HoldMinutes);
+            task.UpdatedAt = m.Now;
+            m.Record("task.held", task.Id, new { reason, by = caller.Name, expires = task.HoldExpires });
+            return task.ToDto();
+        }, ct);
+
+    /// <summary>The hold if it still counts, or null. An expired one is left on the row but is nobody's business.</summary>
+    public static (string Reason, string By, DateTimeOffset PlacedAt)? LiveHold(WorkTask task, DateTimeOffset now, int holdMinutes) =>
+        task is { HoldReason: { } reason, HoldBy: { } by, HoldExpires: { } expires } && expires > now
+            ? (reason, by, expires - TimeSpan.FromMinutes(holdMinutes))
+            : null;
 
     public Task<TaskDto> CancelAsync(Caller caller, string id, CancelTaskRequest request, CancellationToken ct = default) =>
         ledger.MutateAsync(caller, async m =>

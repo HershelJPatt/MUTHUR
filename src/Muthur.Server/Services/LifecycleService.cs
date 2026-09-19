@@ -7,7 +7,7 @@ using Muthur.Server.Auth;
 namespace Muthur.Server.Services;
 
 /// <summary>The second half of a task's life: implemented → validating → validated → landed.</summary>
-public sealed class LifecycleService(Ledger ledger, LeasePolicy leases, ITaskLander lander)
+public sealed class LifecycleService(Ledger ledger, LeasePolicy leases, ITaskLander lander, MuthurOptions options)
 {
     private readonly SemaphoreSlim _landing = new(1, 1);
 
@@ -345,11 +345,33 @@ public sealed class LifecycleService(Ledger ledger, LeasePolicy leases, ITaskLan
                 switch (result.Outcome)
                 {
                     case LandOutcome.Landed:
+                        // Read before the state change, and never a refusal: a hold is information the lander
+                        // weighs, not a gate. The founder's answer on T-16 and again on request #16 - do not
+                        // prevent the collision, make it visible and make the bounce cheap.
+                        var held = TaskService.LiveHold(current, m.Now, options.HoldMinutes);
                         current.State = TaskState.Done;
                         current.DoneAt = m.Now;
                         current.PrUrl = result.PrUrl ?? current.PrUrl;
                         m.Record(result.PrUrl is null ? "task.landed" : "task.pr_opened", current.Id,
-                            new { mode = current.Project!.LandMode.ToWire(), current.Branch, commit = result.Commit, prUrl = result.PrUrl });
+                            new
+                            {
+                                mode = current.Project!.LandMode.ToWire(), current.Branch, commit = result.Commit, prUrl = result.PrUrl,
+                                overrodeHold = held is { } h ? new { by = h.By, reason = h.Reason, placedAt = h.PlacedAt } : null,
+                            });
+                        if (held is { } hold)
+                        {
+                            // A row of its own, because "a hold a land later overrode" is the thing request #16
+                            // asked to become countable, and a field inside another event is harder to count.
+                            m.Record("task.hold_overridden", current.Id,
+                                new { by = hold.By, reason = hold.Reason, placedAt = hold.PlacedAt, landedBy = caller.Name });
+                            // Who, when, and the reason verbatim - "this task has a hold" tells a reader nothing
+                            // they can weigh.
+                            var said = $"{caller.Name} landed {Wire.TaskId(current.Id)}, which {hold.By} held " +
+                                $"{Components.Shared.Format.Age(hold.PlacedAt, m.Now)} ago: \"{hold.Reason}\".";
+                            MessageService.PostFromHub(m, Recipient.Founder, null, said, current.Id);
+                            if (!string.Equals(hold.By, caller.Name, StringComparison.Ordinal))
+                                MessageService.PostFromHub(m, Recipient.Agent, hold.By, said, current.Id);
+                        }
                         break;
                     case LandOutcome.Conflict:
                         current.State = TaskState.InProgress;

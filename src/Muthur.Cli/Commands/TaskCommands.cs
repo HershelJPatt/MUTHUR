@@ -1,3 +1,4 @@
+using System.Text.Json;
 using System.CommandLine;
 using Muthur.Cli.Infrastructure;
 using Muthur.Contracts;
@@ -117,6 +118,26 @@ public static class TaskCommands
         task.Subcommands.Add(attended);
 
         var cancelId = Id();
+        var holdId = Id();
+        var holdReason = new Option<string?>("--reason") { Description = "Why this should not be landed yet. Required unless --clear." };
+        var holdClear = new Option<bool>("--clear") { Description = "Lift the hold." };
+        var hold = new Command("hold",
+            "Say this should not be landed yet, and why. Anyone may hold anyone's task; land warns and proceeds, never refuses.")
+            { holdId, holdReason, holdClear };
+        hold.SetAction(async (parse, ct) =>
+        {
+            var reason = parse.GetValue(holdReason);
+            var clear = parse.GetValue(holdClear);
+            // The same refusal as attended, and for the same reason: the wire cannot tell "lift it" from
+            // "set it, but I forgot --reason", so the CLI decides before it sends anything.
+            if (HoldRefusal(parse.GetResult(holdReason) is not null, reason, clear) is { } refusal)
+                return Output.Error(refusal.Code, refusal.Message, ExitCodes.RuleViolation);
+            return Output.Emit(parse, await HubClient.For(parse).PostAsync(
+                Routes.TaskAction(parse.GetValue(holdId)!, "hold"),
+                new HoldRequest(clear ? null : reason!.Trim()), MuthurJsonContext.Default.HoldRequest, ct));
+        });
+        task.Subcommands.Add(hold);
+
         var cancelReason = new Option<string?>("--reason");
         var cancel = new Command("cancel", "Cancel a task.") { cancelId, cancelReason };
         cancel.SetAction(async (parse, ct) => Output.Emit(parse, await HubClient.For(parse).PostAsync(
@@ -137,7 +158,14 @@ public static class TaskCommands
 
         var landId = Id();
         var land = new Command("land", "Land a validated task: MUTHUR merges the branch (or opens the pull request). Exit 3 on merge conflict.") { landId };
-        land.SetAction(async (parse, ct) => Output.Emit(parse, await HubClient.For(parse, TimeSpan.FromMinutes(5)).PostAsync(Routes.TaskAction(parse.GetValue(landId)!, "land"), ct)));
+        land.SetAction(async (parse, ct) =>
+        {
+            var result = await HubClient.For(parse, TimeSpan.FromMinutes(5)).PostAsync(Routes.TaskAction(parse.GetValue(landId)!, "land"), ct);
+            // stderr, never stdout: stdout is the JSON an agent parses. The operator who just overrode
+            // somebody's hold is the one person who has to be told, in words, without going to look.
+            if (OverrodeHold(result, DateTimeOffset.UtcNow) is { } warning) Console.Error.WriteLine(warning);
+            return Output.Emit(parse, result);
+        });
         task.Subcommands.Add(land);
 
         var logTask = new Option<string?>("--task") { Description = "Only events of this task." };
@@ -161,6 +189,37 @@ public static class TaskCommands
     /// round trip that would silently lift the flag instead. It branches on whether --reason was *supplied*, never
     /// on whether it has content: `--reason "   " --clear` is a contradiction to refuse, not a clear to obey.
     /// </summary>
+    /// <summary>
+    /// What to say to somebody who has just landed over a live hold, or null when they have not. Who, when
+    /// and the reason verbatim — "this task had a hold" is not something a reader can weigh.
+    /// <para>
+    /// Derived from the response the land already returns: the hold is deliberately not cleared by a land, so
+    /// a task that came back <c>done</c> still carrying an unexpired hold is one that was landed over. This
+    /// is said even when the lander is the holder — the hub does not message you about your own act, and a
+    /// line here is the only thing that tells you the two halves of what you did were in tension.
+    /// </para>
+    /// </summary>
+    public static string? OverrodeHold(ApiResult result, DateTimeOffset now)
+    {
+        if (!result.IsSuccess || result.Body.Length == 0) return null;
+        TaskDto? task;
+        try { task = JsonSerializer.Deserialize(result.Body, MuthurJsonContext.Default.TaskDto); }
+        catch (JsonException) { return null; }
+        if (task is not { State: TaskState.Done, HoldBy: { } by, HoldReason: { } reason, HoldExpires: { } until }
+            || until <= now) return null;
+        return $"Warning: {by} held {task.Id} until {until:HH:mm} — \"{reason}\" — and you landed it anyway. " +
+            $"Clear it when it stops being true: muthur task hold {task.Id} --clear";
+    }
+
+    public static (string Code, string Message)? HoldRefusal(bool reasonSupplied, string? reason, bool clear) =>
+        (reasonSupplied, clear) switch
+        {
+            (true, true) => ("reason_required", "Pass --reason or --clear, not both."),
+            (true, false) when !string.IsNullOrWhiteSpace(reason) => null,
+            (false, true) => null,
+            _ => ("reason_required", "Say why this should not be landed yet: --reason \"<why>\", or --clear to lift it."),
+        };
+
     public static (string Code, string Message)? AttendedRefusal(bool reasonSupplied, string? reason, bool clear) =>
         (reasonSupplied, clear) switch
         {
