@@ -60,6 +60,22 @@ public sealed class SpecialistRosterTests
             + $"generic ships [{string.Join(", ", generic)}].");
     }
 
+    /// <summary>
+    /// Shipping the file is half of it. Codex and generic agents find their procedures through the entry point
+    /// the kit installs, so one that routes every worker to `implementer.md` and never names `specialist.md`
+    /// leaves the procedure on disk and unread.
+    /// </summary>
+    [Theory]
+    [InlineData("codex", "AGENTS.section.md")]
+    [InlineData("generic", "MUTHUR.md")]
+    public void The_entry_point_routes_a_problem_area_to_the_specialist_procedure(string harness, string entryPoint)
+    {
+        var text = File.ReadAllText(Path.Combine(RepoRoot, "kit", harness, entryPoint));
+
+        Assert.Contains($"{ProcedureDirectory}specialist.md", text, StringComparison.Ordinal);
+        Assert.Contains($"{ProcedureDirectory}implementer.md", text, StringComparison.Ordinal);
+    }
+
     /// <summary>A misspelled `from` installs nothing and says nothing; `kit install` would throw at the copy.</summary>
     [Theory]
     [InlineData("claude")]
