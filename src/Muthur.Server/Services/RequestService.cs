@@ -72,6 +72,36 @@ public sealed class RequestService(Ledger ledger, LeasePolicy leases)
         }, ct);
     }
 
+    /// <summary>
+    /// One answer to several requests asked in the same words — but never one action. Each goes through
+    /// <see cref="AnswerAsync"/> on its own, in id order, so every unblock, ledger event and message happens
+    /// exactly as if the founder had clicked them one at a time. One that refuses does not stop the rest:
+    /// this is a convenience over a queue, not a transaction, and it must not pretend to be one.
+    /// <para>
+    /// It lives here rather than in the panel because a click is the one thing an unattended validator cannot
+    /// make. The button is a call to this method and nothing else, so what the founder gets when they press
+    /// it is exactly what a test can establish without a browser.
+    /// </para>
+    /// </summary>
+    /// <returns>The message from each request that refused, by id. Empty when every one was answered.</returns>
+    public async Task<IReadOnlyDictionary<int, string>> AnswerManyAsync(
+        Caller caller, IEnumerable<int> ids, AnswerRequest request, CancellationToken ct = default)
+    {
+        var refused = new Dictionary<int, string>();
+        foreach (var id in ids.Distinct().Order())
+        {
+            try
+            {
+                await AnswerAsync(caller, id, request, ct);
+            }
+            catch (MuthurException ex)
+            {
+                refused[id] = ex.Message;
+            }
+        }
+        return refused;
+    }
+
     public Task<FounderRequestDto> CancelAsync(Caller caller, int id, CancellationToken ct = default) =>
         ledger.MutateAsync(caller, async m =>
         {

@@ -219,8 +219,8 @@ public sealed class NeedsYouAtScaleTests : IDisposable
     [Fact]
     public async Task Answering_a_group_answers_every_request_in_it_one_at_a_time()
     {
-        // The service is what the group button calls, once per request, so this asserts the thing that matters:
-        // every unblock, every ledger event and every message happens as if they had been clicked separately.
+        // The group button calls AnswerManyAsync and does nothing else, so this is the behaviour itself and not
+        // a stand-in for it: every unblock, every ledger event and every message as if clicked separately.
         await _hub.AddProjectAsync();
         var first = await _hub.RegisterAgentAsync("top-right");
         var second = await _hub.RegisterAgentAsync("bottom-left");
@@ -229,9 +229,9 @@ public sealed class NeedsYouAtScaleTests : IDisposable
         var askedOne = await AskAsync(first, "Land onto a red main?", one, "hold", "land");
         var askedTwo = await AskAsync(second, "Land onto a red main?", two, "hold", "land");
 
-        foreach (var id in new[] { askedOne, askedTwo })
-            await Requests.AnswerAsync(Caller.Founder, id, new AnswerRequest("hold"));
+        var refused = await Requests.AnswerManyAsync(Caller.Founder, [askedOne, askedTwo], new AnswerRequest("hold"));
 
+        Assert.Empty(refused);
         Assert.Empty(await Requests.ListAsync(openOnly: true));
         var closed = await Requests.ListAsync(openOnly: false);
         Assert.All(closed, r => Assert.Equal("answered", r.Status));
@@ -242,5 +242,57 @@ public sealed class NeedsYouAtScaleTests : IDisposable
         Assert.Equal(TaskState.InProgress, (await second.GetTaskAsync(two)).Task.State);
         var events = (await _hub.Founder().GetFromJsonAsync(Routes.Events, MuthurJsonContext.Default.IReadOnlyListEventDto))!;
         Assert.Equal(2, events.Count(e => e.Type == "request.answered"));
+    }
+
+    /// <summary>
+    /// The half a click cannot be trusted to prove: one request in the group refuses, and the rest still go.
+    /// A group answer is a convenience over a queue, not a transaction — a founder who presses it once must
+    /// not lose four answers because a fifth was withdrawn while they were reading.
+    /// </summary>
+    [Fact]
+    public async Task One_request_that_refuses_does_not_take_the_rest_of_the_group_with_it()
+    {
+        await _hub.AddProjectAsync();
+        var agent = await _hub.RegisterAgentAsync("asker");
+        var first = await AskAsync(agent, "Land onto a red main?", null, "hold", "land");
+        var withdrawn = await AskAsync(agent, "Land onto a red main?", null, "hold", "land");
+        var last = await AskAsync(agent, "Land onto a red main?", null, "hold", "land");
+        await Requests.CancelAsync(Caller.Founder, withdrawn);
+
+        var refused = await Requests.AnswerManyAsync(Caller.Founder, [first, withdrawn, last], new AnswerRequest("hold"));
+
+        var only = Assert.Single(refused);
+        Assert.Equal(withdrawn, only.Key);
+        Assert.Contains("already cancelled", only.Value);
+
+        var closed = (await Requests.ListAsync(openOnly: false)).ToDictionary(r => r.Id);
+        Assert.Equal("answered", closed[first].Status);
+        Assert.Equal("answered", closed[last].Status);
+        Assert.Equal("cancelled", closed[withdrawn].Status);   // untouched, and not counted as answered
+        Assert.Empty(await Requests.ListAsync(openOnly: true));
+    }
+
+    [Fact]
+    public async Task A_group_answer_is_recorded_once_per_request_and_wakes_each_asker()
+    {
+        await _hub.AddProjectAsync();
+        var first = await _hub.RegisterAgentAsync("top-right");
+        var second = await _hub.RegisterAgentAsync("bottom-left");
+        var one = await AskAsync(first, "Land onto a red main?", null, "hold", "land");
+        var two = await AskAsync(second, "Land onto a red main?", null, "hold", "land");
+
+        Assert.Empty(await Requests.AnswerManyAsync(Caller.Founder, [two, one], new AnswerRequest("hold")));
+
+        // Answered in id order however they were passed, so the ledger reads the way the page does.
+        var events = (await _hub.Founder().GetFromJsonAsync(Routes.Events, MuthurJsonContext.Default.IReadOnlyListEventDto))!;
+        var answered = events.Where(e => e.Type == "request.answered").ToList();
+        Assert.Equal([one, two], answered.Select(e => e.Payload.GetProperty("request").GetInt32()));
+
+        // And each asker hears about their own question, not about the group.
+        foreach (var (client, id) in new[] { (first, one), (second, two) })
+        {
+            var inbox = (await client.GetFromJsonAsync(Routes.Inbox, MuthurJsonContext.Default.InboxDto))!;
+            Assert.Single(inbox.Messages, m => m.Body.Contains($"#{id}") && m.Body.Contains("hold"));
+        }
     }
 }

@@ -175,6 +175,18 @@ Every command here runs with no browser, no GUI and no human — the sessions th
 a conductor. `NeedsYou.razor` does not use `<Virtualize>`, so the whole page is in the prerendered HTML.
 Nothing in this task can only be seen by eye, so it is not marked `attended`.
 
+**What "the group answer works" means here, exactly.** Pressing the button is a call to
+`RequestService.AnswerManyAsync` and nothing else; the component keeps only the display decision of whose row
+shows an error afterwards. So the behaviour a validator needs to establish — every request answered on its own,
+in id order, one refusal not taking the rest with it, one ledger event and one message per request — is
+established by calling that method, which the tests do. **Do not go looking for a browser to press the button
+with.** Clicking it would exercise Blazor's event dispatch, which is not this task's work and is not what the
+founder is relying on.
+
+Two things in this area are genuinely click-only, and **neither is new in this task**: the answer and withdraw
+buttons on a single request, and the per-id draft boxes surviving a reload. Both predate it and both are
+unchanged — `DashboardNeedsYouTests` is the existing coverage, and it still passes.
+
 ```
 dotnet build
 dotnet test
@@ -207,3 +219,39 @@ which is not the same thing and is not worth the confidence it looks like.
 The spec said the dependents tag would read `+N behind it`. Razor emits a literal leading `+` as `&#x2B;`,
 so the prerendered HTML said `&#x2B;2 behind it` — correct HTML, and a poor thing to ask a validator to
 match. The tag reads `N behind it` instead. The `+` was decoration; the number is the fact.
+
+## Amendment after the first validation round (2026-09-19, top-right)
+
+`conductor-validator` blocked this at `debae06`. The build was clean and the HTML assertions were all
+available to it; what it could not do was press the group-answer button:
+
+> browser inventory is empty and unattended browser creation returns Browser is not available: iab. Cannot
+> exercise group-answer buttons, partial failures, or live draft preservation.
+
+It was right to stop, and the fault was mine rather than the validator's. My *Verification* did not ask for a
+click, but the behaviour it was asking the validator to trust — one answer going to several requests, and one
+refusal not taking the rest with it — lived inside `RequestsPanel.AnswerGroupAsync`, where a click is the only
+thing that reaches it. A spec whose substance is only reachable by clicking is the same defect as one whose
+Verification says "click", written a layer further down.
+
+### The fix: the logic moves to where a test can reach it
+
+`RequestService.AnswerManyAsync(caller, ids, answer)` now holds the whole of it — answering each request on
+its own in id order, catching each `MuthurException`, and returning the refusals by id. The panel's handler
+is one call to it plus the display decision of whose row shows an error. This is also where the logic belonged
+under the existing rule that dashboard components call the same services the API uses.
+
+Three tests now establish, with no browser, what the validator was asked to take on faith:
+
+- `Answering_a_group_answers_every_request_in_it_one_at_a_time` — both tasks leave `blocked`, both requests
+  are `answered`.
+- `One_request_that_refuses_does_not_take_the_rest_of_the_group_with_it` — a withdrawn request in the middle
+  of the group is reported by id with its own message, the other two are answered, and it stays `cancelled`.
+  This is the property that matters most and the one a click could least be trusted to show.
+- `A_group_answer_is_recorded_once_per_request_and_wakes_each_asker` — one `request.answered` per request in
+  id order however the ids were passed, and each asker's own inbox names their own question.
+
+The Verification section now says all this in advance, so the next validator is not sent looking for a browser
+to press a button that is one line long.
+
+`dotnet build`: clean, 0 warnings. `dotnet test`: 3708 Core, 23 Launch, 65 Cli, 293 Server — all green.

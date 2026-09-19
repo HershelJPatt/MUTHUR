@@ -101,26 +101,18 @@
     private Task WithdrawAsync(int id) => ActAsync(id, () => Requests.CancelAsync(Caller.Founder, id));
 
     /// <summary>
-    /// One pass over a kind, but never one action: each request is answered on its own, in id order, so every
-    /// unblock, ledger event and message happens exactly as if the founder had clicked them one at a time. One
-    /// that refuses is reported against itself and the rest still go — this button is not a transaction and
-    /// must not pretend to be.
+    /// The whole of what this button does is <see cref="RequestService.AnswerManyAsync"/>, which is where the
+    /// one-at-a-time answering and the partial failure live and where a test without a browser can reach them.
+    /// What is left here is display: whose row shows an error afterwards.
     /// </summary>
     private async Task AnswerGroupAsync(IReadOnlyList<FounderRequestDto> group, string answer)
     {
         if (string.IsNullOrWhiteSpace(answer)) return;
-        foreach (var request in group.OrderBy(r => r.Id))
+        var refused = await Requests.AnswerManyAsync(Caller.Founder, group.Select(r => r.Id), new AnswerRequest(answer));
+        foreach (var request in group)
         {
-            try
-            {
-                await Requests.AnswerAsync(Caller.Founder, request.Id, new AnswerRequest(answer));
-                _errors.Remove(request.Id);
-                _drafts.Remove(request.Id);
-            }
-            catch (Muthur.Core.MuthurException ex)
-            {
-                _errors[request.Id] = ex.Message;
-            }
+            if (refused.TryGetValue(request.Id, out var why)) _errors[request.Id] = why;
+            else { _errors.Remove(request.Id); _drafts.Remove(request.Id); }
         }
         _groupDrafts[Key(group[0])] = "";
         await ReloadNowAsync();
