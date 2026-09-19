@@ -587,3 +587,88 @@ Families A and B die in `WriteFile`, after files exist. Rules 19 and 20 stop the
 the write begins. A guard around the write loop would turn a future write-phase crash into a sentence but
 would still leave a half-installed repository, so it would satisfy half the Goal and hide the worse half.
 Making the write phase transactional is the honest fix and remains the follow-up this spec already records.
+
+## Amendment 5 — the guard caught nothing, and that is the finding (2026-09-19)
+
+Rules 19–21 and the guard are built and hold: all fourteen shapes of Amendment 4's three families refuse at
+exit 2 with an empty repository, and twenty-three regression rows still behave. The implementer then attacked
+its own work with 31 further manifests and found **six that still crash**. None is a regression — the
+pre-change binary crashes on nine, so the change strictly reduces the set.
+
+**The guard caught nothing. Not one manifest in about seventy reached it.**
+
+That is worth more than the six shapes. Amendment 4 argued that enumeration was not closing the class, and
+added a guard around the validation pass on that reasoning. The reasoning was right about the symptom and
+wrong about the location: **every remaining crash is in the write phase**, which Amendment 4 deliberately
+leaves unguarded, so the guard could not have caught any of them and widening it would fix nothing. The open
+class was never in the reader.
+
+The guard stays — it is cheap, and its absence is exactly what let family C escape for two rounds — but it is
+now known to be a floor nobody has stood on, not the answer to this task.
+
+### Four of the six are in-class extensions of rules 19 and 20
+
+| Shape | Why the existing rule misses it |
+|---|---|
+| `to: "docs/."` | names a directory, but its last component is `.`, not empty |
+| `to: "docs/x.md/.."` | the same, with `..` |
+| `to: ".gitignore/x.md"` | collides with a file `Install` writes but the manifest never names |
+| `to: "muthur.project.json/x.md"` | the same |
+
+**Rule 19 widens.** Its predicate as frozen — "ends in `/` or `\`" — is narrower than its own name. A `to`
+whose last component is empty, `.`, or `..` names a directory:
+
+```
+"<manifestPath>: entry <n> writes \"<to>\", which names a directory, not a file."
+```
+
+**Rule 20 seeds.** `Install` unconditionally writes `repo\.gitignore` and `repo\muthur.project.json`; an entry
+writing *under* either turns it into a directory first. Seed the destination set with those two resolved
+paths as implicit entries, and name them as the installer's own in the message:
+
+```
+"<manifestPath>: entry <n> writes \"<to>\", which collides with \"<file>\", a file kit install writes itself."
+```
+
+### The other two are new territory, and both are in scope
+
+**`to: "docs"` into a repository that already holds `docs\`** is decided by repository *state*, not by the
+manifest. The implementer flagged that checking it means the validator starts reading the target repo — but it
+already does: **rule 13 calls `File.Exists(source)`**. Reading the destination is the same kind of question,
+one directory over. Add, with the other `to` rules:
+
+```
+"<manifestPath>: entry <n> writes \"<to>\", which is an existing directory in the repository."
+```
+
+Reachable in ordinary use: re-running `kit install` after a manifest changed a `to` from a file to a directory
+name.
+
+**`to: "NUL/x.md"`** is the Windows device namespace one level above rule 18. `NUL` is not on
+`Path.GetInvalidFileNameChars()`, resolves fine, and `Directory.CreateDirectory` follows it to `\.\NUL`.
+Amendment 3 measured reserved names as *file* names and left them alone because they install as real files;
+the implementer measured them as *directory* components and found `NUL` crashes while `CON` and `COM1` do not.
+
+Refuse a reserved device name **as a directory component**, on the platform that reserves them, leaving
+Amendment 3's measured file-name behaviour untouched:
+
+```
+"<manifestPath>: entry <n> writes \"<to>\", whose component \"<name>\" is a reserved device name on this platform."
+```
+
+Ask the platform the way rule 18 does rather than carrying a list if there is an API for it; if there is not,
+a named constant array with `CON PRN AUX NUL COM1-9 LPT1-9` and a comment is fine.
+
+### What this task will claim when it is done
+
+Not "no unhandled exception". That sentence has now been wrong three times, and the reason is structural: the
+write phase is neither guarded nor transactional, so a shape that reaches it crashes *and* leaves a
+half-installed repository — five of the six above do. The Goal is amended to what the work actually delivers:
+
+> **Every manifest shape anyone has found is refused before a byte is written**, with a stable code, exit 2
+> and a sentence naming the file, the entry and the field. The write phase is not transactional; a failure
+> there is a separate defect with its own task.
+
+Making the write loop transactional — stage, then move into place, then roll back on failure — closes the
+remainder in one move and is the honest end of this line of work. It is a real design change to `Install` and
+deserves its own spec and its own verdict, so it is filed rather than folded in here.
