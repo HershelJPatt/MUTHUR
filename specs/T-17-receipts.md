@@ -619,3 +619,69 @@ bullet is the instruction, and only one of them gets followed by a validator rea
 A full `dotnet test` on this branch leaves temp hub directories behind. That is not a T-17 defect: this branch
 is based on `main`, and the handle leaks are fixed on `task/T-29-temp-hub-leak`, still in validation. Measured
 here at 239 after one run, consistent with T-29's pre-fix numbers.
+
+## Amendment 5 — the page 500s on a window it invites you to type (2026-09-19)
+
+`conductor-validator` failed T-17 again, on a defect Amendment 4 did not touch and nobody had looked for.
+Accepted in full.
+
+`GET /receipts?hours=7d` returns **HTTP 500**. So do `24h`, `abc`, `1e9`, `24,168`, `null`, a single space, and
+`9999999999999`. The API on the same hub answers a clean **400** for every one of them.
+
+```
+?hours=24   -> 200      ?hours=7d    -> 500   <- the label the page prints on control 2
+?hours=0    -> 200      ?hours=24h   -> 500   <- the label the page prints on control 1
+?hours=-9   -> 200      ?hours=abc   -> 500
+?hours=100000 -> 200    ?hours=9999999999999 -> 500   <- the spec says clamp to 720
+```
+
+Cause: `Components/Pages/Receipts.razor:11` binds `[SupplyParameterFromQuery] public int? Hours`, and the
+framework throws `InvalidOperationException: Cannot parse the value '7d' as type 'System.Nullable\`1[System.Int32]'`
+before any code of ours runs. `grep -rn SupplyParameterFromQuery src/Muthur.Server` returns exactly one hit, so
+this is surface T-17 introduces, not behaviour it inherited.
+
+Three reasons this is a fail and not a nit, all the validator's:
+
+1. **The page's own vocabulary is the trap.** The controls render `24h`, `7d`, `30d`. Amendment 4 made them
+   anchors precisely so the window would be linkable and hand-editable — and then the parameter behind them
+   refuses half of what a hand would type.
+2. **It breaks the one rule this design states about `hours`**: *"anything outside is clamped rather than
+   refused — a founder typing `--hours 100000` wants 'everything', not an error."* `0`, `-9` and `100000`
+   clamp correctly; `9999999999999` never reaches the clamp.
+3. **It writes `Error` and a stack trace into `muthur.log`**, which the validator brief says holds only
+   Information lines. Nine such lines in one scratch run, all from this cause.
+
+### The fix
+
+Bind the parameter as a string and parse it ourselves, so a value we cannot read is treated the way an
+out-of-range value already is:
+
+```razor
+@using System.Globalization
+
+[SupplyParameterFromQuery(Name = "hours")] public string? Hours { get; set; }
+
+private int? Window => long.TryParse(Hours, NumberStyles.Integer, CultureInfo.InvariantCulture, out var h)
+    ? (int)Math.Clamp(h, int.MinValue, int.MaxValue)
+    : null;
+```
+
+`<ReceiptsPanel Hours="Window" />`. Saturating to `int` rather than clamping to 1..720 here keeps the window
+bounds in `ReceiptsService`, where they already live and are already tested — `9999999999999` becomes
+`int.MaxValue` and the service clamps it to 720, which is what the design promises. Anything unparseable
+becomes `null`, which is what an absent `hours` already means: the default 24-hour window.
+
+A value that is not a number is the same class of mistake as a number out of range, and this design has
+already decided what to do with that class.
+
+### Tests
+
+`DashboardReceiptsTests` gains a theory over `7d`, `24h`, `abc`, `1e9`, `24,168`, `null`, a single space, an
+empty value and `9999999999999`, asserting each returns **200**. Two of them are pinned harder:
+`9999999999999` puts `btn-on` on the 30d control (clamped to 720, as the design says), and `7d` falls back to
+24h. None of this needed a browser to find and none needs one to check.
+
+### Follow-up, not done here
+
+Whether `?hours=7d` should *mean* a week — the page prints that label, after all — is a product decision about
+a new URL vocabulary, not a bug fix. Filed separately rather than guessed at.
