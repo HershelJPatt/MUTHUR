@@ -209,7 +209,7 @@ public sealed class OverseerService(Ledger ledger, MuthurOptions options, AgentS
             }, ct);
             var scratch = Path.Combine(options.DataDir, "conductor", "overseer");
             Directory.CreateDirectory(scratch);
-            var launcher = new AgentLauncher(processes, heartbeat: agents.RenewChildAsync, timeProvider: clock, exited: agents.ReleaseChildAsync,
+            var launcher = new AgentLauncher(processes, heartbeat: agents.RenewChildAsync, timeProvider: clock,
                 extraEnvironment: new Dictionary<string, string> { ["MUTHUR_HOME"] = Path.GetFullPath(options.DataDir), ["MUTHUR_URL"] = options.Url });
             var candidate = new HarnessCandidate(config.Harness, config.Model, config.Account, config.ReasoningEffort);
             var attempts = await launcher.RunAsync([candidate], c => new WorkerRequest(scratch, assignment.Prompt, c.Model,
@@ -228,9 +228,10 @@ public sealed class OverseerService(Ledger ledger, MuthurOptions options, AgentS
             {
                 var state = await Read(m.Db, StateKey, new State(), CancellationToken.None);
                 if (state.Run != assignment.Run) return;
+                var finalOutcome = state.Outcome?.StartsWith("checkpoint", StringComparison.Ordinal) == true ? state.Outcome : outcome;
                 await Store(m, StateKey, state with { Run = null, Agent = null,
-                    Outcome = state.Outcome?.StartsWith("checkpoint", StringComparison.Ordinal) == true ? state.Outcome : outcome }, CancellationToken.None);
-                m.Record("overseer.exited", payload: new { assignment.Run, outcome });
+                    Outcome = finalOutcome }, CancellationToken.None);
+                m.Record("overseer.exited", payload: new { assignment.Run, outcome = finalOutcome });
             });
         }
     }

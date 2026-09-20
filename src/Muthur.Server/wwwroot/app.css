@@ -65,6 +65,9 @@ b { font-weight: 600; }
 .panel-title { font: 700 11px var(--mono); letter-spacing: .2em; text-transform: uppercase; }
 .panel-sub { font: 11px var(--mono); color: var(--dim); }
 .panel-body { overflow-y: auto; min-height: 0; flex: 1; padding: 10px; }
+.overseer-settings label { display: grid; gap: 5px; margin: 10px 0; font: 11px var(--mono); color: var(--dim); }
+.overseer-settings input:not([type=checkbox]), .overseer-settings select { box-sizing: border-box; width: 100%; padding: 7px; border: 1px solid var(--line-strong); border-radius: 4px; background: var(--panel-2); color: var(--text); font: 12px var(--mono); }
+.overseer-settings label:has(input[type=checkbox]) { display: flex; align-items: center; }
 .panel-head .select, .panel-head .filters { margin-left: auto; }
 .section-label { font: 700 10px var(--mono); letter-spacing: .18em; text-transform: uppercase; color: var(--dim); padding: 12px 4px 6px; }
 .empty { color: var(--faint); font: 11px var(--mono); padding: 14px 6px; text-align: center; }

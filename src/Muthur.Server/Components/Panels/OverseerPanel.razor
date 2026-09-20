@@ -16,6 +16,7 @@
         <button class="btn" @onclick="Edit">Configure</button>
         @if (_editing)
         {
+            <div class="overseer-settings">
             <div><label>Enabled <input type="checkbox" @bind="_enabled" /></label></div>
             <div><label>Provider <select aria-label="Provider" @bind="_harness">@foreach (var provider in OverseerDefaults.Providers) { <option value="@provider.Key">@provider.Label</option> }</select></label></div>
             <div><label>Model ID <input @bind="_model" /></label></div>
@@ -29,6 +30,7 @@
             <p>Changes apply to the next session. Disabling immediately removes decision authority. Pending conditions survive fresh sessions.</p>
             <button class="btn" @onclick="Save">Save overseer settings</button>
             <button class="btn" @onclick="() => _editing = false">Cancel</button>
+            </div>
         }
         @if (_error is not null) { <div class="error-text">@_error</div> }
     </div>
