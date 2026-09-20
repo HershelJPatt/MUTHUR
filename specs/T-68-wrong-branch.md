@@ -92,8 +92,8 @@ Replace those three lines with, keeping the three-space indent that holds the te
 
 ```markdown
    Check every branch a worker names, and verify your own base before you dispatch. Then expect the worktree
-   your implementer gets to be somewhere else entirely: a natively-spawned worktree is **cut from the
-   repository's HEAD, not from yours**, so it comes up on whatever branch the shared main checkout is
+   your implementer gets to be somewhere else entirely: a natively-spawned worktree is
+   **cut from the repository's HEAD, not from yours**, so it comes up on whatever branch the shared main checkout is
    standing on — usually the project's default branch — whatever branch you named. `muthur worker run`
    resolves the base from where you are standing and gets this right; a harness's own worktree isolation does
    not, and it is not MUTHUR's tooling to fix. Thirteen units in a single day, across two orchestrators,
@@ -191,7 +191,7 @@ Three additions to the existing class. No existing test, helper or field is modi
 same three `(harness, procedure)` rows as the existing orchestrate theory
 (`("claude", ".claude/skills/muthur-orchestrate/SKILL.md")`, `("codex", ".muthur/procedures/orchestrate.md")`,
 `("generic", ".muthur/procedures/orchestrate.md")`). Install, assert the file exists, then assert it contains
-both:
+all three:
 
 | String | Where it appears | Message when absent |
 |---|---|---|
@@ -227,7 +227,8 @@ thing that stops that hurting, and a rule that reaches only some harnesses does 
   - `dotnet build` clean (warnings are errors) and `dotnet test` green.
   - Each new test is load-bearing, checked one marker at a time and restored after each:
     1. Delete the step-4 paragraph from `kit/core/orchestrate.md` (edit 1 only, leaving the `## Rules`
-       bullet): theory **a** fails on its first two assertions for all three harnesses, and the existing
+       bullet): theory **a** fails at its first assertion for all three harnesses (both step-4 markers are absent;
+       assertions stop at the first failure), and the existing
        headless-rule theory still passes. Restore.
     2. Delete the `## Rules` bullet (edit 2 only): theory **a** fails on its third assertion only. Restore.
     3. Delete the paragraph from `kit/core/implementer.md` (edit 4): theory **b** fails on all four rows.
