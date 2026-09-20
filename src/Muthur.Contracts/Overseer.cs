@@ -6,5 +6,6 @@ public sealed record OverseerConfig(bool Enabled = false, string Harness = "", s
 public sealed record OverseerWait(string Kind, string Target, string Expected, string Reason, string Group = "");
 public sealed record OverseerCheckpoint(string Run, string Summary, IReadOnlyList<OverseerWait> Waits, bool Complete = false);
 public sealed record OverseerDecision(int Request, string Answer, string Reason, string Evidence);
+public sealed record OverseerTriage(int Request, string Kind, string Reason, string Evidence);
 public sealed record OverseerStatus(OverseerConfig Config, string? Run, string Summary,
     IReadOnlyList<OverseerWait> Waits, DateTimeOffset? LastStarted, int StartsToday, string? LastOutcome);

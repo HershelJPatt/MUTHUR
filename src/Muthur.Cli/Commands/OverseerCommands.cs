@@ -40,5 +40,13 @@ public static class OverseerCommands
         decide.SetAction(async (parse, ct) => Output.Emit(parse, await HubClient.For(parse).PostAsync(Routes.Api + "/overseer/decide",
             new OverseerDecision(parse.GetValue(id), parse.GetValue(answer)!, parse.GetValue(reason)!, parse.GetValue(evidence)!), MuthurJsonContext.Default.OverseerDecision, ct)));
         command.Subcommands.Add(decide);
+        var triageId = new Argument<int>("id");
+        var kind = new Option<string>("--kind") { Required = true, Description = "technical or human; human-only requests cannot be downgraded." };
+        var triageReason = new Option<string>("--reason") { Required = true };
+        var triageEvidence = new Option<string>("--evidence") { Required = true };
+        var triage = new Command("triage", "Classify a decision with attributable reasoning before answering or deferring it.") { triageId, kind, triageReason, triageEvidence };
+        triage.SetAction(async (parse, ct) => Output.Emit(parse, await HubClient.For(parse).PostAsync(Routes.Api + "/overseer/triage",
+            new OverseerTriage(parse.GetValue(triageId), parse.GetValue(kind)!, parse.GetValue(triageReason)!, parse.GetValue(triageEvidence)!), MuthurJsonContext.Default.OverseerTriage, ct)));
+        command.Subcommands.Add(triage);
     }
 }

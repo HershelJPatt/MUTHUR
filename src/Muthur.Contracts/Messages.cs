@@ -16,7 +16,7 @@ public sealed record MessageDto(
 
 public sealed record InboxDto(IReadOnlyList<MessageDto> Messages, bool TimedOut);
 
-public sealed record AskRequest(string Question, string? Task = null, IReadOnlyList<string>? Options = null, string Kind = "human");
+public sealed record AskRequest(string Question, string? Task = null, IReadOnlyList<string>? Options = null, string Kind = "triage");
 
 public sealed record AnswerRequest(string Answer);
 
@@ -34,4 +34,6 @@ public sealed record FounderRequestDto(
     DateTimeOffset CreatedAt,
     DateTimeOffset? AnsweredAt,
     bool BlocksTask = false,
-    int Dependents = 0);
+    int Dependents = 0,
+    string Kind = "human",
+    string RouteReason = "Reserved for the founder; legacy or explicit human-only request.");

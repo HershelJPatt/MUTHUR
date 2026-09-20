@@ -20,10 +20,13 @@ agent that talks to it. Implementers never do.
 
 ## Decision routing
 
-Use `muthur ask --kind technical` for engineering judgment within established founder direction.
-The organization overseer can answer these with recorded reasoning and evidence. Product preferences,
-new spending, permissions, account access, secrets and outbound approvals must use the default human kind.
-Never label those technical to get them past a gate. Existing unclassified requests remain human-only.
+Ordinary `muthur ask` defaults to overseer triage. Use `--kind technical` for known engineering
+judgment within established founder direction. Keeping documented compatibility, enforcing shared
+rules, duplicate-scope decisions and consistent internal identifiers are technical; words such as
+policy or compatibility alone do not make them founder preferences. The overseer should decide these.
+Product commitments/preferences, new spending/concurrency, permission expansion, account access,
+secrets and outbound approvals must explicitly use `--kind human`. Mixed human questions remain open.
+Never relabel a human decision to bypass a gate. Legacy/missing-category records remain human-only.
 After asking a blocking question, checkpoint your task evidence and exit; do not occupy a slot polling.
 
 ## Identity

@@ -63,12 +63,100 @@ public sealed class OverseerTests : IDisposable
         Assert.Equal(TaskState.InProgress, (await owner.GetTaskAsync(task.Id)).Task.State);
         var result = (await decided.Content.ReadFromJsonAsync<FounderRequestDto>())!;
         Assert.Contains("Reason: Preserves contract", result.Answer);
-        var humanResponse = await owner.PostAsJsonAsync(Routes.Requests, new AskRequest("Should we build a new product?"));
+        var humanResponse = await owner.PostAsJsonAsync(Routes.Requests, new AskRequest("Should we build a new product?", Kind: "human"));
         var human = (await humanResponse.Content.ReadFromJsonAsync<FounderRequestDto>())!;
         var denied = await client.PostAsJsonAsync(Routes.Api + "/overseer/decide", new OverseerDecision(human.Id, "Yes", "Preference", "none"));
         Assert.Equal(HttpStatusCode.Unauthorized, denied.StatusCode);
         var events = await Ledger.ReadAsync((db, _) => db.Events.Where(x => x.Type == "request.answered").ToListAsync());
         Assert.Contains(events, x => x.Actor == OverseerService.Identity);
+    }
+
+    [Theory]
+    [InlineData("Keep the shared dirty brief refusal?")]
+    [InlineData("Preserve documented spec fallback compatibility?")]
+    [InlineData("Normalize harness identities and reject collisions?")]
+    public async Task Default_request_can_be_classified_then_answered_without_founder(string question)
+    {
+        await _hub.AddProjectAsync();
+        var owner = await _hub.RegisterAgentAsync("owner");
+        var task = await owner.AddTaskAsync("Engineering decision");
+        (await owner.ClaimAsync(task.Id)).EnsureSuccessStatusCode();
+        var asked = await owner.PostAsJsonAsync(Routes.Requests, new AskRequest(question, task.Id));
+        var request = (await asked.Content.ReadFromJsonAsync<FounderRequestDto>())!;
+        Assert.Equal("triage", request.Kind);
+        var (_, _, client) = await Start();
+        var premature = await client.PostAsJsonAsync(Routes.Api + "/overseer/decide", new OverseerDecision(request.Id, "Yes", "Contract", "spec"));
+        Assert.Equal(HttpStatusCode.Unauthorized, premature.StatusCode);
+        var triaged = await client.PostAsJsonAsync(Routes.Api + "/overseer/triage", new OverseerTriage(request.Id, "technical", "Existing engineering contract", "spec and regression tests"));
+        triaged.EnsureSuccessStatusCode();
+        var routed = (await triaged.Content.ReadFromJsonAsync<FounderRequestDto>())!;
+        Assert.Equal("technical", routed.Kind);
+        Assert.Contains("spec and regression tests", routed.RouteReason);
+        Assert.Equal(TaskState.Blocked, (await owner.GetTaskAsync(task.Id)).Task.State);
+        var listed = (await owner.GetFromJsonAsync<FounderRequestDto[]>(Routes.Requests))!;
+        Assert.Equal(routed.RouteReason, Assert.Single(listed).RouteReason);
+        var events = await Ledger.ReadAsync((db, _) => db.Events.Where(x => x.Type == "request.triaged").ToListAsync());
+        Assert.Equal(OverseerService.Identity, Assert.Single(events).Actor);
+        var decided = await client.PostAsJsonAsync(Routes.Api + "/overseer/decide", new OverseerDecision(request.Id, "Preserve the contract", "Standing technical authority", "spec and tests"));
+        decided.EnsureSuccessStatusCode();
+        Assert.Equal(TaskState.InProgress, (await owner.GetTaskAsync(task.Id)).Task.State);
+        var closed = await client.PostAsJsonAsync(Routes.Api + "/overseer/triage", new OverseerTriage(request.Id, "human", "Closed", "request"));
+        Assert.Equal(HttpStatusCode.Conflict, closed.StatusCode);
+    }
+
+    [Theory]
+    [InlineData("Product preference")]
+    [InlineData("Spending increase")]
+    [InlineData("Permission expansion")]
+    [InlineData("Account access")]
+    [InlineData("Outbound message")]
+    [InlineData("Secret scanner approval")]
+    public async Task Human_classification_is_terminal_for_overseer(string reason)
+    {
+        var owner = await _hub.RegisterAgentAsync("owner");
+        var asked = await owner.PostAsJsonAsync(Routes.Requests, new AskRequest(reason));
+        var request = (await asked.Content.ReadFromJsonAsync<FounderRequestDto>())!;
+        var (assignment, caller, client) = await Start();
+        (await client.PostAsJsonAsync(Routes.Api + "/overseer/triage", new OverseerTriage(request.Id, "human", reason, "Standing human boundary"))).EnsureSuccessStatusCode();
+        Assert.Equal(HttpStatusCode.Unauthorized, (await client.PostAsJsonAsync(Routes.Api + "/overseer/triage", new OverseerTriage(request.Id, "technical", "Override", "none"))).StatusCode);
+        Assert.Equal(HttpStatusCode.Unauthorized, (await client.PostAsJsonAsync(Routes.Api + "/overseer/decide", new OverseerDecision(request.Id, "Yes", "Override", "none"))).StatusCode);
+        await Service.CheckpointAsync(caller, new(assignment.Run, "Human decision remains open", [], true));
+        _hub.Clock.Advance(TimeSpan.FromMinutes(4));
+        Assert.Null(await Service.PrepareAsync());
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task Explicit_and_legacy_human_routes_cannot_be_downgraded(bool legacy)
+    {
+        var owner = await _hub.RegisterAgentAsync("owner");
+        var asked = await owner.PostAsJsonAsync(Routes.Requests, new AskRequest("Founder preference", Kind: "human"));
+        var request = (await asked.Content.ReadFromJsonAsync<FounderRequestDto>())!;
+        if (legacy) await Ledger.MutateAsync(Caller.System, async m =>
+        {
+            m.Db.Meta.Remove(await m.Db.Meta.SingleAsync(x => x.Key == $"request.kind.{request.Id}"));
+        });
+        var (_, _, client) = await Start();
+        Assert.Equal("human", Assert.Single((await owner.GetFromJsonAsync<FounderRequestDto[]>(Routes.Requests))!).Kind);
+        Assert.Equal(HttpStatusCode.Unauthorized, (await client.PostAsJsonAsync(Routes.Api + "/overseer/triage", new OverseerTriage(request.Id, "technical", "Override", "none"))).StatusCode);
+    }
+
+    [Fact]
+    public async Task Triage_requires_active_authority_and_evidence_and_can_protect_mislabelled_technical_requests()
+    {
+        var owner = await _hub.RegisterAgentAsync("owner");
+        var asked = await owner.PostAsJsonAsync(Routes.Requests, new AskRequest("Account authorization", Kind: "technical"));
+        var request = (await asked.Content.ReadFromJsonAsync<FounderRequestDto>())!;
+        var body = new OverseerTriage(request.Id, "human", "Account access stays human", "Standing boundary");
+        Assert.Equal(HttpStatusCode.Unauthorized, (await owner.PostAsJsonAsync(Routes.Api + "/overseer/triage", body)).StatusCode);
+        var (_, _, client) = await Start();
+        var invalid = await client.PostAsJsonAsync(Routes.Api + "/overseer/triage", body with { Evidence = "" });
+        Assert.False(invalid.IsSuccessStatusCode);
+        Assert.Equal("technical", Assert.Single((await owner.GetFromJsonAsync<FounderRequestDto[]>(Routes.Requests))!).Kind);
+        (await client.PostAsJsonAsync(Routes.Api + "/overseer/triage", body)).EnsureSuccessStatusCode();
+        await Service.RecoverAfterRestartAsync();
+        Assert.Equal(HttpStatusCode.Unauthorized, (await client.PostAsJsonAsync(Routes.Api + "/overseer/triage", body)).StatusCode);
     }
 
     [Theory]
@@ -226,4 +314,3 @@ public sealed class OverseerTests : IDisposable
         await conductor.StopSessionsAsync();
     }
 }
-

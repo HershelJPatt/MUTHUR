@@ -81,7 +81,7 @@ public sealed class CallerMiddleware(RequestDelegate next)
         if (http.GetCaller().Name == OverseerService.Identity && http.Request.Method != "GET")
         {
             if (http.Request.Method != "POST" || http.Request.Path.Value is not
-                ("/api/v1/overseer/checkpoint" or "/api/v1/overseer/decide" or "/api/v1/agents/heartbeat" or "/api/v1/tasks"))
+                ("/api/v1/overseer/checkpoint" or "/api/v1/overseer/decide" or "/api/v1/overseer/triage" or "/api/v1/agents/heartbeat" or "/api/v1/tasks"))
                 throw Fail.Unauthorized("The overseer may only checkpoint, answer technical requests, file follow-ups, and renew its presence.");
             if (http.Request.Path.Value == "/api/v1/tasks")
                 await http.RequestServices.GetRequiredService<Ledger>().MutateAsync(http.GetCaller(), m => OverseerService.RequireActive(m, http.RequestAborted), http.RequestAborted);

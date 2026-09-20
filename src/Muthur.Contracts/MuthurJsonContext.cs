@@ -11,6 +11,7 @@ namespace Muthur.Contracts;
 [JsonSerializable(typeof(OverseerConfig))]
 [JsonSerializable(typeof(OverseerCheckpoint))]
 [JsonSerializable(typeof(OverseerDecision))]
+[JsonSerializable(typeof(OverseerTriage))]
 [JsonSerializable(typeof(OverseerStatus))]
 [JsonSerializable(typeof(DependenciesRequest))]
 [JsonSerializable(typeof(StatusResponse))]
