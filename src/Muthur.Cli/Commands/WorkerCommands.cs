@@ -19,7 +19,9 @@ public static class WorkerCommands
     private static readonly string[] Denied =
         ["muthur *", "muthur.exe *", "git push*", "git merge*", "git rebase*", "git checkout*", "git switch*", "git worktree*", "gh *"];
 
-    public static void AddTo(RootCommand root)
+    public static void AddTo(RootCommand root) => AddTo(root, new ProcessRunner());
+
+    internal static void AddTo(RootCommand root, IProcessRunner processes)
     {
         AddHarness(root);
 
@@ -41,7 +43,7 @@ public static class WorkerCommands
             { tier, spec, unit, task, harness, baseRef, branch, note, parent, timeout };
         run.SetAction((parse, ct) => RunAsync(parse, new RunOptions(
             parse.GetValue(tier)!, parse.GetValue(spec)!, parse.GetValue(unit), parse.GetValue(task), parse.GetValue(harness),
-            parse.GetValue(baseRef), parse.GetValue(branch), parse.GetValue(note), parse.GetValue(timeout), parse.GetValue(parent)), ct));
+            parse.GetValue(baseRef), parse.GetValue(branch), parse.GetValue(note), parse.GetValue(timeout), parse.GetValue(parent)), processes, ct));
         worker.Subcommands.Add(run);
     }
 
@@ -154,9 +156,15 @@ public static class WorkerCommands
             : implementer;
     }
 
-    private static async Task<int> RunAsync(ParseResult parse, RunOptions o, CancellationToken ct)
+    internal static async Task<string> ResolveBaseAsync(IProcessRunner processes, string repository, string? explicitBase, CancellationToken ct)
     {
-        var processes = new ProcessRunner();
+        if (explicitBase is not null) return explicitBase;
+        var result = await processes.RunAsync("git", ["branch", "--show-current"], repository, timeout: TimeSpan.FromMinutes(1), ct: ct);
+        return result.Ok ? result.StdOut.Trim() : "HEAD";
+    }
+
+    private static async Task<int> RunAsync(ParseResult parse, RunOptions o, IProcessRunner processes, CancellationToken ct)
+    {
         async Task<string?> Git(string directory, params string[] arguments)
         {
             var result = await processes.RunAsync("git", arguments, directory, timeout: TimeSpan.FromMinutes(1), ct: ct);
@@ -167,7 +175,7 @@ public static class WorkerCommands
             return Output.Error("not_a_repository", "Run this inside the project's git repository.", ExitCodes.RuleViolation);
         repo = Path.GetFullPath(repo);
         var gitCommon = Path.GetFullPath(Path.Combine(repo, await Git(repo, "rev-parse", "--git-common-dir") ?? ".git"));
-        var baseRef = o.Base ?? await Git(repo, "branch", "--show-current") ?? "HEAD";
+        var baseRef = await ResolveBaseAsync(processes, repo, o.Base, ct);
 
         // 1. Who can staff this tier right now?
         var hub = HubClient.For(parse);
