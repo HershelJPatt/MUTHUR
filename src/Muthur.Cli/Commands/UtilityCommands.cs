@@ -37,7 +37,7 @@ public static class UtilityCommands
             try
             {
                 using var lease = LocalInferenceLease.Acquire(MuthurEnvironment.Home);
-                using var client = new HttpClient { Timeout = TimeSpan.FromMinutes(3) };
+                using var client = new HttpClient(new HttpClientHandler { AllowAutoRedirect = false }) { Timeout = TimeSpan.FromMinutes(3) };
                 var endpoint = new Uri(Environment.GetEnvironmentVariable("OLLAMA_HOST") ?? "http://127.0.0.1:11434");
                 result = await LocalSummary.RunAsync(client, endpoint, selected.Model, await File.ReadAllTextAsync(path, ct), ct);
             }

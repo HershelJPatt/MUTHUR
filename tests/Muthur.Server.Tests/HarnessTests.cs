@@ -32,7 +32,7 @@ public sealed class HarnessTests : IDisposable
         // What a new hub is given: the codex entries name their model, so the ledger stops recording "codex/default".
         var shipped = (await TierAsync("mastermind")).Candidates.Single(c => c.Harness == "codex");
         Assert.Equal("gpt-6-astra", shipped.Model);
-        Assert.Equal("high", shipped.ReasoningEffort);
+        Assert.Equal("medium", shipped.ReasoningEffort);
 
         File.WriteAllText(Path.Combine(_hub.DataDir, MuthurEnvironment.HarnessFile),
             """

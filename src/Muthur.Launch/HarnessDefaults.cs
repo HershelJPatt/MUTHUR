@@ -17,9 +17,7 @@ public static class HarnessDefaults
               { "harness": "claude", "model": "opus", "account": "claude-subscription" },
               { "harness": "codex", "model": "gpt-6-astra", "reasoningEffort": "medium", "account": "chatgpt-subscription" }
             ],
-            "local-implementer": [
-              { "harness": "codex-oss", "model": "qwen3.8:27b", "account": "local" }
-            ],
+            "local-implementer": [],
             "utility": [
               { "harness": "codex-oss", "model": "gemma4:26b", "account": "local" },
               { "harness": "codex-oss", "model": "qwen3.8:27b", "account": "local" }

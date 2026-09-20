@@ -430,7 +430,8 @@ public sealed class ReceiptsTests : IDisposable
         var task = await owner.AddTaskAsync("Build the feature");
 
         (await owner.PostAsJsonAsync(Routes.WorkerRuns, new WorkerRunReport(
-            task.Id, "cheap", "codex", "gpt", "work@example.com", Branch(task.Id), "unit-a", true, 90, 0.42m))).EnsureSuccessStatusCode();
+            task.Id, "cheap", "codex", "gpt", "work@example.com", Branch(task.Id), "unit-a", true, 90, 0.42m,
+            InputTokens: 1789, OutputTokens: 346))).EnsureSuccessStatusCode();
         (await owner.PostAsJsonAsync(Routes.WorkerRuns, new WorkerRunReport(
             task.Id, "deep", "claude", "opus", "founder@example.com", Branch(task.Id), "unit-b", false, 30, null))).EnsureSuccessStatusCode();
 
@@ -443,6 +444,10 @@ public sealed class ReceiptsTests : IDisposable
         Assert.Equal("unit-b", receipts.Runs[0].Unit);
         Assert.Equal(0.42m, receipts.Runs[1].CostUsd);
         Assert.Equal(90, receipts.Runs[1].Seconds);
+        Assert.Null(receipts.Runs[0].InputTokens);
+        Assert.Null(receipts.Runs[0].OutputTokens);
+        Assert.Equal(1789, receipts.Runs[1].InputTokens);
+        Assert.Equal(346, receipts.Runs[1].OutputTokens);
         Assert.Equal("cheap", receipts.Runs[1].Tier);
         Assert.Equal(task.Id, receipts.Runs[1].Task);
         Assert.Equal(2, receipts.WorkerRuns);

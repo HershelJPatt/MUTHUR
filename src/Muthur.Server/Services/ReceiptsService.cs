@@ -108,8 +108,8 @@ public sealed class ReceiptsService(Ledger ledger)
                     e.At,
                     // Null on every run an orchestrator started itself, because the payload carries no such key.
                     Text(p, "parent"),
-                    p.TryGetProperty("inputTokens", out var input) && input.TryGetInt32(out var inputCount) ? inputCount : null,
-                    p.TryGetProperty("outputTokens", out var output) && output.TryGetInt32(out var outputCount) ? outputCount : null);
+                    p.TryGetProperty("inputTokens", out var input) && input.ValueKind == JsonValueKind.Number && input.TryGetInt32(out var inputCount) ? inputCount : null,
+                    p.TryGetProperty("outputTokens", out var output) && output.ValueKind == JsonValueKind.Number && output.TryGetInt32(out var outputCount) ? outputCount : null);
             })
             .ToList();
 

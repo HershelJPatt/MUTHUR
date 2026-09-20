@@ -254,9 +254,9 @@ public sealed class ConductorService(
     private async Task<HashSet<string>> BudgetBlockedAsync(MuthurDb db, DateTimeOffset now, CancellationToken ct)
     {
         var since = now.AddDays(-1);
-        var events = await db.Events.Where(e => e.At >= since &&
+        var events = await db.Events.Where(e => e.Type == "task.implemented" || (e.At >= since &&
             (e.Type == "conductor.staffing" || e.Type == "conductor.on" ||
-             e.Type == "task.implemented" || e.Type == "request.answered")).OrderBy(e => e.Seq).ToListAsync(ct);
+             e.Type == "request.answered"))).OrderBy(e => e.Seq).ToListAsync(ct);
         var attempts = new Dictionary<string, List<DateTimeOffset>>();
         var heads = new Dictionary<int, string>();
         foreach (var e in events)
@@ -281,6 +281,9 @@ public sealed class ConductorService(
             if (!attempts.TryGetValue(pair, out var times)) attempts[pair] = times = [];
             times.Add(e.At);
         }
+        var activeIds = await db.Tasks.Where(t => t.State == TaskState.Backlog || t.State == TaskState.InProgress ||
+            t.State == TaskState.Validating || t.State == TaskState.Blocked).Select(t => t.Id).ToListAsync(ct);
+        var active = activeIds.Select(Wire.TaskId).ToHashSet(StringComparer.Ordinal);
         lock (_budgetBlocks)
         {
             _budgetBlocks.Clear();
@@ -288,6 +291,7 @@ public sealed class ConductorService(
                 foreach (var (key, times) in attempts.Where(p => p.Value.Count >= options.ConductorSessionsPerTaskDay))
                 {
                     var (task, role) = Split(key);
+                    if (!active.Contains(task)) continue;
                     _budgetBlocks[key] = new(task, role, "daily session budget exhausted; waiting for new work", times.Count,
                         times[times.Count - options.ConductorSessionsPerTaskDay].AddDays(1));
                 }
@@ -378,6 +382,7 @@ public sealed class ConductorService(
 
     public async Task<ConductorStatusDto> StatusAsync(CancellationToken ct = default)
     {
+        await ledger.ReadAsync((db, now) => BudgetBlockedAsync(db, now, ct), ct);
         var ceiling = await CeilingAsync(ct);
         return new(
             await EnabledAsync(ct),

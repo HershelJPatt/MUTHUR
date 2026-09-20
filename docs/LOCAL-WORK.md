@@ -23,12 +23,27 @@ utility tier. The default catalog prefers Gemma for summaries; benchmark results
 change that order. The Ollama endpoint must be loopback HTTP (default port 11434).
 Runs, failures, duration and token counts are recorded in the ledger and receipts.
 
+September 20, 2026 smoke test on the same captured Git-timeout log:
+
+| Model | Elapsed seconds | Input tokens | Output tokens | Result |
+| --- | ---: | ---: | ---: | --- |
+| gemma4:26b | 17.7 | 1,789 | 346 | Correct failure, test name and timeout; inferred causality labeled |
+| qwen3.8:27b | 22.7 | 1,603 | 369 | Correct timeout; overstated causal certainty and said stderr was empty despite the timeout message |
+
+These are single local runs, not a general quality benchmark or a subscription-savings
+estimate. Gemma stays first for summaries; review the original evidence for decisions.
+
 ## Small implementation units
 
 `muthur worker run --tier local-implementer --spec specs/T-123.md --unit A --task T-123 --base TASK_COMMIT --timeout-minutes 10`
 
-Use only for a bounded mechanical edit with a committed frozen spec and objective
-checks. The default local implementer is Qwen through Codex's Ollama provider. It gets
+The local-implementer catalog is empty by default. The September 20 pilot with
+Qwen through Codex's Ollama provider loaded entirely on the GPU but failed with
+`unsupported call: shell` and `no user query found in messages`; it made no edits.
+Do not enable automatic local coding until a real edit-and-check pilot passes.
+
+Once enabled, use only for a bounded mechanical edit with a committed frozen spec and objective
+checks. A candidate uses the codex-oss harness and local account. It gets
 its own worktree and no hub identity, runs at most ten minutes, and has no paid fallback.
 Review the resulting diff and run its checks. If unsuccessful, hand the evidence to
 the cloud implementer once; do not loop local retries. Architecture, ambiguous work,

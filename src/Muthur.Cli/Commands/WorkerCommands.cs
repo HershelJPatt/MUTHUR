@@ -175,7 +175,8 @@ public static class WorkerCommands
         if (!tiers.IsSuccess) return Output.Emit(parse, tiers);
         var catalog = JsonSerializer.Deserialize(tiers.Body, MuthurJsonContext.Default.IReadOnlyListTierDto) ?? [];
         var candidates = Candidates(catalog, o.Harness);
-        var local = o.Tier is "local-implementer" or "utility";
+        var local = o.Tier.Equals("local-implementer", StringComparison.OrdinalIgnoreCase) ||
+            o.Tier.Equals("utility", StringComparison.OrdinalIgnoreCase);
         if (local) candidates = [.. candidates.Where(c => c.Account == "local").Take(1)];
         if (candidates.Count == 0)
             return Output.Error("no_candidates", $"No available candidate for tier '{o.Tier}'" + (o.Harness is null ? "" : $" on harness '{o.Harness}'") +
