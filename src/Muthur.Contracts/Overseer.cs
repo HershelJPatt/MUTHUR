@@ -1,6 +1,6 @@
 namespace Muthur.Contracts;
 
-public sealed record OverseerConfig(bool Enabled = false, string Harness = "codex", string Model = "gpt-6-astra",
+public sealed record OverseerConfig(bool Enabled = false, string Harness = "", string Model = "",
     string? Account = null, string ReasoningEffort = "medium", int SessionMinutes = 12,
     int MaxStartsPerDay = 12, int CooldownMinutes = 10, int ContextChars = 24000, int MemoryChars = 6000);
 public sealed record OverseerWait(string Kind, string Target, string Expected, string Reason, string Group = "");

@@ -19,6 +19,7 @@ public sealed class OverseerService(Ledger ledger, MuthurOptions options, AgentS
     internal const string StateKey = "overseer.state";
     internal const string Identity = "organization-overseer";
     private static readonly JsonSerializerOptions Json = new(JsonSerializerDefaults.Web);
+    private static OverseerConfig Defaults => new(Harness: OverseerDefaults.Harness, Model: OverseerDefaults.Model);
     internal sealed record State(string Summary = "", List<OverseerWait>? Waits = null, long Cursor = 0,
         string? Run = null, Guid? Agent = null, long StartSeq = 0, string? Fingerprint = null,
         string? CompletedFingerprint = null, DateTimeOffset? LastStarted = null, string? Outcome = null,
@@ -37,8 +38,9 @@ public sealed class OverseerService(Ledger ledger, MuthurOptions options, AgentS
     public async Task<OverseerStatus> ConfigureAsync(Caller caller, OverseerConfig config, CancellationToken ct = default)
     {
         if (!caller.IsFounder) throw Fail.Unauthorized("Only the founder configures the overseer.");
+        if (config.Harness == "" && config.Model == "") config = config with { Harness = OverseerDefaults.Harness, Model = OverseerDefaults.Model };
         if (config.Enabled && string.IsNullOrWhiteSpace(config.Account)) throw Fail.Rule("overseer_account", "Specify the account so quota limits apply to this role.");
-        if (config.Harness is not ("codex" or "claude") || string.IsNullOrWhiteSpace(config.Model) || config.Model.Length > 120 ||
+        if (!OverseerDefaults.Supports(config.Harness) || string.IsNullOrWhiteSpace(config.Model) || config.Model.Length > 120 ||
             config.ReasoningEffort is not ("low" or "medium" or "high" or "xhigh" or "max") ||
             config.SessionMinutes is < 2 or > 30 || config.MaxStartsPerDay is < 1 or > 100 ||
             config.CooldownMinutes is < 1 or > 1440 || config.ContextChars is < 8000 or > 64000 ||
@@ -61,7 +63,7 @@ public sealed class OverseerService(Ledger ledger, MuthurOptions options, AgentS
     }
     public Task<OverseerStatus> StatusAsync(CancellationToken ct = default) => ledger.ReadAsync(async (db, now) =>
     {
-        var config = await Read(db, ConfigKey, new OverseerConfig(), ct);
+        var config = await Read(db, ConfigKey, Defaults, ct);
         var state = await Read(db, StateKey, new State(), ct);
         var since = now.AddDays(-1);
         return new OverseerStatus(config, state.Run, state.Summary, state.Waits ?? [], state.LastStarted,
@@ -82,7 +84,7 @@ public sealed class OverseerService(Ledger ledger, MuthurOptions options, AgentS
     /// <summary>Atomically reserves a bounded run. Called only after the conductor reserves a shared slot.</summary>
     public Task<Assignment?> PrepareAsync(CancellationToken ct = default) => ledger.MutateAsync<Assignment?>(Caller.System, async m =>
     {
-        var config = await Read(m.Db, ConfigKey, new OverseerConfig(), ct);
+        var config = await Read(m.Db, ConfigKey, Defaults, ct);
         if (!config.Enabled) return null;
         var state = await Read(m.Db, StateKey, new State(), ct);
         if (state.LastStarted is { } last && m.Now < last.AddMinutes(Math.Max(config.CooldownMinutes,
@@ -142,7 +144,7 @@ public sealed class OverseerService(Ledger ledger, MuthurOptions options, AgentS
 
     internal static async Task RequireActive(Mutation m, CancellationToken ct)
     {
-        var config = await Read(m.Db, ConfigKey, new OverseerConfig(), ct);
+        var config = await Read(m.Db, ConfigKey, Defaults, ct);
         var state = await Read(m.Db, StateKey, new State(), ct);
         if (!config.Enabled || !m.Caller.IsAgent || state.Agent != m.Caller.AgentId || state.Run is null ||
             state.LastStarted is null || m.Now > state.LastStarted.Value.AddMinutes(config.SessionMinutes))
@@ -152,7 +154,7 @@ public sealed class OverseerService(Ledger ledger, MuthurOptions options, AgentS
     public Task CheckpointAsync(Caller caller, OverseerCheckpoint checkpoint, CancellationToken ct = default) => ledger.MutateAsync(caller, async m =>
     {
         await RequireActive(m, ct);
-        var config = await Read(m.Db, ConfigKey, new OverseerConfig(), ct);
+        var config = await Read(m.Db, ConfigKey, Defaults, ct);
         var state = await Read(m.Db, StateKey, new State(), ct);
         if (checkpoint.Run != state.Run) throw Fail.Conflict("overseer_run", "This checkpoint belongs to an old run.");
         if (string.IsNullOrWhiteSpace(checkpoint.Summary) || checkpoint.Summary.Length > config.MemoryChars || checkpoint.Waits is null || checkpoint.Waits.Count > 12)
@@ -256,5 +258,3 @@ public sealed class OverseerService(Ledger ledger, MuthurOptions options, AgentS
         If context grows, save a checkpoint and exit; do not discard unresolved obligations. Historical evidence remains in the ledger.
         """;
 }
-
-
