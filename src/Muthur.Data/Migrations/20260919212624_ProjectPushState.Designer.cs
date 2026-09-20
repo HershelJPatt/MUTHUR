@@ -2,6 +2,7 @@
 using System;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Infrastructure;
+using Microsoft.EntityFrameworkCore.Migrations;
 using Microsoft.EntityFrameworkCore.Storage.ValueConversion;
 using Muthur.Data;
 
@@ -10,9 +11,11 @@ using Muthur.Data;
 namespace Muthur.Data.Migrations
 {
     [DbContext(typeof(MuthurDb))]
-    partial class MuthurDbModelSnapshot : ModelSnapshot
+    [Migration("20260919212624_ProjectPushState")]
+    partial class ProjectPushState
     {
-        protected override void BuildModel(ModelBuilder modelBuilder)
+        /// <inheritdoc />
+        protected override void BuildTargetModel(ModelBuilder modelBuilder)
         {
 #pragma warning disable 612, 618
             modelBuilder.HasAnnotation("ProductVersion", "10.0.12");
@@ -722,15 +725,6 @@ namespace Muthur.Data.Migrations
                     b.Property<long>("CreatedAt")
                         .HasColumnType("INTEGER")
                         .HasColumnName("created_at");
-
-                    b.Property<string>("DependencyReason")
-                        .HasColumnType("TEXT")
-                        .HasColumnName("dependency_reason");
-
-                    b.Property<string>("DependsOn")
-                        .IsRequired()
-                        .HasColumnType("TEXT")
-                        .HasColumnName("depends_on");
 
                     b.Property<long?>("DoneAt")
                         .HasColumnType("INTEGER")

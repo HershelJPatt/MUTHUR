@@ -28,6 +28,18 @@ public sealed record LandResult(
     public static LandResult Refuse(string code, string message) => new(LandOutcome.Refused, Code: code, Message: message);
 }
 
+public enum PushOutcome
+{
+    /// <summary>The default branch reached the remote.</summary>
+    Pushed,
+    /// <summary>Nothing to do: no remote, no branch, or the remote already has this commit.</summary>
+    Skipped,
+    /// <summary>The remote refused it or could not be reached. Nothing was lost; a later pass tries again.</summary>
+    Refused,
+}
+
+public sealed record PushResult(PushOutcome Outcome, string? Commit = null, string? Message = null);
+
 public interface ITaskLander
 {
     /// <summary>The commit at the tip of <paramref name="branch"/>, or null when the branch does not exist.</summary>
@@ -36,6 +48,12 @@ public interface ITaskLander
     /// <summary>The file's contents at the tip of <paramref name="branch"/>, or null when either is absent.</summary>
     Task<string?> ReadFileAsync(Project project, string branch, string path, CancellationToken ct = default);
     Task<LandResult> LandAsync(Project project, WorkTask task, string ownerName, CancellationToken ct = default);
+
+    /// <summary>
+    /// Sends the project's default branch to `origin`, fast-forward only. A project with no remote, or one whose
+    /// remote already has the commit, is <see cref="PushOutcome.Skipped"/> — not a failure and not worth a word.
+    /// </summary>
+    Task<PushResult> PushDefaultBranchAsync(Project project, CancellationToken ct = default);
 }
 
 public interface IPullRequestOpener
@@ -87,6 +105,33 @@ public sealed partial class GitLander(IProcessRunner processes, IPullRequestOpen
         return project.LandMode == LandMode.Pr
             ? await OpenPullRequestAsync(project, task, ownerName, ct)
             : await MergeAsync(project, task, ownerName, ct);
+    }
+
+    public async Task<PushResult> PushDefaultBranchAsync(Project project, CancellationToken ct = default)
+    {
+        var repo = project.RepoPath;
+        var target = project.DefaultBranch;
+        if (!Directory.Exists(repo))
+            return new PushResult(PushOutcome.Skipped);
+        if (!(await GitAsync(repo, ct, "remote", "get-url", "origin")).Ok)
+            return new PushResult(PushOutcome.Skipped);
+
+        var head = await GitAsync(repo, ct, "rev-parse", "--verify", "--quiet", $"refs/heads/{target}");
+        if (!head.Ok)
+            return new PushResult(PushOutcome.Skipped);
+        var local = head.StdOut.Trim();
+
+        var remote = await GitAsync(repo, ct, "rev-parse", "--verify", "--quiet", $"refs/remotes/origin/{target}");
+        if (remote.Ok && remote.StdOut.Trim() == local)
+            return new PushResult(PushOutcome.Skipped, Commit: local);
+
+        var push = await processes.RunAsync("git",
+            ["-c", "credential.interactive=false", "push", "origin", $"refs/heads/{target}:refs/heads/{target}"],
+            project.RepoPath, timeout: GitTimeout, ct: ct,
+            environment: new Dictionary<string, string> { ["GIT_TERMINAL_PROMPT"] = "0" });
+        return push.Ok
+            ? new PushResult(PushOutcome.Pushed, Commit: local)
+            : new PushResult(PushOutcome.Refused, Commit: local, Message: push.Message);
     }
 
     private async Task<LandResult> MergeAsync(Project project, WorkTask task, string ownerName, CancellationToken ct)
