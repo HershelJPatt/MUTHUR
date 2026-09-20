@@ -58,6 +58,8 @@ function RunCase([string]$Name, [string]$Mode = 'replace', [string]$Shape = 'ext
     $start.CreateNoWindow = $true
     $start.RedirectStandardOutput = $true
     $start.RedirectStandardError = $true
+    $start.StandardOutputEncoding = [Text.UTF8Encoding]::new($false)
+    $start.StandardErrorEncoding = [Text.UTF8Encoding]::new($false)
     foreach ($arg in @('kit','install','--harness','probe','--repo',$repo)) { $start.ArgumentList.Add($arg) }
     $start.Environment['MUTHUR_HOME'] = Join-Path $scratch 'home'
     $start.Environment['MUTHUR_URL'] = 'http://127.0.0.1:1'
