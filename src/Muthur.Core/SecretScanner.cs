@@ -187,10 +187,6 @@ public static partial class SecretScanner
     }
 
     /// <summary>
-    /// build01 / sql02, asmith2 / mbrown17: a neighbouring line holds another lone lowercase name with a number. That is a list of hosts,
-    /// users or builds; a password comes alone.
-    /// </summary>
-    /// <summary>
     /// How a password travels on a longer line: "jdoe / X (temporary, please rotate)", "jdoe X - works on demo too", "with X and let me
     /// know", "is X and it expires" — after a slash or a name at the start of the line, after with/and/is/as, or before a remark.
     /// </summary>
@@ -200,6 +196,10 @@ public static partial class SecretScanner
     private static bool IsPlainName(string value) =>
         !IsPasswordShaped(value) && !value.Any(char.IsAsciiLetterUpper); // W3lcome1 and WELCOME123 are not host names
 
+    /// <summary>
+    /// build01 / sql02, asmith2 / mbrown17: a neighbouring line holds another lone lowercase name with a number. That is a list of hosts,
+    /// users or builds; a password comes alone.
+    /// </summary>
     private static bool IsListOfPlainNames(string[] lines, int i)
     {
         foreach (var n in (int[])[i - 1, i + 1])
