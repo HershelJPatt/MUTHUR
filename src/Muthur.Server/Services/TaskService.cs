@@ -371,10 +371,16 @@ public sealed partial class TaskService(Ledger ledger, LeasePolicy leases, ITask
 
         string? FromWorkingTree()
         {
-            if (!File.Exists(full)) return null;
+            var resolvedRoot = SpecPath.Resolve(root);
+            var resolved = SpecPath.Resolve(full);
+            if (resolvedRoot is null || resolved is null)
+                throw Fail.Rule("spec_unreadable", "The spec location could not be determined.");
+            if (!RepoFile.IsInside(resolvedRoot, resolved))
+                throw Fail.Rule("spec_outside_repository", "The spec path must stay inside the project repository.");
+            if (!File.Exists(resolved)) return null;
             try
             {
-                using var reader = new StreamReader(full);
+                using var reader = new StreamReader(resolved);
                 // One more than the cap, so "it filled the buffer" and "there was more" are different answers.
                 var buffer = new char[MaxSpec + 1];
                 var read = reader.ReadBlock(buffer, 0, buffer.Length);
