@@ -186,4 +186,26 @@ public sealed class KitInstallTests : IDisposable
                 File.ReadAllText(file).Contains("{{core:", StringComparison.Ordinal),
                 $"{Path.GetRelativePath(repo, file)} still holds an unexpanded {{{{core:...}}}} include.");
     }
+
+    /// <summary>
+    /// `kit list` had no test of any kind until the enumeration behind it moved into `KitDirectory`, where the
+    /// hub reads it too. What the CLI prints is the contract a founder reads before `kit install`.
+    /// </summary>
+    [Fact]
+    public async Task Kit_list_names_every_harness_this_repository_ships_a_kit_for()
+    {
+        var printed = new StringWriter();
+        var previous = Console.Out;
+        Console.SetOut(printed);
+        try
+        {
+            Assert.Equal(ExitCodes.Ok, await Invoke("kit", "list"));
+        }
+        finally
+        {
+            Console.SetOut(previous);
+        }
+
+        Assert.Equal("[\"claude\",\"codex\",\"generic\"]", printed.ToString().Trim());
+    }
 }

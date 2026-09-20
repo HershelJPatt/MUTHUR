@@ -5,6 +5,7 @@ using System.Text.Json;
 using System.Text.RegularExpressions;
 using Muthur.Cli.Infrastructure;
 using Muthur.Contracts;
+using Muthur.Launch;
 
 namespace Muthur.Cli.Commands;
 
@@ -14,7 +15,7 @@ internal readonly record struct KitEntry(string From, string To, string Mode, bo
 /// <summary>Installs the agent kit (role procedures, agent definitions, spec template) into a repository.</summary>
 public static partial class KitCommands
 {
-    public const string KitVariable = "MUTHUR_KIT";
+    public const string KitVariable = KitDirectory.Variable;
 
     /// <summary>Written by every install, named here because rule 20 has to know the installer writes it.</summary>
     private const string IgnoreFile = ".gitignore";
@@ -38,20 +39,16 @@ public static partial class KitCommands
         list.SetAction(parse =>
         {
             if (LocateKit() is not { } dir) return KitMissing();
-            var names = Directory.GetDirectories(dir).Where(d => File.Exists(Path.Combine(d, "kit.json"))).Select(d => Path.GetFileName(d)!);
+            // The directory was there a statement ago, so an empty list is the honest answer to "which
+            // harnesses can I install right now" — not a reason to claim the kit is missing.
+            var names = KitDirectory.Harnesses(dir) ?? [];
             Console.Out.WriteLine("[" + string.Join(",", names.Select(n => $"\"{n}\"")) + "]");
             return ExitCodes.Ok;
         });
         kit.Subcommands.Add(list);
     }
 
-    internal static string? LocateKit()
-    {
-        if (Environment.GetEnvironmentVariable(KitVariable) is { Length: > 0 } configured)
-            return Directory.Exists(configured) ? configured : null;
-        var bundled = Path.Combine(AppContext.BaseDirectory, "kit");
-        return Directory.Exists(bundled) ? bundled : null;
-    }
+    internal static string? LocateKit() => KitDirectory.Locate();
 
     internal static int KitMissing() =>
         Output.Error("kit_not_found", $"The kit directory was not found next to the CLI (kit/) and ${KitVariable} is not set.");

@@ -93,11 +93,12 @@ public sealed class HarnessService(Ledger ledger, MuthurOptions options)
 
     private sealed record CatalogTier(string Tier, List<HarnessCandidate> Candidates);
 
+    /// <summary>Throws MuthurException and nothing else when the catalog cannot be used.</summary>
     private List<CatalogTier> ReadCatalog()
     {
-        EnsureCatalogExists();
         try
         {
+            EnsureCatalogExists();
             using var doc = JsonDocument.Parse(File.ReadAllText(CatalogPath),
                 new JsonDocumentOptions { CommentHandling = JsonCommentHandling.Skip, AllowTrailingCommas = true });
             var tiers = new List<CatalogTier>();
@@ -115,6 +116,10 @@ public sealed class HarnessService(Ledger ledger, MuthurOptions options)
                 tiers.Add(new CatalogTier(tier.Name.ToLowerInvariant(), candidates));
             }
             return tiers;
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            throw Fail.Rule("catalog_unreadable", $"{CatalogPath} could not be read: {ex.Message}");
         }
         catch (Exception ex) when (ex is JsonException or KeyNotFoundException or InvalidOperationException)
         {

@@ -82,6 +82,19 @@ public sealed class DashboardOperationsTests : IDisposable
     }
 
     [Fact]
+    public async Task The_operations_page_still_renders_when_the_catalog_cannot_be_read()
+    {
+        await _hub.CreateClient().GetStringAsync("/operations");
+        var catalogPath = Path.Combine(_hub.DataDir, MuthurEnvironment.HarnessFile);
+        File.Delete(catalogPath);
+        Directory.CreateDirectory(catalogPath);
+
+        var page = await _hub.CreateClient().GetStringAsync("/operations");
+
+        Assert.Contains($"{catalogPath} could not be read:", page);
+    }
+
+    [Fact]
     public async Task The_doctor_panel_renders_and_offers_a_re_check_even_when_there_is_nothing_to_check()
     {
         // Every hub now checks its own log file, so the empty state is only reachable with the checks taken away.
