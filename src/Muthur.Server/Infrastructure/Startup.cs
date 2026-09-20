@@ -57,6 +57,7 @@ public static class Startup
         builder.Services.AddSingleton<TaskService>();
         builder.Services.AddSingleton<EventService>();
         builder.Services.AddSingleton<RoleService>();
+        builder.Services.AddSingleton<BriefFileReader>();
         builder.Services.AddSingleton<LifecycleService>();
         builder.Services.AddSingleton<MessageService>();
         builder.Services.AddSingleton<RequestService>();

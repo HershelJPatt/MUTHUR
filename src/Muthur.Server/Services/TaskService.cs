@@ -4,6 +4,7 @@ using Muthur.Contracts;
 using Muthur.Core;
 using Muthur.Core.Entities;
 using Muthur.Data;
+using Muthur.Launch;
 using Muthur.Server.Auth;
 
 namespace Muthur.Server.Services;
@@ -337,7 +338,7 @@ public sealed partial class TaskService(Ledger ledger, LeasePolicy leases, ITask
         var full = Path.GetFullPath(Path.Combine(root, relative));
         // First, and on the path rather than on any content: reading out of a branch must not become a way to
         // name something outside the repository.
-        if (!IsInside(root, full))
+        if (!RepoFile.IsInside(root, full))
             throw Fail.Rule("spec_outside_repository", "The spec path must stay inside the project repository.");
 
         // A branch is a hint, never an assertion: one that does not have the file is passed over rather than
@@ -401,16 +402,6 @@ public sealed partial class TaskService(Ledger ledger, LeasePolicy leases, ITask
     private static MuthurException TooLarge(string relative) =>
         Fail.Rule("spec_too_large", $"'{relative}' is larger than 1 MB. A spec that size cannot be read in full, " +
             "and a 'needs:' line past the cut would be silently missed. Shorten it, or split what belongs elsewhere out of it.");
-
-    /// <summary>A separator at the boundary is what keeps '/repo-evil' from counting as inside '/repo'.</summary>
-    private static bool IsInside(string root, string full)
-    {
-        var trimmed = root.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
-        var comparison = OperatingSystem.IsWindows() ? StringComparison.OrdinalIgnoreCase : StringComparison.Ordinal;
-        return full.Length > trimmed.Length
-            && full.StartsWith(trimmed, comparison)
-            && (full[trimmed.Length] == Path.DirectorySeparatorChar || full[trimmed.Length] == Path.AltDirectorySeparatorChar);
-    }
 
     /// <summary>
     /// The task id in the spec's first non-blank line, or null if the heading names none. Takes the content
