@@ -109,7 +109,9 @@ public sealed class ReceiptsService(Ledger ledger)
                     // Null on every run an orchestrator started itself, because the payload carries no such key.
                     Text(p, "parent"),
                     p.TryGetProperty("inputTokens", out var input) && input.ValueKind == JsonValueKind.Number && input.TryGetInt32(out var inputCount) ? inputCount : null,
-                    p.TryGetProperty("outputTokens", out var output) && output.ValueKind == JsonValueKind.Number && output.TryGetInt32(out var outputCount) ? outputCount : null);
+                    p.TryGetProperty("outputTokens", out var output) && output.ValueKind == JsonValueKind.Number && output.TryGetInt32(out var outputCount) ? outputCount : null,
+                    Text(p, "runId"), Text(p, "status"), Text(p, "failureKind"), Text(p, "baseCommit"), Text(p, "headCommit"), Text(p, "specBlob"),
+                    p.TryGetProperty("exitCode", out var exit) && exit.ValueKind == JsonValueKind.Number && exit.TryGetInt32(out var exitCode) ? exitCode : null);
             })
             .ToList();
 
@@ -132,8 +134,8 @@ public sealed class ReceiptsService(Ledger ledger)
 
             // By Seq, never by At: a project with no validators records task.implemented and task.validated in
             // one mutation, so they share an At and only their order tells them apart.
-            var intervals = TaskStateTimeline.Replay(
-                history.Where(e => e.TaskId == task.Id).OrderBy(e => e.Seq).Select(e => (e.Type, e.At)));
+            var intervals = TaskStateTimeline.ReplayWithPayload(
+                history.Where(e => e.TaskId == task.Id).OrderBy(e => e.Seq).Select(e => (e.Type, e.At, (string?)e.PayloadJson)));
             var time = TaskStateTimeline.Within(intervals, since, now);
             receipts.Add(new Receipt(task.Id, new TaskReceiptDto(
                 Wire.TaskId(task.Id),

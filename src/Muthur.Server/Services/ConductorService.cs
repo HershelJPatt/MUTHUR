@@ -33,7 +33,8 @@ public interface IValidatorSessionLauncher
 /// </param>
 /// <param name="PreviousOwner">Who last held it, out of the ledger, since the sweep cleared the column. Null if nothing says.</param>
 public sealed record OrchestratorAssignment(
-    int TaskId, string TaskKey, string TaskTitle, string Project, bool Resuming = false, string? PreviousOwner = null);
+    int TaskId, string TaskKey, string TaskTitle, string Project, bool Resuming = false, string? PreviousOwner = null,
+    string? LatestDecisions = null);
 
 /// <summary>Starts one orchestrator session. Faked in tests; the real one launches a harness through <c>AgentLauncher</c>.</summary>
 public interface IOrchestratorSessionLauncher
@@ -837,7 +838,8 @@ public sealed class ConductorService(
 
                 var resuming = CarriesWork(task);
                 plan.Add(new OrchestratorAssignment(task.Id, Wire.TaskId(task.Id), task.Title, task.Project?.Key ?? "",
-                    resuming, resuming ? owners.GetValueOrDefault(task.Id) : null));
+                    resuming, resuming ? owners.GetValueOrDefault(task.Id) : null,
+                    await DecisionContext.ReadAsync(db, task.Id, ct)));
             }
             return plan;
         }, ct);
@@ -863,15 +865,19 @@ public sealed class ConductorService(
     /// </summary>
     private static async Task<Dictionary<int, string>> ExitedOwnersAsync(MuthurDb db, CancellationToken ct)
     {
-        var events = await db.Events.Where(e => e.TaskId != null &&
-            (e.Type == "conductor.orchestrator_exited" || e.Type == "task.claimed")).OrderBy(e => e.Seq).ToListAsync(ct);
+        var events = await db.Events.Where(e => e.Type == "agent.reregistered" || (e.TaskId != null &&
+            (e.Type == "conductor.orchestrator_exited" || e.Type == "task.claimed"))).OrderBy(e => e.Seq).ToListAsync(ct);
         var ended = new Dictionary<int, string>();
         foreach (var e in events)
         {
-            var id = e.TaskId!.Value;
-            if (e.Type == "task.claimed") { ended.Remove(id); continue; }
+            if (e.Type == "task.claimed") { ended.Remove(e.TaskId!.Value); continue; }
             using var payload = JsonDocument.Parse(e.PayloadJson);
-            if (payload.RootElement.TryGetProperty("agent", out var agent) && agent.GetString() is { } name) ended[id] = name;
+            if (!payload.RootElement.TryGetProperty("agent", out var agent) || agent.GetString() is not { } name) continue;
+            if (e.Type == "agent.reregistered")
+            {
+                foreach (var id in ended.Where(p => p.Value == name).Select(p => p.Key).ToArray()) ended.Remove(id);
+            }
+            else ended[e.TaskId!.Value] = name;
         }
         return ended;
     }
@@ -1262,9 +1268,14 @@ public sealed class ConductorService(
     /// Whether the task is still where the plan found it. Anything else — claimed, blocked, cancelled, landed — is
     /// a task that moved, and the session that was started for it is not charged for the move it did not make.
     /// </summary>
-    private Task<bool> StillInBacklogAsync(int taskId) =>
-        ledger.ReadAsync((db, _) =>
-            db.Tasks.AnyAsync(t => t.Id == taskId && t.State == TaskState.Backlog, CancellationToken.None), CancellationToken.None);
+    internal Task<bool> StillInBacklogAsync(int taskId) =>
+        ledger.ReadAsync(async (db, _) =>
+        {
+            var task = await db.Tasks.SingleOrDefaultAsync(t => t.Id == taskId, CancellationToken.None);
+            if (task?.State != TaskState.Backlog) return false;
+            var completed = await TaskDependencies.CompletedAsync(db, CancellationToken.None);
+            return task.DependsOn.All(completed.Contains);
+        }, CancellationToken.None);
 
     /// <summary>
     /// What a session that exited cleanly actually left behind. A pair's own row is not enough to tell: sessions are

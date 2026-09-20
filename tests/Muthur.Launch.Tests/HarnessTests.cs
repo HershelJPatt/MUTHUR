@@ -192,12 +192,15 @@ public sealed class HarnessTests : IDisposable
 internal sealed class ScriptedProcesses(params ProcessResult[] results) : IProcessRunner
 {
     private readonly Queue<ProcessResult> _results = new(results);
+    public string? CodexReport { get; set; }
     public List<(string FileName, IReadOnlyCollection<string>? Scrubbed, IReadOnlyDictionary<string, string>? Environment)> Started { get; } = [];
 
     public Task<ProcessResult> RunAsync(string fileName, IReadOnlyList<string> arguments, string workingDirectory, string? stdin = null,
         TimeSpan? timeout = null, CancellationToken ct = default, IReadOnlyCollection<string>? scrubEnvironment = null, IReadOnlyDictionary<string, string>? environment = null)
     {
         Started.Add((fileName, scrubEnvironment, environment));
+        var output = arguments.ToList().IndexOf("--output-last-message");
+        if (output >= 0 && CodexReport is { } report) File.WriteAllText(arguments[output + 1], report);
         return Task.FromResult(_results.Dequeue());
     }
 }
@@ -223,7 +226,7 @@ public sealed class WorkerLauncherTests : IDisposable
         var processes = new ScriptedProcesses(
             new ProcessResult(1, """{"result":"usage limit reached","is_error":true}""", ""),
             new ProcessResult(0, "", ""));
-        File.WriteAllText(Path.Combine(_scratch, "codex-last-message.txt"), "STATUS: done");
+        processes.CodexReport = "STATUS: done";
         var limited = new List<string?>();
 
         var attempts = await new WorkerLauncher(processes, Installed).RunAsync(
@@ -322,7 +325,7 @@ public sealed class AgentLauncherTests : IDisposable
         var processes = new ScriptedProcesses(
             new ProcessResult(1, """{"result":"usage limit reached","is_error":true}""", ""),
             new ProcessResult(0, "", ""));
-        File.WriteAllText(Path.Combine(_scratch, "codex-last-message.txt"), "STATUS: done");
+        processes.CodexReport = "STATUS: done";
         var limited = new List<string?>();
 
         var attempts = await new AgentLauncher(processes, Installed).RunAsync(
@@ -360,7 +363,7 @@ public sealed class AgentLauncherTests : IDisposable
         var processes = new ScriptedProcesses(
             new ProcessResult(1, """{"result":"usage limit reached","is_error":true}""", ""),
             new ProcessResult(0, "", ""));
-        File.WriteAllText(Path.Combine(_scratch, "codex-last-message.txt"), "STATUS: done");
+        processes.CodexReport = "STATUS: done";
         var asked = new List<string>();
 
         await new AgentLauncher(processes, Installed).RunAsync(

@@ -10,7 +10,8 @@ public sealed record HarnessCandidate(string Harness, string Model, string? Acco
 /// does not know, or a CLI that is not on PATH. A session that started and then failed, crashed or was reaped is a
 /// different fault from one that never began, and callers must be able to tell them apart.
 /// </param>
-public sealed record WorkerAttempt(HarnessCandidate Candidate, WorkerOutcome Outcome, TimeSpan Duration, bool Started = true);
+public sealed record WorkerAttempt(HarnessCandidate Candidate, WorkerOutcome Outcome, TimeSpan Duration, bool Started = true,
+    string? RunId = null, string? FailureKind = null, int? ExitCode = null);
 
 /// <summary>
 /// Runs one headless worker, falling through the tier's candidates when one is unavailable
@@ -41,7 +42,8 @@ public sealed class WorkerLauncher(IProcessRunner processes, Func<string, (strin
                 continue;
             }
 
-            var request = requestFor(candidate);
+            var runId = Guid.NewGuid().ToString("n");
+            var request = SessionWorkspace.ForAttempt(requestFor(candidate), runId);
             var invocation = adapter.Build(request);
             if (_resolve(invocation.FileName) is not { } executable)
             {
@@ -50,9 +52,10 @@ public sealed class WorkerLauncher(IProcessRunner processes, Func<string, (strin
             }
 
             var result = await processes.RunAsync(executable.FileName, [.. executable.Prefix, .. invocation.Arguments],
-                request.WorkingDirectory, invocation.Stdin, timeout, ct, Scrubbed);
+                request.WorkingDirectory, invocation.Stdin, timeout, ct, Scrubbed, request.GitEnvironment);
             var outcome = adapter.Interpret(request, result);
-            attempts.Add(new(candidate, outcome, clock.Elapsed));
+            attempts.Add(new(candidate, outcome, clock.Elapsed, RunId: runId,
+                FailureKind: SessionWorkspace.FailureKind(result, outcome), ExitCode: result.ExitCode));
 
             if (!outcome.RateLimited) break;
             await onRateLimited(candidate);

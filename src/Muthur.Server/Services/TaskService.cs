@@ -156,7 +156,11 @@ public sealed partial class TaskService(Ledger ledger, LeasePolicy leases, ITask
             if (targets.Any(ReachesSelf)) throw Fail.Rule("dependency_cycle", "Prerequisites cannot form a cycle.");
             task.DependsOn = targets.Distinct(StringComparer.Ordinal).ToList();
             task.DependencyReason = task.DependsOn.Count == 0 ? null : request.Reason?.Trim();
-            if (task.State == TaskState.InProgress && task.DependsOn.Count > 0) ReturnToBacklog(task, m.Now);
+            if (task.State == TaskState.InProgress && task.DependsOn.Count > 0)
+            {
+                ReturnToBacklog(task, m.Now);
+                m.Record("task.released", task.Id, new { reason = "Waiting for prerequisites." });
+            }
             task.UpdatedAt = m.Now;
             m.Record("task.dependencies_set", task.Id, new { tasks = task.DependsOn, reason = task.DependencyReason });
             return task.ToDto();
