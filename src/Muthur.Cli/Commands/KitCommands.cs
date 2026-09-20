@@ -200,8 +200,8 @@ public static partial class KitCommands
     /// The last-resort guard lives here, outside every rule, because three rounds of enumeration each found one
     /// more family and the Goal's sentence — no unhandled exception, no address stack — is a claim a list of
     /// rules cannot keep. It is not the widening the rules themselves refuse: it never shortens a specific
-    /// message into a generic one, it names the exception type and says the reader is at fault, and it bounds
-    /// the message rather than the filesystem. A shape that reaches it is a missing rule, to be filed.
+    /// message into a generic one. It names the exception type without assuming the cause or failing file,
+    /// and assures the caller that validation has not changed the repository.
     /// </remarks>
     internal static bool TryReadManifest(
         string manifestPath, string harnessDir, string kitDir, string repo,
@@ -215,8 +215,7 @@ public static partial class KitCommands
         catch (Exception ex)
         {
             entries = [];
-            problem = $"{manifestPath} could not be read: {ex.GetType().Name}: {ex.Message}. This is a defect in "
-                + "MUTHUR's manifest reader, not necessarily in your manifest — please report it.";
+            problem = $"{manifestPath} could not be validated: {ex.GetType().Name}: {ex.Message}. The repository was not changed.";
             return false;
         }
     }
@@ -236,7 +235,8 @@ public static partial class KitCommands
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
         {
-            problem = $"{manifestPath} could not be read: {ex.Message}";
+            problem = $"{manifestPath} could not be read: {ex.GetType().Name}: {ex.Message}. The repository was not changed. "
+                + "It is safe to re-run the command after resolving the read failure.";
             return false;
         }
 
@@ -634,7 +634,18 @@ public static partial class KitCommands
 
         // Expand() reads whatever a {{core:...}} token names, so the token is checked here rather than
         // discovered halfway through the write loop.
-        foreach (var name in IncludePattern().Matches(File.ReadAllText(source)).Select(m => m.Groups[1].Value))
+        string sourceText;
+        try
+        {
+            sourceText = File.ReadAllText(source);
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            problem = $"{source} could not be read while validating {manifestPath}: {ex.GetType().Name}: {ex.Message}. "
+                + "The repository was not changed. It is safe to re-run the command after resolving the read failure.";
+            return false;
+        }
+        foreach (var name in IncludePattern().Matches(sourceText).Select(m => m.Groups[1].Value))
             if (!File.Exists(Path.Combine(kitRoot, "core", name)))
             {
                 problem = $"{manifestPath}: entry {index} ({to}) includes \"{{{{core:{name}}}}}\", which does not exist.";
