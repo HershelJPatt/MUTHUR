@@ -1,3 +1,4 @@
+using System.Net;
 using System.Net.Http.Json;
 using Muthur.Contracts;
 
@@ -24,6 +25,19 @@ public sealed class HarnessTests : IDisposable
 
         var edited = await TierAsync("implementer");
         Assert.Equal(("codex", "x", "team"), Assert.Single(edited.Candidates) is var c ? (c.Harness, c.Model, c.Account) : default);
+    }
+
+    [Fact]
+    public async Task A_catalog_that_cannot_be_read_is_reported_rather_than_crashing_the_endpoint()
+    {
+        await TierAsync("implementer");
+        var catalogPath = Path.Combine(_hub.DataDir, MuthurEnvironment.HarnessFile);
+        File.Delete(catalogPath);
+        Directory.CreateDirectory(catalogPath);
+
+        var response = await _hub.CreateClient().GetAsync(Routes.Tiers);
+
+        Assert.Equal(HttpStatusCode.UnprocessableEntity, response.StatusCode);
     }
 
     [Fact]

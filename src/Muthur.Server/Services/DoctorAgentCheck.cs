@@ -36,7 +36,7 @@ public sealed class DoctorAgentCheck(AgentService agents, HarnessService harness
                 .Distinct(StringComparer.Ordinal)];
             catalogProblem = null;
         }
-        catch (MuthurException ex)   // catalog_invalid; the Tiers panel reports the same thing
+        catch (MuthurException ex)   // catalog_invalid or catalog_unreadable; the Tiers panel reports the same thing
         {
             catalog = null;
             catalogProblem = ex.Message;

@@ -165,6 +165,28 @@ public sealed class DoctorAgentTests : IDisposable
     }
 
     [Fact]
+    public async Task A_catalog_that_cannot_be_read_costs_the_check_its_fail()
+    {
+        KitFor("claude");
+        await _hub.RegisterAgentAsync("straight", harness: "claude");
+        await _hub.RegisterAgentAsync("corner", harness: "cladue");
+        File.Delete(CatalogPath);
+        Directory.CreateDirectory(CatalogPath);
+
+        var report = await ReportAsync();
+
+        var catalog = Assert.Single(report.Checks, c => c.Category == "harness");
+        Assert.Equal(MuthurEnvironment.HarnessFile, catalog.Subject);
+        Assert.Equal(CheckStatus.Warn, catalog.Status);
+        Assert.Contains(CatalogPath, catalog.Detail);
+        Assert.DoesNotContain(report.Checks, c => c.Category == "doctor");
+        Assert.Equal(CheckStatus.Ok, AgentCheck(report, "straight").Status);
+        // Live, and in neither source the check could read — but one source never answered, so warn, not fail.
+        Assert.Equal(CheckStatus.Warn, AgentCheck(report, "corner").Status);
+        Assert.Equal(0, report.Fail);
+    }
+
+    [Fact]
     public async Task A_hub_with_no_standing_agents_says_nothing_at_all()
     {
         _hub.Settings["Muthur:KitDir"] = Path.Combine(_kit, "absent");
