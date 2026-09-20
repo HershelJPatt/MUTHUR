@@ -63,6 +63,14 @@ You were chosen because the thinking is already done: your job is faithful, care
    reverting the base's change in a diff that looks like a deliberate edit.
    Never begin work against a tree whose spec you could not verify. A spec read from the wrong base is the
    wrong spec, and the work will look correct and be wrong.
+
+   **This check is not belt-and-braces, and it is not yours to tidy away.** The tooling that cuts your
+   worktree cuts it from the repository's HEAD — the shared main checkout's branch — and not from the branch
+   your orchestrator named, so arriving somewhere else is the ordinary case rather than the rare one. In a
+   single day, thirteen units across two orchestrators came up on the default branch: no spec, and none of
+   the units already integrated. Not one of them was built on the wrong lineage, and the only reason is that
+   every one of those implementers ran this check before writing anything. It is the whole of what stands
+   between a misplaced worktree and a unit written against a spec that was never there.
 2. Read the whole spec, then the code you will touch and the code next to it. Match the surrounding style:
    naming, structure, comment density, error handling, test style.
 3. Implement exactly what the spec says. Every acceptance check in your unit must pass.

@@ -11,9 +11,12 @@ Task requested: $ARGUMENTS (if empty or "next", take the most urgent backlog tas
 ## In Claude Code
 
 - **Delegation** uses the Agent tool: `muthur-implementer` (Opus, frozen spec) or `muthur-specialist`
-  (your own tier, for risky units). Each runs in its own git worktree, created from your current HEAD — so
-  create and check out `task/T-n-<slug>` and commit the spec **before** you spawn anyone. Launch independent
-  units in a single message so they run in parallel.
+  (your own tier, for risky units). Each runs in its own git worktree — cut from the repository's HEAD, which
+  is the shared main checkout's branch, **not the branch you are standing on**. So create and check out
+  `task/T-n-<slug>` and commit the spec **before** you spawn anyone, and then assume the subagent woke up on
+  the default branch without it: give it the base branch by name, the commit sha that branch pointed at when
+  you dispatched, and the project's default branch, and tell it to check where it is before it writes
+  anything. Launch independent units in a single message so they run in parallel.
 - An implementer's report names its branch. Integrate with `git merge --no-ff <branch>` **into the task
   branch only**. Merging into the project's default branch is MUTHUR's job (`muthur task land`).
 - **Cross-harness workers:** `muthur worker run --tier implementer --spec specs/T-n.md --unit "<unit>" --task T-n` runs the unit
