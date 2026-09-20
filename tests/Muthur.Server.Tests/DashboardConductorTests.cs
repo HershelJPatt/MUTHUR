@@ -102,6 +102,8 @@ public sealed class DashboardConductorTests : IDisposable
     [Fact]
     public async Task A_pair_with_attempts_left_is_not_a_stall_and_one_that_has_run_out_is()
     {
+        // Isolate the older short cooldown display; durable daily budgets have separate coverage.
+        _hub.Settings["Muthur:ConductorSessionsPerTaskDay"] = "0";
         _hub.Settings["Muthur:ConductorMaxAttempts"] = "3";
         _hub.Settings["Muthur:ConductorStallProbeMinutes"] = "30";
         await SetUpAsync("win-validator");
