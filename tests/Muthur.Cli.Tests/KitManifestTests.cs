@@ -91,7 +91,11 @@ public sealed class KitManifestTests : IDisposable
     private async Task<(int Exit, string Code, string Message)> Rejected(string manifest)
     {
         File.WriteAllText(ManifestPath, manifest);
+        return await Rejected();
+    }
 
+    private async Task<(int Exit, string Code, string Message)> Rejected()
+    {
         var stderr = new StringWriter();
         var previous = Console.Error;
         Console.SetError(stderr);
@@ -545,8 +549,8 @@ public sealed class KitManifestTests : IDisposable
 
     /// <summary>
     /// The last-resort guard. Three rounds of enumeration each found one more family, so the whole body of
-    /// TryReadManifest is wrapped: it names the exception type and says the reader is at fault, rather than
-    /// shortening a rule's message or telling the founder their JSON is bad. Reached here by handing the
+    /// TryReadManifest is wrapped: it names the exception type without assuming what failed or why.
+    /// Reached here by handing the
     /// validator a repository path the platform cannot resolve, which no manifest can do and `Install` never
     /// does — a shape that reaches this guard through a manifest is a missing rule, not a pass.
     /// </summary>
@@ -558,11 +562,71 @@ public sealed class KitManifestTests : IDisposable
         Assert.False(KitCommands.TryReadManifest(ManifestPath, HarnessDir, Kit, "\0", out var entries, out var problem));
 
         Assert.Empty(entries);
-        Assert.StartsWith($"{ManifestPath} could not be read: ArgumentException: ", problem, StringComparison.Ordinal);
-        Assert.EndsWith(
-            "This is a defect in MUTHUR's manifest reader, not necessarily in your manifest — please report it.",
-            problem,
-            StringComparison.Ordinal);
+        Assert.StartsWith($"{ManifestPath} could not be validated: ArgumentException: ", problem, StringComparison.Ordinal);
+        Assert.EndsWith("The repository was not changed.", problem, StringComparison.Ordinal);
+        Assert.DoesNotContain("defect", problem, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain("report", problem, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task A_locked_read_is_refused_without_writes_and_installs_after_release(bool lockManifest)
+    {
+        if (!OperatingSystem.IsWindows()) return;
+
+        var source = Path.Combine(HarnessDir, "second.md");
+        File.WriteAllText(source, "second procedure");
+        File.WriteAllText(ManifestPath, """
+            {"files":[
+              {"from":"source.md","to":"docs/first.md"},
+              {"from":"second.md","to":"new/second.md"}
+            ]}
+            """);
+        Directory.CreateDirectory(Path.Combine(Repository, "docs"));
+        Directory.CreateDirectory(Path.Combine(Repository, "empty"));
+        File.WriteAllBytes(Path.Combine(Repository, "sentinel"), [0, 255, 13, 10]);
+        File.WriteAllText(Path.Combine(Repository, "docs", "first.md"), "original\r\n");
+        File.WriteAllText(Path.Combine(Repository, ".gitignore"), "local/\r\n");
+        File.WriteAllText(Path.Combine(Repository, ProjectContext.FileName), "{\"key\":\"existing\"}\r\n");
+        var before = Directory.GetFiles(Repository, "*", SearchOption.AllDirectories)
+            .ToDictionary(path => path, File.ReadAllBytes);
+        var directories = Directory.GetDirectories(Repository, "*", SearchOption.AllDirectories).Order().ToArray();
+        var prefix = lockManifest
+            ? $"{ManifestPath} could not be read: IOException: "
+            : $"{source} could not be read while validating {ManifestPath}: IOException: ";
+
+        using (var handle = new FileStream(lockManifest ? ManifestPath : source, FileMode.Open, FileAccess.Read, FileShare.None))
+        {
+            var stdout = new StringWriter();
+            var previous = Console.Out;
+            Console.SetOut(stdout);
+            try
+            {
+                var (exit, code, message) = await Rejected();
+                Assert.Equal(ExitCodes.RuleViolation, exit);
+                Assert.Equal("invalid_manifest", code);
+                Assert.StartsWith(prefix, message, StringComparison.Ordinal);
+                Assert.EndsWith("The repository was not changed. It is safe to re-run the command after resolving the read failure.", message, StringComparison.Ordinal);
+                Assert.DoesNotContain("defect", message, StringComparison.OrdinalIgnoreCase);
+                Assert.DoesNotContain("report", message, StringComparison.OrdinalIgnoreCase);
+                Assert.Empty(stdout.ToString());
+                Assert.False(KitCommands.TryReadManifest(ManifestPath, HarnessDir, Kit, Repository, out var entries, out var problem));
+                Assert.Empty(entries);
+                Assert.Equal(message, problem);
+            }
+            finally
+            {
+                Console.SetOut(previous);
+            }
+            Assert.Equal(before.Keys.Order(), Directory.GetFiles(Repository, "*", SearchOption.AllDirectories).Order());
+            foreach (var (path, bytes) in before) Assert.Equal(bytes, File.ReadAllBytes(path));
+            Assert.Equal(directories, Directory.GetDirectories(Repository, "*", SearchOption.AllDirectories).Order());
+        }
+
+        Assert.Equal(ExitCodes.Ok, await Invoke("kit", "install", "--harness", Harness, "--repo", Repository));
+        Assert.Equal("a procedure", File.ReadAllText(Path.Combine(Repository, "docs", "first.md")));
+        Assert.Equal("second procedure", File.ReadAllText(Path.Combine(Repository, "new", "second.md")));
     }
 
     /// <summary>
