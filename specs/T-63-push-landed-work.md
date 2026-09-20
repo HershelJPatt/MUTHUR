@@ -48,7 +48,7 @@ check until it heals.
   `ValidatorSessionLauncher` or `OrchestratorSessionLauncher` changes.
 - **A new role or tier.** No `release-oncall`, no new agent kind.
 - **A new CLI command or contract.** No file under `src/Muthur.Contracts` or `src/Muthur.Cli` changes. Push
-  health is visible through `muthur doctor`, the ledger, and the founder's inbox — all of which already exist.
+  health is visible through `muthur doctor`, the ledger, and the founder message thread — all of which already exist.
 - **Pulling, fetching, rebasing, or resolving a diverged remote.** If the remote moved, the hub reports it and
   stops. A human decides what to do about it.
 - **Any use of `--force` or `--force-with-lease`.** Not a smaller version of it either.
@@ -327,8 +327,10 @@ and an installed CLI (`pwsh ./scripts/install.ps1 -Destination ./artifacts/t63`)
 3. Within about thirty seconds, without running any git command yourself, the remote's `main` matches the local
    `main`, and `muthur log` shows `project.pushed`.
 4. Break it: point `origin` at a path that does not exist, land a second task, and within about a minute
-   `muthur doctor` shows a failing `push` check for the project and `muthur msg inbox` as the founder has one
-   message naming the project. It is not repeated on subsequent passes.
+   `muthur doctor` shows a failing `push` check for the project. Run
+   `muthur msg log --founder-thread --founder`: exactly one failure message names the project. Fetch
+   `/needs-you` from the scratch hub and assert that its HTML contains the failure notice. The message is
+   not repeated on subsequent passes. `msg inbox` requires an agent and is not a founder observation command.
 5. Fix `origin` back; within about five and a half minutes the branch is pushed, `muthur doctor` is `ok` again,
    and `project.push_recovered` is in the events.
 
