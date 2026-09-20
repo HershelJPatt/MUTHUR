@@ -5,6 +5,7 @@ using Muthur.Contracts;
 using Muthur.Core;
 using Muthur.Core.Entities;
 using Muthur.Data;
+using Muthur.Server.Auth;
 using Muthur.Server.Services;
 
 namespace Muthur.Server.Tests;
