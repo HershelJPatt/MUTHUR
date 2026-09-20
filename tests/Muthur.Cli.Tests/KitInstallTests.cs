@@ -173,6 +173,77 @@ public sealed class KitInstallTests : IDisposable
             $"{procedure} no longer says the worktree is not cut from the branch the orchestrator is standing on.");
     }
 
+    [Theory]
+    [InlineData("claude", ".claude/agents/muthur-implementer.md")]
+    [InlineData("claude", ".claude/agents/muthur-specialist.md")]
+    [InlineData("codex", ".muthur/procedures/implementer.md")]
+    [InlineData("generic", ".muthur/procedures/implementer.md")]
+    public async Task Installed_implementers_verify_dispatch_before_reconciling_and_reading_the_spec(string harness, string procedure)
+    {
+        var repo = NewRepository();
+
+        Assert.Equal(ExitCodes.Ok, await Invoke("kit", "install", "--harness", harness, "--repo", repo));
+
+        var text = File.ReadAllText(Path.Combine(repo, procedure));
+        Assert.Contains("named local base branch, its full commit SHA at dispatch, and the named default branch", text, StringComparison.Ordinal);
+        Assert.Contains("Missing input means `STATUS: blocked`", text, StringComparison.Ordinal);
+        Assert.Contains("Before any ancestry test, reset or spec read", text, StringComparison.Ordinal);
+        Assert.Contains("git show-ref --verify \"refs/heads/<base>\"", text, StringComparison.Ordinal);
+        Assert.Contains("git rev-parse --verify \"refs/heads/<base>^{commit}\"", text, StringComparison.Ordinal);
+        Assert.Contains("git rev-parse --verify \"HEAD^{commit}\"", text, StringComparison.Ordinal);
+        Assert.Contains("Require resolved base SHA to equal the full dispatch SHA", text, StringComparison.Ordinal);
+        Assert.Contains("Missing refs, failed resolution or a moved", text, StringComparison.Ordinal);
+        Assert.Contains("Make no product edits, reset, merge or rebase, and never fall back to another checkout", text, StringComparison.Ordinal);
+        Assert.Contains("must redispatch with an updated frozen assignment if the base moved", text, StringComparison.Ordinal);
+        Assert.Contains("Require `git status --porcelain` to succeed and be empty before reconciliation", text, StringComparison.Ordinal);
+        Assert.Contains("git cat-file -t \"refs/heads/<base>:<spec path>\"` to succeed and return `blob`", text, StringComparison.Ordinal);
+        Assert.Contains("committed spec, another object type or any failed Git command blocks", text, StringComparison.Ordinal);
+        Assert.Contains("initial HEAD matches the base", text, StringComparison.Ordinal);
+        Assert.Contains("exit 0 means ancestor, 1 means not ancestor, and any other exit code", text, StringComparison.Ordinal);
+        Assert.Contains("Never treat a Git error as permission to reset", text, StringComparison.Ordinal);
+        Assert.Contains("git rev-parse --verify \"refs/heads/<default branch>^{commit}\"`; both must succeed or you are blocked", text, StringComparison.Ordinal);
+        Assert.Contains("After either allowed reset, require reset command success, resulting HEAD equal to the resolved base SHA", text, StringComparison.Ordinal);
+        Assert.Contains("base still equal to dispatch SHA, and `git status --porcelain` successful and empty; otherwise blocked", text, StringComparison.Ordinal);
+        Assert.Contains("it retains the ownership and changed-unit checks above and must still verify the base has not moved", text, StringComparison.Ordinal);
+        Assert.Contains("After reconciliation and immediately before reading the spec, re-resolve the named base", text, StringComparison.Ordinal);
+        Assert.Contains("and require it still matches dispatch SHA", text, StringComparison.Ordinal);
+        Assert.Contains("git show \"refs/heads/<base>:<spec path>\"` must succeed", text, StringComparison.Ordinal);
+        Assert.Contains("Never recover the spec alone", text, StringComparison.Ordinal);
+        Assert.Contains("BASE: <named base branch, dispatch SHA, initial HEAD, resulting HEAD, and any recovery>", text, StringComparison.Ordinal);
+        Assert.Contains("expected branch/SHA and observed HEAD/base (or missing), including missing refs/spec or a moved base", text, StringComparison.Ordinal);
+    }
+
+    [Theory]
+    [InlineData("muthur-implementer")]
+    [InlineData("muthur-specialist")]
+    public async Task Claude_agent_descriptions_request_the_full_dispatch_inputs(string agent)
+    {
+        var repo = NewRepository();
+
+        Assert.Equal(ExitCodes.Ok, await Invoke("kit", "install", "--harness", "claude", "--repo", repo));
+
+        var description = File.ReadLines(Path.Combine(repo, ".claude", "agents", $"{agent}.md"))
+            .Single(line => line.StartsWith("description:", StringComparison.Ordinal));
+        Assert.Contains("named local base branch, its full commit SHA at dispatch, the named default branch", description, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task Claude_orchestration_supplies_dispatch_inputs_and_an_explicit_base_fallback()
+    {
+        var repo = NewRepository();
+
+        Assert.Equal(ExitCodes.Ok, await Invoke("kit", "install", "--harness", "claude", "--repo", repo));
+
+        var text = File.ReadAllText(Path.Combine(repo, ".claude/skills/muthur-orchestrate/SKILL.md"));
+        Assert.Contains("MUTHUR does not select the native Agent worktree start point", text, StringComparison.Ordinal);
+        Assert.Contains("muthur worker run --tier implementer --spec specs/T-n.md --unit \"<unit>\" --task T-n --base task/T-n-<slug>", text, StringComparison.Ordinal);
+        Assert.Contains("--note \"Base branch task/T-n-<slug>; dispatch SHA <full-commit-sha>; default branch main.\"", text, StringComparison.Ordinal);
+        Assert.Contains("current WorkerPrompt does not automatically supply them", text, StringComparison.Ordinal);
+        Assert.Contains("It does not repair arbitrary dirty or divergent existing worktrees", text, StringComparison.Ordinal);
+        Assert.Contains("named local base branch, full commit SHA at dispatch, named default branch", text, StringComparison.Ordinal);
+        Assert.Contains("A moved base requires `STATUS: blocked` and an updated frozen redispatch", text, StringComparison.Ordinal);
+    }
+
     /// <summary>The claude kit is the only one that reaches a core procedure through a `{{core:…}}` token.</summary>
     [Fact]
     public async Task No_installed_file_is_left_holding_an_unexpanded_include()
