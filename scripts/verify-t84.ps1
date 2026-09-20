@@ -80,6 +80,11 @@ function Api([string]$Method, [string]$Path, [object]$Body, [string]$Token) {
     }
     return Invoke-RestMethod @parameters
 }
+function OptionalProperty([object]$Object, [string]$Name) {
+    $property = $Object.PSObject.Properties[$Name]
+    if ($null -eq $property) { return $null }
+    return $property.Value
+}
 function Attach([string]$Id, [string]$Path, [string]$Label, [bool]$Accept) {
     $before = Api 'GET' "tasks/$Id" $null $agentToken
     $expected = if ($Accept) { 0 } else { 2 }
@@ -87,15 +92,15 @@ function Attach([string]$Id, [string]$Path, [string]$Label, [bool]$Accept) {
     $after = Api 'GET' "tasks/$Id" $null $agentToken
     if ($Accept) {
         $task = $result.Out | ConvertFrom-Json
-        Check ($task.specPath -ceq $Path -and $after.task.specPath -ceq $Path) "$Label attaches path"
-        Check ($null -eq $after.task.attendedReason) "$Label stays unattended"
+        Check ($task.specPath -ceq $Path -and (OptionalProperty $after.task 'specPath') -ceq $Path) "$Label attaches path"
+        Check ($null -eq (OptionalProperty $after.task 'attendedReason')) "$Label stays unattended"
     }
     else {
         $errorBody = $result.Err | ConvertFrom-Json
         Check ($errorBody.code -ceq 'spec_outside_repository') "$Label stable refusal code"
         Check ($errorBody.message -ceq 'The spec path must stay inside the project repository.') "$Label refusal message"
-        Check ($before.task.specPath -ceq $after.task.specPath) "$Label preserves attachment"
-        Check ($before.task.attendedReason -ceq $after.task.attendedReason) "$Label preserves attended reason"
+        Check ((OptionalProperty $before.task 'specPath') -ceq (OptionalProperty $after.task 'specPath')) "$Label preserves attachment"
+        Check ((OptionalProperty $before.task 'attendedReason') -ceq (OptionalProperty $after.task 'attendedReason')) "$Label preserves attended reason"
         Check ($before.task.state -ceq $after.task.state) "$Label preserves task state"
         Check (($before.events | ConvertTo-Json -Depth 20 -Compress) -ceq ($after.events | ConvertTo-Json -Depth 20 -Compress)) "$Label preserves ledger events"
     }
