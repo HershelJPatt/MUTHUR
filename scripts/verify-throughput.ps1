@@ -147,7 +147,20 @@ try {
     Check (@($receipts.runs | Where-Object { $_.runId -eq $failed.runId -and $_.exitCode -eq 7 }).Count -eq 1) 'Failure receipt missing.'
     Put (Join-Path $Evidence 'receipts.json') ($receipts | ConvertTo-Json -Depth 30)
     Put (Join-Path $Evidence 'task.json') ($detail | ConvertTo-Json -Depth 30)
-    Put (Join-Path $Evidence 'result.json') (@{ success = $true; answerToResumedSeconds = $delay; url = $url; phases = $phases } | ConvertTo-Json -Depth 8)
+    $events = @(Api GET 'events?since=0&limit=1000')
+    $eventsFile = Join-Path $Evidence 'events.json'
+    Put $eventsFile ($events | ConvertTo-Json -Depth 30)
+    $since = ([DateTimeOffset]$events[0].at).ToString('o')
+    $until = [DateTimeOffset]::UtcNow.ToString('o')
+    $measurement = (Run $node @((Join-Path $PSScriptRoot 'measure-throughput.mjs'), '--events', $eventsFile,
+        '--since', $since, '--until', $until, '--output', (Join-Path $Evidence 'measurement.json')) 'measure-recovery') | ConvertFrom-Json
+    $sample = $measurement.conductor.answeredExitedOwnerToNextClaimMinutes
+    $unblocked = @($detail.events | Where-Object type -EQ 'task.unblocked')[-1]
+    $claimed = @($detail.events | Where-Object { $_.type -eq 'task.claimed' -and $_.seq -gt $unblocked.seq })[0]
+    $expectedMinutes = (([DateTimeOffset]$claimed.at) - ([DateTimeOffset]$unblocked.at)).TotalMinutes
+    Check ($sample.n -eq 1 -and [Math]::Abs($sample.mean - $expectedMinutes) -lt 0.001) 'Measurement lost or mis-timed the actual recovery sample.'
+    Check ($measurement.conductor.answeredExitedOwnersStillWaiting -eq 0) 'Completed recovery incorrectly remains pending.'
+    Put (Join-Path $Evidence 'result.json') (@{ success = $true; answerToResumedSeconds = $delay; recoveryMetric = $sample; url = $url; phases = $phases } | ConvertTo-Json -Depth 8)
     Write-Output "PASS: installed worker provenance, identity scrubbing, Git trust, failure reporting, receipts, latest decisions and recovery in $([Math]::Round($delay, 2)) seconds. Evidence: $Evidence"
 } finally {
     $http.Dispose()

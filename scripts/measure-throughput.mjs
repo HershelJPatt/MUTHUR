@@ -61,7 +61,12 @@ function addState(t, end) {
 }
 for (const e of events) {
   if (e.type === 'agent.reregistered') {
-    for (const t of tasks.values()) if (t.exited === e.payload.agent) { t.exited = null; t.recovery = null; }
+    for (const t of tasks.values()) if (t.exited === e.payload.agent) {
+      t.exited = null;
+      // A replacement registered while ownership remains invalidates stale exit proof. Once the task
+      // has actually returned to backlog, registration is part of its next session: keep the wait.
+      if (!t.recoveryQueued) t.recovery = null;
+    }
   }
   if (!e.taskId) continue;
   if (!tasks.has(e.taskId)) tasks.set(e.taskId, { claims: new Map() });
@@ -69,11 +74,15 @@ for (const e of events) {
   let next = entered[e.type];
   if (e.type === 'task.dependencies_set' && t.state === 'in_progress' && e.payload.tasks?.length) next = 'backlog';
   if (next && next !== t.state) { addState(t, time); t.state = next; t.from = time; }
+  if (next === 'backlog' && t.recovery != null) t.recoveryQueued = true;
+  if (['validating', 'validated', 'done', 'cancelled'].includes(next)) {
+    t.exited = null; t.recovery = null; t.recoveryQueued = false;
+  }
   if (e.type === 'conductor.orchestrator_exited') t.exited = e.payload.agent;
-  if (e.type === 'task.unblocked' && t.exited) t.recovery = time;
+  if (e.type === 'task.unblocked' && t.exited) { t.recovery = time; t.recoveryQueued = false; }
   if (e.type === 'task.claimed') {
     if (t.recovery !== undefined && t.recovery !== null && time >= since) answeredRecovery.push((time - t.recovery) / 60_000);
-    t.exited = null; t.recovery = null;
+    t.exited = null; t.recovery = null; t.recoveryQueued = false;
   }
   if (e.type === 'task.implemented') { t.submitted = time; t.claims.clear(); }
   if (e.type === 'validation.claimed') {

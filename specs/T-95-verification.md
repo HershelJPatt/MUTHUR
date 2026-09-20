@@ -23,6 +23,16 @@ Observed:
 - Final-answer-to-resumed-work delay was **15.580 seconds**, with the scratch conductor explicitly configured at its 15-second minimum. Live configuration remains 60 seconds and two sessions; this result establishes next-pass recovery, not a 15-second live SLA or a sustained tasks/hour increase.
 - The scratch server and its process tree were stopped and its unique temporary home/repository removed. The live hub retained instance `25c38c198fe74d69bcd83a1b94e90dfa` and the same two-session ceiling throughout development verification.
 
+## Independent review correction
+
+The first independent review rejected `2aaa0438dc272b168918db62fdbc7beaef1bb90f` because the read-only measurement script discarded a successful recovery when the next conductor session re-registered. Execution recovered correctly; the measurement reported zero samples. The correction preserves a queued recovery across registration while still invalidating replacement-session evidence before ownership is released. Five Node regression tests cover the actual sequence, replacement before/after the answer, unfinished queued recovery, cancellation and duplicate claims; all five passed.
+
+Replaying the reviewer's complete 39-event ledger now reports one recovery, mean/median/p90 0.283 minutes, with none pending (actual unblock-to-claim: 17.005 seconds). Evidence: `artifacts/validator-recovery-corrected.json`. The installed verifier now captures its full ledger and asserts this metric against the actual unblock and claim events, so the original defect can no longer pass that check.
+
+The revised installed verifier passed against the installed `2aaa043` product (product source is unchanged), with 14.376 seconds from answer submission to resumed work and one measured recovery of 0.238 minutes. Evidence: `artifacts/t95-installed-1381f7e2af6948258aa2a0177b472013`, including events, measurement and result JSON. The production conductor was restored immediately after the first rejection; it remains at two slots while the correction is reviewed.
+
+The first independent review also exercised additional real installed refusals, dependency updates, legacy/new receipts and concurrent claims successfully. Its full .NET run had 4,891 passes, one skip and one transient Census scratch-directory cleanup failure; a focused rerun passed both Census variants. This is not represented as an all-green full run. A fresh complete integrated regression run is in progress during this resubmission, with source unchanged; its log and final timing are `artifacts/test-round2-full.log` and `artifacts/test-round2-timing.json` in the implementation worktree. Rollout still requires its successful completion and the new independent verdict.
+
 ## Baseline and rollout
 
 `scripts/measure-throughput.mjs` replayed the archived audit ledger through sequence 4876 and reproduced 16 landings/7.004 hours (2.284/hour), 28 non-utility worker runs, 19 failed runs and 112.917 failed worker-minutes. The claim-to-verdict mean reproduced 12.434 minutes. Baseline output: `artifacts/throughput-baseline.json`.
