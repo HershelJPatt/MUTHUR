@@ -102,11 +102,17 @@ public sealed class ReliabilityTests : IDisposable
         var before = (await _hub.Founder().GetTaskAsync(task.Id)).Task.ClaimExpires;
         var runner = new HeldProcess();
         var renewed = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var exitObserved = false;
         var launcher = new AgentLauncher(runner, _ => ("fake", []), async (identity, ct) =>
         {
             await agents.RenewChildAsync(identity, ct);
             renewed.TrySetResult();
-        }, _hub.Clock);
+        }, _hub.Clock, async (identity, ct) =>
+        {
+            Assert.True(runner.Finished.Task.IsCompleted);
+            await agents.ReleaseChildAsync(identity, ct);
+            exitObserved = true;
+        });
         var running = launcher.RunAsync([new("codex", "test", "local")],
             _ => new(_repo.Path, "prompt", "test", null, [], [], _repo.Path),
             _ => Task.FromResult(new AgentIdentity("child", registration.Token)), TimeSpan.FromMinutes(45), _ => Task.CompletedTask);
@@ -118,6 +124,8 @@ public sealed class ReliabilityTests : IDisposable
         Assert.True(after > before);
         runner.Finished.SetResult(new ProcessResult(0, "", ""));
         await running.WaitAsync(TimeSpan.FromSeconds(10));
+        Assert.True(exitObserved);
+        Assert.Contains((await _hub.Founder().GetTaskAsync(task.Id)).Events, e => e.Type == "conductor.orchestrator_exited");
         _hub.Clock.Advance(TimeSpan.FromHours(1));
         Assert.Equal(after, (await _hub.Founder().GetTaskAsync(task.Id)).Task.ClaimExpires);
     }

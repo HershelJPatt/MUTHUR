@@ -1226,16 +1226,7 @@ public sealed class ConductorService(
         }
         finally
         {
-            try
-            {
-                await ledger.MutateAsync(Caller.Founder, m =>
-                {
-                    m.Record("conductor.orchestrator_exited", assignment.TaskId,
-                        new { agent = OrchestratorSessionLauncher.IdentityName(assignment.TaskKey) });
-                    return Task.CompletedTask;
-                }, CancellationToken.None);
-            }
-            finally { lock (_running) _running.Remove(key); }
+            lock (_running) _running.Remove(key);
         }
     }
 
