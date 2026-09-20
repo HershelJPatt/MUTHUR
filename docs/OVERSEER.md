@@ -4,6 +4,9 @@ The overseer is a short-lived technical delegate staffed by the conductor. It sh
 the conductor's session ceiling; it never adds a third slot to a two-slot organization.
 An eligible oversight run receives the next free slot before ordinary staffing. There
 is at most one overseer. The existing conductor remains responsible for routine landing.
+Deterministic checks also notice validated work unchanged for 15 minutes and in-progress
+or validating work unchanged for 90 minutes. An acknowledged unchanged situation does
+not repeatedly wake the model; use a durable time condition when a later recheck is needed.
 
 Configure it on the Board or Needs You page in the Overseer panel, or with:
 
@@ -73,6 +76,7 @@ The agent saves JSON with `muthur overseer checkpoint --file <absolute-path>`:
 {
   "run": "the-run-id-in-the-prompt",
   "summary": "Decision, evidence references, outstanding obligations, and next action.",
+  "complete": true,
   "waits": [
     { "kind": "task", "target": "T-67", "expected": "done", "reason": "Adapter must land", "group": "probe" },
     { "kind": "request", "target": "32", "expected": "closed", "reason": "Account access restored", "group": "probe" }
@@ -87,6 +91,9 @@ issues can still start a session; outstanding conditions remain in memory. Reche
 evidence after waking: closed requests may have been cancelled rather than answered.
 
 A checkpoint saves memory; it does not clear the running model's context. The agent
+uses `complete: false` for interim saves, retaining the unprocessed event range. Only a
+final `complete: true` checkpoint acknowledges the presented issues as handled or parked.
+The agent
 exits after checkpointing, and the next session starts fresh. The hub retains incomplete
 condition groups even if a new checkpoint accidentally omits them. Saved memory and
 waits survive process failure, model changes and hub restart. A run that dies without

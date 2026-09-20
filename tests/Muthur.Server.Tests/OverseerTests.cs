@@ -100,8 +100,8 @@ public sealed class OverseerTests : IDisposable
         var waits = new[] {
             new OverseerWait("time", at.AddMinutes(5).ToString("O"), "", "first", "both"),
             new OverseerWait("time", at.AddMinutes(10).ToString("O"), "", "second", "both") };
-        await Service.CheckpointAsync(caller, new(assignment.Run, "Need both prerequisites; evidence retained", waits));
-        await Service.CheckpointAsync(caller, new(assignment.Run, "Compact summary", []));
+        await Service.CheckpointAsync(caller, new(assignment.Run, "Need both prerequisites; evidence retained", waits, true));
+        await Service.CheckpointAsync(caller, new(assignment.Run, "Compact summary", [], true));
         Assert.Equal(2, (await Service.StatusAsync()).Waits.Count);
         await Assert.ThrowsAsync<MuthurException>(() => Service.CheckpointAsync(caller, new(assignment.Run, new string('a', 6001), [])));
         _hub.Clock.Advance(TimeSpan.FromMinutes(6));
@@ -132,7 +132,7 @@ public sealed class OverseerTests : IDisposable
     public async Task Saved_checkpoint_suppresses_unchanged_work_but_preserves_new_events()
     {
         var (assignment, caller, _) = await Start();
-        await Service.CheckpointAsync(caller, new(assignment.Run, "Handled current issues", []));
+        await Service.CheckpointAsync(caller, new(assignment.Run, "Handled current issues", [], true));
         _hub.Clock.Advance(TimeSpan.FromMinutes(4));
         Assert.Null(await Service.PrepareAsync());
         await Ledger.MutateAsync(Caller.System, m => { m.Record("validation.failed", payload: new { reason = "new issue" }); return Task.CompletedTask; });
@@ -159,6 +159,31 @@ public sealed class OverseerTests : IDisposable
         Assert.Equal("Evidence and pending work", status.Summary);
         Assert.Equal(1, status.StartsToday);
         await Assert.ThrowsAsync<MuthurException>(() => Service.CheckpointAsync(caller, new(assignment.Run, "stale overwrite", [])));
+    }
+
+    [Fact]
+    public async Task Interim_checkpoint_does_not_consume_unfinished_work()
+    {
+        var (assignment, caller, _) = await Start();
+        await Service.CheckpointAsync(caller, new(assignment.Run, "Still investigating; original evidence", []));
+        await Service.RecoverAfterRestartAsync();
+        _hub.Clock.Advance(TimeSpan.FromMinutes(4));
+        var resumed = await Service.PrepareAsync();
+        Assert.NotNull(resumed);
+        Assert.Contains("Still investigating", resumed.Prompt);
+    }
+
+    [Fact]
+    public async Task Quiet_aged_task_wakes_once_without_new_events()
+    {
+        await _hub.AddProjectAsync();
+        var owner = await _hub.RegisterAgentAsync("owner");
+        var task = await owner.AddTaskAsync("Stranded work");
+        (await owner.ClaimAsync(task.Id)).EnsureSuccessStatusCode();
+        var (assignment, caller, _) = await Start();
+        await Service.CheckpointAsync(caller, new(assignment.Run, "Nothing stale yet", [], true));
+        _hub.Clock.Advance(TimeSpan.FromMinutes(91));
+        Assert.NotNull(await Service.PrepareAsync());
     }
 
     [Fact]
