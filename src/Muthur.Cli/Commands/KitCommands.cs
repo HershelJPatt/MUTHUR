@@ -156,8 +156,8 @@ public static partial class KitCommands
     }
 
     /// <summary>
-    /// A write that failed, undone. Exit 1 and not 2: a rule violation is exit 2 and a conflict exit 3, and a
-    /// locked file is neither — the founder broke no rule and the manifest is valid.
+    /// A failure discovered in the write phase, undone. Exit 1: preflight rule failures are reported separately
+    /// as exit 2, including locks discovered while evaluating write intent or inspecting hard-link counts.
     /// </summary>
     /// <remarks>
     /// Catching <c>Exception</c> here is not the widening T-8 twice refused. Those were inside a rule, where a
@@ -367,11 +367,11 @@ public static partial class KitCommands
             // protected their own brief, which is the opposite of what create mode is for.
             try
             {
-            if (File.Exists(d.Resolved) && File.GetAttributes(d.Resolved).HasFlag(FileAttributes.ReadOnly)
-                && Writes(d, entries, harnessDir, kitRoot))
-                return d.Entry is { } readOnlyEntry
-                    ? $"{manifestPath}: entry {readOnlyEntry} writes \"{d.Spelled}\", which is read-only in the repository."
-                    : $"kit install writes \"{d.Spelled}\", which is read-only in the repository.";
+                if (File.Exists(d.Resolved) && File.GetAttributes(d.Resolved).HasFlag(FileAttributes.ReadOnly)
+                    && Writes(d, entries, harnessDir, kitRoot))
+                    return d.Entry is { } readOnlyEntry
+                        ? $"{manifestPath}: entry {readOnlyEntry} writes \"{d.Spelled}\", which is read-only in the repository."
+                        : $"kit install writes \"{d.Spelled}\", which is read-only in the repository.";
             }
             catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
             {
@@ -437,6 +437,7 @@ public static partial class KitCommands
         }
         return null;
     }
+
     /// <summary>The first component between the repository root and this path that exists as a file, if any.</summary>
     private static string? AncestorFile(string repoRoot, string resolved)
     {

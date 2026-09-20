@@ -249,6 +249,47 @@ public sealed class KitHardLinkTests : IDisposable
     }
 
     [Fact]
+    public void Unsupported_platform_or_abi_refuses_with_entry_attribution()
+    {
+        File.WriteAllText(Path.Combine(Repo, "é-文件.md"), "old");
+        WriteManifest(late: true);
+        var before = Snapshot();
+        foreach (var reason in new[]
+        {
+            HardLinkInspector.PlatformFailure(OSPlatform.FreeBSD, Architecture.X64, true),
+            HardLinkInspector.PlatformFailure(OSPlatform.Windows, Architecture.X86, true)
+        })
+        {
+            Assert.NotNull(reason);
+            Assert.False(KitCommands.TryReadManifest(Manifest, Harness, Kit, Repo, out var entries, out var problem,
+                _ => HardLinkResult.Failure(reason)));
+            Assert.Empty(entries);
+            Assert.Equal($"{Manifest}: entry 1 writes \"é-文件.md\", but its hard-link count could not be determined: {reason}. No files were written.", problem);
+            Unchanged(before);
+        }
+    }
+
+    [Fact]
+    public void Installer_owned_inspection_failure_refuses_before_earlier_safe_writes()
+    {
+        var ignore = Path.Combine(Repo, ".gitignore");
+        File.WriteAllText(ignore, "bin/\r\n");
+        WriteManifest(to: "new/nested/safe.md");
+        var before = Snapshot();
+        var inspected = new List<string>();
+        Assert.False(KitCommands.TryReadManifest(Manifest, Harness, Kit, Repo, out var entries, out var problem,
+            path =>
+            {
+                inspected.Add(path);
+                return HardLinkResult.Failure("inspection denied");
+            }));
+        Assert.Equal([ignore], inspected);
+        Assert.Empty(entries);
+        Assert.Equal("kit install writes \".gitignore\", but its hard-link count could not be determined: inspection denied. No files were written.", problem);
+        Unchanged(before);
+    }
+
+    [Fact]
     public void Pure_platform_abi_and_result_checks_do_not_claim_native_execution()
     {
         foreach (var platform in new[] { OSPlatform.Windows, OSPlatform.Linux, OSPlatform.OSX })
