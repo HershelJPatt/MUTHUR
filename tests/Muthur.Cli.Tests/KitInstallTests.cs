@@ -100,6 +100,79 @@ public sealed class KitInstallTests : IDisposable
             $"{installed} has drifted from its source {source}, which kit install writes over it.");
     }
 
+    /// <summary>
+    /// Thirteen units in one day arrived on the wrong branch. The kit is the only thing that stops that
+    /// hurting, and a rule that reaches only some harnesses does not.
+    /// </summary>
+    [Theory]
+    [InlineData("claude", ".claude/skills/muthur-orchestrate/SKILL.md")]
+    [InlineData("codex", ".muthur/procedures/orchestrate.md")]
+    [InlineData("generic", ".muthur/procedures/orchestrate.md")]
+    public async Task Every_harness_tells_an_orchestrator_where_a_spawned_worktree_comes_from(string harness, string procedure)
+    {
+        var repo = NewRepository();
+
+        Assert.Equal(ExitCodes.Ok, await Invoke("kit", "install", "--harness", harness, "--repo", repo));
+
+        var installed = Path.Combine(repo, procedure);
+        Assert.True(File.Exists(installed), $"The {harness} kit installed no {procedure}.");
+
+        var procedureText = File.ReadAllText(installed);
+        Assert.True(
+            procedureText.Contains("cut from the repository's HEAD, not from yours", StringComparison.Ordinal),
+            $"{procedure} has lost the paragraph saying where a spawned worktree is cut from.");
+        Assert.True(
+            procedureText.Contains("carry the branch name and the commit sha", StringComparison.Ordinal),
+            $"{procedure} no longer requires a delegation prompt to carry the spec's branch and sha.");
+        Assert.True(
+            procedureText.Contains("names the base branch, the commit sha of the spec on it", StringComparison.Ordinal),
+            $"{procedure} has lost the ## Rules bullet that restates it.");
+    }
+
+    /// <summary>
+    /// The base check kept thirteen misplaced units harmless in one day; every installed implementer
+    /// contract, including the specialist's, must explain why the kit cannot lose it.
+    /// </summary>
+    [Theory]
+    [InlineData("claude", ".claude/agents/muthur-implementer.md")]
+    [InlineData("claude", ".claude/agents/muthur-specialist.md")]
+    [InlineData("codex", ".muthur/procedures/implementer.md")]
+    [InlineData("generic", ".muthur/procedures/implementer.md")]
+    public async Task Every_harness_says_why_the_implementers_base_check_exists(string harness, string procedure)
+    {
+        var repo = NewRepository();
+
+        Assert.Equal(ExitCodes.Ok, await Invoke("kit", "install", "--harness", harness, "--repo", repo));
+
+        var installed = Path.Combine(repo, procedure);
+        Assert.True(File.Exists(installed), $"The {harness} kit installed no {procedure}.");
+
+        Assert.True(
+            File.ReadAllText(installed).Contains("not yours to tidy away", StringComparison.Ordinal),
+            $"{procedure} no longer says why its base check exists; a future reader will tidy it away.");
+    }
+
+    /// <summary>
+    /// The Claude adapter must not undo the rule that kept thirteen units on the right lineage: its old
+    /// claim made an orchestrator trust a base the harness never used.
+    /// </summary>
+    [Fact]
+    public async Task The_claude_kit_does_not_tell_an_orchestrator_the_worktree_comes_from_its_own_HEAD()
+    {
+        var repo = NewRepository();
+
+        Assert.Equal(ExitCodes.Ok, await Invoke("kit", "install", "--harness", "claude", "--repo", repo));
+
+        var procedure = ".claude/skills/muthur-orchestrate/SKILL.md";
+        var procedureText = File.ReadAllText(Path.Combine(repo, procedure));
+        Assert.False(
+            procedureText.Contains("created from your current HEAD", StringComparison.Ordinal),
+            $"{procedure} claims the worktree is created from your current HEAD; that is false and makes an orchestrator trust a base the harness never used.");
+        Assert.True(
+            procedureText.Contains("not the branch you are standing on", StringComparison.Ordinal),
+            $"{procedure} no longer says the worktree is not cut from the branch the orchestrator is standing on.");
+    }
+
     /// <summary>The claude kit is the only one that reaches a core procedure through a `{{core:…}}` token.</summary>
     [Fact]
     public async Task No_installed_file_is_left_holding_an_unexpanded_include()

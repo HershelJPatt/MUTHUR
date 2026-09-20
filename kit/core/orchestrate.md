@@ -83,9 +83,22 @@ task to the backlog for someone else to pick up.
    the worker with no build or test commands, and the report will not mention it. Verify the work yourself
    before you trust a green report.
 
-   Check every branch a worker names, and verify your own base before you dispatch: worktree tooling has
-   repeatedly handed implementers a stale base here. Tell them to check `git log` rather than trusting what
-   you said the base was.
+   Check every branch a worker names, and verify your own base before you dispatch. Then expect the worktree
+   your implementer gets to be somewhere else entirely: a natively-spawned worktree is
+   **cut from the repository's HEAD, not from yours**, so it comes up on whatever branch the shared main checkout is
+   standing on — usually the project's default branch — whatever branch you named. `muthur worker run`
+   resolves the base from where you are standing and gets this right; a harness's own worktree isolation does
+   not, and it is not MUTHUR's tooling to fix. Thirteen units in a single day, across two orchestrators,
+   arrived this way. Every one was caught by the implementer. None was caught by the orchestrator that
+   dispatched it.
+
+   So every delegation prompt must **carry the branch name and the commit sha** of the frozen spec: the
+   branch because that is the base, and an implementer reading the spec from a branch sees an amendment while
+   one reading it from a sha never can; the sha because it is the only thing that tells the implementer,
+   before it writes a line, that the worktree it woke up in is not the one you meant. Name the project's
+   default branch as well — the implementer's contract needs it to tell an inherited lineage from work of its
+   own. And say in the prompt that the worktree may have arrived somewhere else, and that checking is the
+   first thing it does.
 5. **Review like it's going to production, because it is.** Read every diff. Run the build and the tests
    yourself. Check the change against the spec line by line, and against the codebase's conventions.
    Send work back with specific corrections until it is right. Fix trivial things by instructing the
@@ -127,6 +140,8 @@ those specs was wrong.
 - Never edit product code directly. Never merge or push. Never mark `implemented` on work you have not built and tested yourself.
 - A spec's *Verification* must be runnable with no browser, no GUI and no human. One that is not, on a task
   not marked `attended`, is a defect in the spec — you have not finished the task.
+- Every delegation prompt names the base branch, the commit sha of the spec on it, and the default branch.
+  A worktree spawned by the harness does not arrive where you told it to.
 - One owner per task. If you cannot continue, `muthur task release T-n --reason "..."` so someone else can.
 - New work you discover goes in the ledger (`muthur task add "..." --parent T-n`), not in your head.
 - If your account hits a usage limit: `muthur agent limited --minutes <n>` before you stall.
