@@ -2,6 +2,7 @@
 @inject AgentService Agents
 @inject HarnessService Harnesses
 @inject RoleService Roles
+@inject BriefFileReader Briefs
 @inject ProjectService Projects
 @inject OutboundService Outbound
 @inject TaskService Tasks
@@ -513,9 +514,10 @@
         ClearOnce();
         _roleError = null;
         _defined = null;
-        if (await ReadBriefAsync(_roleBrief) is not { } brief) return;
         try
         {
+            var brief = await Briefs.ReadAsync(
+                [.. _projects.Select(p => p.RepoPath).Distinct(StringComparer.Ordinal)], _roleBrief);
             _defined = await Roles.DefineAsync(Caller.Founder, new DefineRoleRequest(_roleKey, brief, _roleIsValidator));
             // The ruling was about the role just defined. The next key typed into this field is a different
             // entry and infers again, or the founder's one refusal would quietly govern every role after it.
@@ -525,40 +527,6 @@
         {
             _roleError = ex.Message;
         }
-    }
-
-    /// <summary>
-    /// The brief's markdown, or null with <see cref="_roleError"/> already set. A brief is a committed file and
-    /// <c>role define --brief-file</c> takes its path from the repository root, so the path is resolved against
-    /// the repositories the hub already knows and against nothing else: this control reads the founder's disk,
-    /// and a path free to climb out of a checkout with <c>..</c> would let a browser tab read anything on it.
-    /// </summary>
-    private async Task<string?> ReadBriefAsync(string path)
-    {
-        if (path.Trim() is not { Length: > 0 } relative)
-        {
-            _roleError = "A role needs a brief: the path of its markdown file, from the repository root.";
-            return null;
-        }
-        var repositories = _projects.Select(p => p.RepoPath).Distinct(StringComparer.Ordinal).ToList();
-        foreach (var root in repositories)
-        {
-            var full = Path.GetFullPath(Path.Combine(root, relative));
-            if (IsInside(root, full) && File.Exists(full)) return await File.ReadAllTextAsync(full);
-        }
-        _roleError = repositories.Count == 0
-            ? "No project exists yet, so there is no repository to read a brief from. muthur project add <key> --repo <path> --founder"
-            : $"No file at '{relative}' in {string.Join(" or ", repositories)}. The path is read from the repository root and stays inside it.";
-        return null;
-    }
-
-    private static bool IsInside(string root, string full)
-    {
-        var trimmed = Path.GetFullPath(root).TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
-        var comparison = OperatingSystem.IsWindows() ? StringComparison.OrdinalIgnoreCase : StringComparison.Ordinal;
-        return full.Length > trimmed.Length
-            && full.StartsWith(trimmed, comparison)
-            && (full[trimmed.Length] == Path.DirectorySeparatorChar || full[trimmed.Length] == Path.AltDirectorySeparatorChar);
     }
 
     // -- Projects -----------------------------------------------------------------------------------------
