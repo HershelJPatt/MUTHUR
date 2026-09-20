@@ -53,9 +53,9 @@ public sealed class DoctorAgentTests : IDisposable
     [Fact]
     public async Task An_agent_on_a_harness_with_a_kit_and_a_tier_entry_says_so_and_nothing_else()
     {
-        KitFor("claude");
-        Catalog("claude");
-        await _hub.RegisterAgentAsync("straight", harness: "claude");
+        KitFor("CustomHarness");
+        Catalog("CustomHarness");
+        await _hub.RegisterAgentAsync("straight", harness: "CustomHarness");
 
         var report = await ReportAsync();
 
@@ -211,21 +211,21 @@ public sealed class DoctorAgentTests : IDisposable
         Assert.Equal("corner", check.Subject);
     }
 
-    [Fact]
-    public async Task A_harness_that_differs_from_the_sources_only_in_case_is_reported()
+    [Theory]
+    [InlineData("claude", "Claude")]
+    [InlineData("claude", "CLAUDE")]
+    [InlineData("Claude", "claude")]
+    public async Task A_harness_that_differs_from_the_sources_only_in_case_is_reported(string source, string registered)
     {
-        // Registration lower-cases the harness, so the two spellings are put on either side of the comparison
-        // by naming the sources in capitals. The rule is the same either way: the check compares ordinally,
-        // because one that folded case would hide the class of typo it exists to catch.
-        KitFor("Claude");
-        Catalog("Claude");
-        await _hub.RegisterAgentAsync("corner", harness: "Claude");
+        KitFor(source);
+        Catalog(source);
+        await _hub.RegisterAgentAsync("corner", harness: registered);
 
         var check = AgentCheck(await ReportAsync(), "corner");
 
         Assert.Equal(CheckStatus.Fail, check.Status);
-        Assert.Contains("'claude'", check.Detail);
-        Assert.Contains("This organization has: Claude.", check.Detail);
+        Assert.Contains($"'{registered}'", check.Detail);
+        Assert.Contains($"This organization has: {source}.", check.Detail);
     }
 
     /// <summary>Staffs one session the way the conductor does — the real launcher over the hub's own services.</summary>

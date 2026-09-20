@@ -13,7 +13,7 @@ public static class AgentCommands
         root.Subcommands.Add(agent);
 
         var name = new Option<string>("--name") { Description = "Agent name, e.g. the terminal pane it lives in (top-left).", Required = true };
-        var harness = new Option<string>("--harness") { Description = "Agent harness: claude, codex, ...", Required = true };
+        var harness = new Option<string>("--harness") { Description = "Agent harness (e.g. claude, codex). Whitespace is trimmed; case is preserved. Match kit/catalog spelling exactly.", Required = true };
         var model = new Option<string>("--model") { Description = "Model the harness runs.", Required = true };
         var tier = new Option<string?>("--tier") { Description = "mastermind | implementer | utility" };
         var account = new Option<string?>("--account") { Description = "Label of the subscription/API account in use." };

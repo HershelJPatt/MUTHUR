@@ -1,5 +1,9 @@
 namespace Muthur.Contracts;
 
+/// <summary>
+/// Harness identifiers have surrounding whitespace trimmed and case preserved. Unknown identifiers are allowed;
+/// kit and catalog identifiers must match case for doctor checks.
+/// </summary>
 public sealed record RegisterAgentRequest(string Name, string Harness, string Model, string? Tier = null, string? Account = null);
 
 /// <summary><see cref="Token"/> is shown exactly once; the CLI stores it under {MUTHUR_HOME}/agents/{name}.token.</summary>

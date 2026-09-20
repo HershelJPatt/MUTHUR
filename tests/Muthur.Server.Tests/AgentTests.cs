@@ -12,6 +12,66 @@ public sealed class AgentTests : IDisposable
 
     public void Dispose() => _hub.Dispose();
 
+    [Theory]
+    [InlineData("  CustomHarness \t", "CustomHarness")]
+    [InlineData("  codex  ", "codex")]
+    public async Task Registration_preserves_trimmed_harness_in_every_public_view(string harness, string expected)
+    {
+        var response = await _hub.CreateClient().PostAsJsonAsync(Routes.AgentRegister,
+            new RegisterAgentRequest("case-test", harness, "model"));
+        response.EnsureSuccessStatusCode();
+        var registered = (await response.Content.ReadFromJsonAsync(MuthurJsonContext.Default.RegisterAgentResponse))!;
+        Assert.Equal(expected, registered.Agent.Harness);
+        var me = await _hub.CreateClient(registered.Token).GetFromJsonAsync(Routes.AgentMe, MuthurJsonContext.Default.AgentDto);
+        Assert.Equal(expected, me!.Harness);
+        Assert.Equal(expected, Assert.Single((await RosterAsync()).Agents).Harness);
+        var events = (await _hub.Founder().GetFromJsonAsync(Routes.Events, MuthurJsonContext.Default.IReadOnlyListEventDto))!;
+        Assert.Equal(expected, Assert.Single(events, e => e.Type == "agent.registered").Payload.GetProperty("harness").GetString());
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task Authorized_reregistration_preserves_new_case_and_rotates_token(bool founder)
+    {
+        var original = await _hub.RegisterAgentAsync("case-test", harness: "CustomHarness");
+        var caller = founder ? _hub.Founder() : original;
+        var response = await caller.PostAsJsonAsync(Routes.AgentRegister,
+            new RegisterAgentRequest("case-test", "  customHARNESS  ", "model"));
+        response.EnsureSuccessStatusCode();
+        var rotated = (await response.Content.ReadFromJsonAsync(MuthurJsonContext.Default.RegisterAgentResponse))!;
+        Assert.Equal("customHARNESS", rotated.Agent.Harness);
+        Assert.Equal(HttpStatusCode.Unauthorized, (await original.GetAsync(Routes.AgentMe)).StatusCode);
+        var me = await _hub.CreateClient(rotated.Token).GetFromJsonAsync(Routes.AgentMe, MuthurJsonContext.Default.AgentDto);
+        Assert.Equal("customHARNESS", me!.Harness);
+        Assert.Equal("customHARNESS", Assert.Single((await RosterAsync()).Agents).Harness);
+        var events = (await _hub.Founder().GetFromJsonAsync(Routes.Events, MuthurJsonContext.Default.IReadOnlyListEventDto))!;
+        Assert.Equal("customHARNESS", Assert.Single(events, e => e.Type == "agent.reregistered").Payload.GetProperty("harness").GetString());
+    }
+
+    [Theory]
+    [InlineData(" ", "model")]
+    [InlineData("CustomHarness", "\t ")]
+    public async Task Blank_harness_or_model_is_still_rejected(string harness, string model)
+    {
+        var response = await _hub.CreateClient().PostAsJsonAsync(Routes.AgentRegister,
+            new RegisterAgentRequest("blank", harness, model));
+        Assert.Equal(HttpStatusCode.UnprocessableEntity, response.StatusCode);
+        Assert.Equal("harness_required", (await response.ReadErrorAsync()).Code);
+        Assert.Empty((await RosterAsync()).Agents);
+    }
+
+    [Fact]
+    public async Task Conductor_registration_preserves_candidate_harness_case()
+    {
+        var identity = await StaffAsync("win-validator", "CustomHarness");
+        var staffed = Assert.Single((await RosterAsync(all: true)).Agents);
+        Assert.True(staffed.ConductorStaffed);
+        Assert.Equal("CustomHarness", staffed.Harness);
+        var me = await _hub.CreateClient(identity.Token).GetFromJsonAsync(Routes.AgentMe, MuthurJsonContext.Default.AgentDto);
+        Assert.Equal("CustomHarness", me!.Harness);
+    }
+
     [Fact]
     public async Task A_name_belongs_to_whoever_registered_it()
     {
@@ -136,9 +196,9 @@ public sealed class AgentTests : IDisposable
         (await _hub.CreateClient().GetFromJsonAsync(Routes.Agents + (all ? "?all=true" : ""), MuthurJsonContext.Default.AgentRosterDto))!;
 
     /// <summary>Staffs one validator session the way the conductor does — the real launcher over the hub's own services.</summary>
-    private Task<Muthur.Launch.AgentIdentity> StaffAsync(string role) =>
+    private Task<Muthur.Launch.AgentIdentity> StaffAsync(string role, string harness = "codex") =>
         ActivatorUtilities.CreateInstance<ValidatorSessionLauncher>(_hub.Services).IdentityFor(
             new ConductorAssignment(1, "T-1", "Build T-1", "muthur", role, AvoidHarness: null),
-            new Muthur.Launch.HarnessCandidate("codex", "opus", "chatgpt-subscription"),
+            new Muthur.Launch.HarnessCandidate(harness, "opus", "chatgpt-subscription"),
             default);
 }

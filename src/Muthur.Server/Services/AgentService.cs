@@ -73,7 +73,7 @@ public sealed partial class AgentService(Ledger ledger, LeasePolicy leases, Time
 
             var agent = existing ?? new Agent { Id = Guid.NewGuid(), Name = name, TokenHash = "", Harness = "", Model = "", RegisteredAt = m.Now };
             agent.TokenHash = Tokens.Hash(token);
-            agent.Harness = request.Harness.Trim().ToLowerInvariant();
+            agent.Harness = request.Harness.Trim();
             agent.Model = request.Model.Trim();
             agent.Tier = request.Tier?.Trim().ToLowerInvariant();
             agent.Account = request.Account?.Trim();
