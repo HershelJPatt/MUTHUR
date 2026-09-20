@@ -8,14 +8,13 @@ using Muthur.Contracts;
 namespace Muthur.Cli.Tests;
 
 /// <summary>
-/// A write that fails after the manifest was judged sound, and what the repository looks like afterwards. T-8
+/// Preflight refusals and failures after the manifest was judged sound, and the repository afterwards. T-8
 /// left the write phase unguarded on purpose: a catch without an undo would have turned the crash into a
 /// sentence and left exactly the damage behind.
 /// <para>
-/// The lock is the load-bearing case of the two. A pre-flight for "is this file locked" is a TOCTOU race by
-/// construction — whatever it learns can be false one statement later — so an exclusive handle is the failure
-/// nothing can decide in advance, and only an undo survives it. That is the remainder this task exists for,
-/// and the case that must still pass after everything below.
+/// T-83 evaluates write intent before hard-link inspection, so a locked existing destination now fails
+/// preflight. A locked include for an absent destination still fails in the write phase after earlier entries
+/// wrote, exercising real rollback. Preflight cannot prevent failures arising after its checks.
 /// </para>
 /// <para>
 /// The read-only case used to reach the write phase and no longer does: T-56 (landed at <c>086fee9</c>) added
@@ -93,20 +92,21 @@ public sealed class KitInstallRollbackTests : IDisposable
     }
 
     /// <summary>
-    /// The other failure mode, and the one that fails a step earlier: the read that decides `unchanged` throws
-    /// before anything is journaled for c.md, so the undo is entirely of the two entries before it.
+    /// The read that decides `unchanged` now throws during hard-link preflight, before any entry is written.
     /// </summary>
     [Fact]
-    public async Task A_destination_somebody_else_holds_open_leaves_the_repository_exactly_as_it_was_found()
+    public async Task A_locked_destination_is_refused_during_hard_link_preflight_before_any_writes()
     {
         int exit;
         string code, message;
         using (File.Open(Blocked, FileMode.Open, FileAccess.ReadWrite, FileShare.None))
             (exit, code, message) = await Install();
 
-        Assert.Equal(ExitCodes.Error, exit);
-        Assert.Equal("install_failed", code);
-        Assert.Contains("while installing \"c.md\"", message, StringComparison.Ordinal);
+        Assert.Equal(ExitCodes.RuleViolation, exit);
+        Assert.Equal("invalid_manifest", code);
+        Assert.Contains("writes \"c.md\"", message, StringComparison.Ordinal);
+        Assert.Contains("hard-link count could not be determined", message, StringComparison.Ordinal);
+        Assert.Contains("No files were written", message, StringComparison.Ordinal);
         AsItWasFound();
 
         await InstallsCompletely();
@@ -117,6 +117,9 @@ public sealed class KitInstallRollbackTests : IDisposable
     {
         var source = Path.Combine(Kit, Harness, "c.md");
         File.WriteAllText(source, "{{core:dummy.md}}");
+        // An absent destination needs no hard-link inspection: expansion fails after entries 0 and 1 wrote.
+        var manifest = Path.Combine(Kit, Harness, "kit.json");
+        File.WriteAllText(manifest, File.ReadAllText(manifest).Replace("\"to\":\"c.md\"", "\"to\":\"missing-c.md\""));
 
         int exit;
         string code, message;
@@ -137,6 +140,7 @@ public sealed class KitInstallRollbackTests : IDisposable
             OriginalB.SequenceEqual(File.ReadAllBytes(Path.Combine(Repository, "b.md"))),
             "b.md, which entry 1 overwrote, did not come back byte for byte.");
         Assert.True(OriginalC.SequenceEqual(File.ReadAllBytes(Blocked)), "c.md was not left as it was found.");
+        Assert.False(File.Exists(Path.Combine(Repository, "missing-c.md")));
         Assert.Equal(
             "b.md, c.md",
             string.Join(", ", Directory.GetFileSystemEntries(Repository).Select(e => Path.GetFileName(e)!).Order()));

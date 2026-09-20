@@ -4,6 +4,7 @@
     <AssemblyName>muthur</AssemblyName>
     <RootNamespace>Muthur.Cli</RootNamespace>
     <PublishAot>true</PublishAot>
+    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
     <StackTraceSupport>false</StackTraceSupport>
     <OptimizationPreference>Size</OptimizationPreference>
   </PropertyGroup>
