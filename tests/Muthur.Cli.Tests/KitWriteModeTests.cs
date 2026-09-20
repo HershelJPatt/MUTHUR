@@ -1,4 +1,5 @@
 using Muthur.Cli.Commands;
+using Muthur.Cli.Infrastructure;
 
 namespace Muthur.Cli.Tests;
 
@@ -10,6 +11,11 @@ public sealed class KitWriteModeTests : IDisposable
 {
     private readonly string dir = Directory.CreateTempSubdirectory("muthur-kit-").FullName;
 
+    /// <summary>The modes are the transaction's now. Nothing here rolls back, so one per test is enough.</summary>
+    private readonly InstallTransaction transaction;
+
+    public KitWriteModeTests() => transaction = new InstallTransaction(dir);
+
     private string Path(string name) => System.IO.Path.Combine(dir, name);
 
     public void Dispose() => Directory.Delete(dir, recursive: true);
@@ -17,29 +23,29 @@ public sealed class KitWriteModeTests : IDisposable
     [Fact]
     public void Replace_writes_a_file_that_was_not_there()
     {
-        Assert.Equal("created", KitCommands.WriteKitFile(Path("procedure.md"), "one", "replace"));
+        Assert.Equal("created", transaction.Apply(Path("procedure.md"), "one", "replace"));
         Assert.Equal("one", File.ReadAllText(Path("procedure.md")));
     }
 
     [Fact]
     public void Replace_overwrites_what_is_there()
     {
-        KitCommands.WriteKitFile(Path("procedure.md"), "one", "replace");
-        Assert.Equal("updated", KitCommands.WriteKitFile(Path("procedure.md"), "two", "replace"));
+        transaction.Apply(Path("procedure.md"), "one", "replace");
+        Assert.Equal("updated", transaction.Apply(Path("procedure.md"), "two", "replace"));
         Assert.Equal("two", File.ReadAllText(Path("procedure.md")));
     }
 
     [Fact]
     public void Replace_says_so_when_the_bytes_already_match()
     {
-        KitCommands.WriteKitFile(Path("procedure.md"), "one", "replace");
-        Assert.Equal("unchanged", KitCommands.WriteKitFile(Path("procedure.md"), "one", "replace"));
+        transaction.Apply(Path("procedure.md"), "one", "replace");
+        Assert.Equal("unchanged", transaction.Apply(Path("procedure.md"), "one", "replace"));
     }
 
     [Fact]
     public void Create_writes_a_brief_that_was_not_there()
     {
-        Assert.Equal("created", KitCommands.WriteKitFile(Path("briefs/validator.md"), "starter", "create"));
+        Assert.Equal("created", transaction.Apply(Path("briefs/validator.md"), "starter", "create"));
         Assert.Equal("starter", File.ReadAllText(Path("briefs/validator.md")));
     }
 
@@ -47,18 +53,18 @@ public sealed class KitWriteModeTests : IDisposable
     public void Create_keeps_the_founders_edit_byte_for_byte()
     {
         var brief = Path("briefs/validator.md");
-        KitCommands.WriteKitFile(brief, "starter", "create");
+        transaction.Apply(brief, "starter", "create");
         File.WriteAllText(brief, "the founder's own words");
 
-        Assert.Equal("kept", KitCommands.WriteKitFile(brief, "starter", "create"));
+        Assert.Equal("kept", transaction.Apply(brief, "starter", "create"));
         Assert.Equal("the founder's own words", File.ReadAllText(brief));
     }
 
     [Fact]
     public void An_unknown_mode_replaces_like_the_default()
     {
-        KitCommands.WriteKitFile(Path("procedure.md"), "one", null);
-        Assert.Equal("updated", KitCommands.WriteKitFile(Path("procedure.md"), "two", null));
+        transaction.Apply(Path("procedure.md"), "one", null);
+        Assert.Equal("updated", transaction.Apply(Path("procedure.md"), "two", null));
     }
 }
 
