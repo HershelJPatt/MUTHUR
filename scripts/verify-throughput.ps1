@@ -1,9 +1,10 @@
 # Installed-product test, no paid inference. Records phase timing; only its unique scratch hub is mutated.
-param([Parameter(Mandatory)][string]$CliPath, [string]$Evidence = (Join-Path $PSScriptRoot '../artifacts/t95-installed'))
+param([Parameter(Mandatory)][string]$CliPath, [string]$Evidence = (Join-Path $PSScriptRoot ('../artifacts/t95-installed-' + [guid]::NewGuid().ToString('N'))))
 $ErrorActionPreference = 'Stop'
 Set-StrictMode -Version Latest
 $CliPath = (Resolve-Path -LiteralPath $CliPath).Path
 $Evidence = [IO.Path]::GetFullPath($Evidence)
+if ((Test-Path -LiteralPath $Evidence) -and @(Get-ChildItem -LiteralPath $Evidence -Force).Count -gt 0) { throw 'Use a fresh evidence directory for each verification attempt.' }
 $tempRoot = [IO.Path]::GetFullPath([IO.Path]::GetTempPath())
 $scratch = Join-Path $tempRoot ('t95-' + [guid]::NewGuid().ToString('N'))
 $repo = Join-Path $scratch 'repo'
@@ -11,6 +12,8 @@ $server = Join-Path (Split-Path $CliPath) 'server/Muthur.Server.exe'
 $saved = @{}
 $phases = [Collections.Generic.List[object]]::new()
 $hub = $null
+$http = [Net.Http.HttpClient]::new()
+$http.Timeout = [TimeSpan]::FromSeconds(10)
 $listener = [Net.Sockets.TcpListener]::new([Net.IPAddress]::Loopback, 0)
 $listener.Start()
 $url = 'http://127.0.0.1:' + $listener.LocalEndpoint.Port
@@ -47,14 +50,22 @@ function Run([string]$binary, [string[]]$arguments, [string]$name, [int]$expecte
         Put (Join-Path $Evidence "$name.stderr.txt") $stderr
         $phases.Add(@{ phase = $name; seconds = $watch.Elapsed.TotalSeconds; exitCode = $p.ExitCode })
         Check ($p.ExitCode -eq $expected) "$name expected exit $expected; got $($p.ExitCode): $stderr $stdout"
-        return $stdout
+        return $(if ($expected -eq 0) { $stdout } else { $stderr })
     } finally { $p.Dispose() }
 }
 function Api([string]$method, [string]$route, $body = $null, [string]$token = '') {
-    $options = @{ Method = $method; Uri = "$url/api/v1/$route"; TimeoutSec = 10 }
-    if ($token) { $options.Headers = @{ Authorization = "Bearer $token" } }
-    if ($null -ne $body) { $options.ContentType = 'application/json'; $options.Body = $body | ConvertTo-Json -Depth 12 -Compress }
-    Invoke-RestMethod @options
+    # Reuse connections while observing state; one new client per probe exhausts Windows ephemeral ports.
+    $request = [Net.Http.HttpRequestMessage]::new([Net.Http.HttpMethod]::new($method), "$url/api/v1/$route")
+    try {
+        if ($token) { $request.Headers.Authorization = [Net.Http.Headers.AuthenticationHeaderValue]::new('Bearer', $token) }
+        if ($null -ne $body) { $request.Content = [Net.Http.StringContent]::new(($body | ConvertTo-Json -Depth 12 -Compress), [Text.Encoding]::UTF8, 'application/json') }
+        $response = $http.SendAsync($request).GetAwaiter().GetResult()
+        try {
+            $text = $response.Content.ReadAsStringAsync().GetAwaiter().GetResult()
+            Check $response.IsSuccessStatusCode "$method $route failed: $($response.StatusCode) $text"
+            if ($text) { return ($text | ConvertFrom-Json) }
+        } finally { $response.Dispose() }
+    } finally { $request.Dispose() }
 }
 function Until([scriptblock]$condition, [string]$message, [int]$seconds = 60) {
     $watch = [Diagnostics.Stopwatch]::StartNew()
@@ -127,7 +138,7 @@ try {
     Until { Test-Path (Join-Path $Evidence 'resumed.json') } 'answered-owner-resumed' 45
     $delay = ([DateTimeOffset]::UtcNow - $answeredAt).TotalSeconds
     Check ($delay -lt 45) 'Recovery waited for the 30-minute lease.'
-    Until { @((Api GET 'conductor').running).Count -eq 0 } 'resumed-child-exited'
+    Until { (Api GET 'conductor').running -eq 0 } 'resumed-child-exited'
     $detail = Api GET "tasks/$($resume.id)"
     Check ($detail.task.state -eq 'backlog' -and $detail.task.dependsOn -contains $prerequisite.id) 'Resumption lost the prerequisite.'
     Check (@($detail.events | Where-Object type -EQ 'conductor.no_verdict').Count -eq 0) 'Dependency wait counted as an unproductive session.'
@@ -137,8 +148,9 @@ try {
     Put (Join-Path $Evidence 'receipts.json') ($receipts | ConvertTo-Json -Depth 30)
     Put (Join-Path $Evidence 'task.json') ($detail | ConvertTo-Json -Depth 30)
     Put (Join-Path $Evidence 'result.json') (@{ success = $true; answerToResumedSeconds = $delay; url = $url; phases = $phases } | ConvertTo-Json -Depth 8)
-    Write-Output "PASS: installed worker provenance, identity scrubbing, Git trust, failure reporting, receipts, latest decisions and recovery in $([Math]::Round($delay, 2)) seconds."
+    Write-Output "PASS: installed worker provenance, identity scrubbing, Git trust, failure reporting, receipts, latest decisions and recovery in $([Math]::Round($delay, 2)) seconds. Evidence: $Evidence"
 } finally {
+    $http.Dispose()
     if ($null -ne $hub) {
         if (-not $hub.HasExited) { $hub.Kill($true); $hub.WaitForExit() }
         Put (Join-Path $Evidence 'hub.stdout.txt') $hubOut.GetAwaiter().GetResult()
