@@ -27,6 +27,7 @@ public sealed class MuthurOptions
     public int HoldMinutes { get; set; } = 120;
     public int AgentStaleSeconds { get; set; } = 180;
     public int IngestIntervalSeconds { get; set; } = 180;
+    public Dictionary<string, CensusCheckOptions> CensusChecks { get; set; } = [];
     /// <summary>When true, outbound text must be reviewed by an agent on a different provider than its author.</summary>
     public bool RequireCrossProviderReview { get; set; }
     /// <summary>Off in tests so sweeps and ingest only run when a test asks for them.</summary>
@@ -67,4 +68,12 @@ public sealed class MuthurOptions
 
     public string ResolveConnectionString() =>
         ConnectionString ?? $"Data Source={Path.Combine(DataDir, MuthurEnvironment.DatabaseFile)}";
+}
+
+public sealed class CensusCheckOptions
+{
+    public string FileName { get; set; } = "";
+    public List<string> Arguments { get; set; } = [];
+    public string WorkingDirectory { get; set; } = "";
+    public int TimeoutSeconds { get; set; } = 30;
 }

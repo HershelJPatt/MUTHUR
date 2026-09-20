@@ -38,7 +38,7 @@ public sealed class DoctorIngestOutboundTests : IDisposable
 
         Assert.Equal("carrier-pigeon:coop-7", check.Subject);
         Assert.Equal(CheckStatus.Fail, check.Status);
-        Assert.Equal("No ingest adapter for 'carrier-pigeon:'. Known: github, discord, fake.", check.Detail);
+        Assert.Equal("No ingest adapter for 'carrier-pigeon:'. Known: github, discord, census, fake.", check.Detail);
     }
 
     [Fact]
