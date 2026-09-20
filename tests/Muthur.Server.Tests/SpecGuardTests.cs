@@ -56,12 +56,7 @@ public sealed class SpecGuardTests : IDisposable
         Assert.Equal("specs/T-1-feature.md", task.SpecPath);
     }
 
-    /// <summary>
-    /// And without being told, once the task carries a branch of its own — a bounced-back task re-attaching its
-    /// spec, which is the case that left T-29's next holder unable to.
-    /// </summary>
-    [Fact]
-    public async Task A_task_that_knows_its_branch_needs_no_branch_passed()
+    private async Task<(HttpClient Owner, string TaskId)> BlockedTaskWithBranchAsync(string content)
     {
         await _hub.AddProjectAsync(repoPath: _repo.Path, validators: ["win-validator"]);
         (await _hub.Founder().PutAsJsonAsync(Routes.Roles, new DefineRoleRequest("win-validator", "# win-validator\nDrive it."))).EnsureSuccessStatusCode();
@@ -69,7 +64,7 @@ public sealed class SpecGuardTests : IDisposable
         var id = (await owner.AddTaskAsync("Build the feature")).Id;
         (await owner.ClaimAsync(id)).EnsureSuccessStatusCode();
 
-        _repo.BranchWithFile("task/T-1-feature", "specs/T-1-feature.md", "# T-1 — Build the feature\n");
+        _repo.BranchWithFile("task/T-1-feature", "specs/T-1-feature.md", content);
         _repo.Write("specs/T-1-placeholder.md", "# T-1 — placeholder\n");
         _repo.Commit("a spec on main, so the first attach has something to find");
 
@@ -81,7 +76,21 @@ public sealed class SpecGuardTests : IDisposable
         (await validator.PostAsync(Routes.RoleAction("win-validator", "take"), null)).EnsureSuccessStatusCode();
         (await validator.PostActionAsync(id, "blocked", new VerdictRequest("win-validator", "No browser here."))).EnsureSuccessStatusCode();
 
-        var task = await (await owner.PostActionAsync(id, "spec", new SetSpecRequest("specs/T-1-feature.md"))).ReadTaskAsync();
+        return (owner, id);
+    }
+
+    /// <summary>A bounced-back task can resolve its stored branch after an absent or unhelpful hint.</summary>
+    [Theory]
+    [InlineData(null)]
+    [InlineData("task/T-1-empty")]
+    [InlineData("task/T-1-nonexistent")]
+    public async Task A_task_that_knows_its_branch_resolves_it_when_the_hint_has_no_spec(string? branch)
+    {
+        var (owner, id) = await BlockedTaskWithBranchAsync("# T-1 — Build the feature\n");
+        _repo.Git("branch", "task/T-1-empty", "main");
+        Assert.False(File.Exists(Path.Combine(_repo.Path, "specs/T-1-feature.md")));
+
+        var task = await (await owner.PostActionAsync(id, "spec", new SetSpecRequest("specs/T-1-feature.md", branch))).ReadTaskAsync();
 
         Assert.Equal("specs/T-1-feature.md", task.SpecPath);
     }
@@ -90,8 +99,10 @@ public sealed class SpecGuardTests : IDisposable
     /// The branch is a hint, never an assertion — which is what makes it safe for the CLI to fill in from
     /// wherever the caller happens to be standing. A branch that does not hold the file is passed over.
     /// </summary>
-    [Fact]
-    public async Task A_branch_that_does_not_have_the_spec_is_passed_over_not_fatal()
+    [Theory]
+    [InlineData(null)]
+    [InlineData("task/T-1-elsewhere")]
+    public async Task A_default_branch_spec_attaches_when_the_hint_has_no_spec(string? branch)
     {
         var (owner, id) = await ClaimedTaskAsync();
         _repo.Git("branch", "task/T-1-elsewhere", "main");   // branched before the spec existed
@@ -99,7 +110,7 @@ public sealed class SpecGuardTests : IDisposable
         _repo.Commit("the spec, on main");
 
         var task = await (await owner.PostActionAsync(id, "spec",
-            new SetSpecRequest("specs/T-1-feature.md", "task/T-1-elsewhere"))).ReadTaskAsync();
+            new SetSpecRequest("specs/T-1-feature.md", branch))).ReadTaskAsync();
 
         Assert.Equal("specs/T-1-feature.md", task.SpecPath);
     }
@@ -115,6 +126,32 @@ public sealed class SpecGuardTests : IDisposable
 
         Assert.Equal("spec_id_mismatch", error.Code);
         Assert.Contains("not T-1", error.Message);
+    }
+
+    [Fact]
+    public async Task Invalid_supplied_branch_content_is_not_replaced_by_a_valid_working_tree_copy()
+    {
+        var (owner, id) = await ClaimedTaskAsync();
+        _repo.BranchWithFile("task/T-1-feature", "specs/T-1-feature.md", "# T-9 — Another task\n");
+        _repo.Write("specs/T-1-feature.md", "# T-1 — Build the feature\n");
+
+        var error = await RefusedAsync(owner, id, "specs/T-1-feature.md", "task/T-1-feature");
+
+        Assert.Equal("spec_id_mismatch", error.Code);
+        Assert.Null((await owner.GetTaskAsync(id)).Task.SpecPath);
+    }
+
+    [Fact]
+    public async Task Invalid_stored_branch_content_is_not_replaced_by_a_valid_working_tree_copy()
+    {
+        var (owner, id) = await BlockedTaskWithBranchAsync("# T-9 — Another task\n");
+        _repo.Git("branch", "task/T-1-empty", "main");
+        _repo.Write("specs/T-1-feature.md", "# T-1 — Build the feature\n");
+
+        var error = await RefusedAsync(owner, id, "specs/T-1-feature.md", "task/T-1-empty");
+
+        Assert.Equal("spec_id_mismatch", error.Code);
+        Assert.Equal("specs/T-1-placeholder.md", (await owner.GetTaskAsync(id)).Task.SpecPath);
     }
 
     /// <summary>
@@ -151,13 +188,17 @@ public sealed class SpecGuardTests : IDisposable
         Assert.Equal("spec_outside_repository", error.Code);
     }
 
-    [Fact]
-    public async Task A_spec_whose_heading_names_this_task_is_attached()
+    [Theory]
+    [InlineData(null)]
+    [InlineData("task/T-1-empty")]
+    [InlineData("task/T-1-nonexistent")]
+    public async Task An_uncommitted_working_tree_spec_attaches_when_the_hint_has_no_spec(string? branch)
     {
         var (owner, id) = await ClaimedTaskAsync();
+        _repo.Git("branch", "task/T-1-empty", "main");
         _repo.Write("specs/T-1-feature.md", "# T-1 — Build the feature\n\nFrozen spec.\n");
 
-        var task = await (await owner.PostActionAsync(id, "spec", new SetSpecRequest("specs/T-1-feature.md"))).ReadTaskAsync();
+        var task = await (await owner.PostActionAsync(id, "spec", new SetSpecRequest("specs/T-1-feature.md", branch))).ReadTaskAsync();
 
         Assert.Equal("specs/T-1-feature.md", task.SpecPath);
     }
