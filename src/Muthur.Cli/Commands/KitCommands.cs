@@ -205,12 +205,12 @@ public static partial class KitCommands
     /// </remarks>
     internal static bool TryReadManifest(
         string manifestPath, string harnessDir, string kitDir, string repo,
-        out List<KitEntry> entries, out string problem)
+        out List<KitEntry> entries, out string problem, Func<string, HardLinkResult>? inspector = null)
     {
         entries = [];
         try
         {
-            return ReadManifest(manifestPath, harnessDir, kitDir, repo, out entries, out problem);
+            return ReadManifest(manifestPath, harnessDir, kitDir, repo, out entries, out problem, inspector);
         }
         catch (Exception ex)
         {
@@ -223,7 +223,7 @@ public static partial class KitCommands
     /// <summary>The rules themselves, in the order this task's spec numbers them.</summary>
     private static bool ReadManifest(
         string manifestPath, string harnessDir, string kitDir, string repo,
-        out List<KitEntry> entries, out string problem)
+        out List<KitEntry> entries, out string problem, Func<string, HardLinkResult>? inspector = null)
     {
         entries = [];
         problem = "";
@@ -317,6 +317,12 @@ public static partial class KitCommands
                 return false;
             }
 
+            if (HardLinks(manifestPath, harnessDir, kitRoot, destinations, validated, inspector ?? HardLinkInspector.Inspect) is { } unsafeLink)
+            {
+                problem = unsafeLink;
+                return false;
+            }
+
             entries = validated;
         }
         return true;
@@ -359,11 +365,18 @@ public static partial class KitCommands
             // exists is kept untouched, and every shipped kit ships briefs/validator.md that way on purpose -
             // so refusing a read-only one would refuse every install into a repository where a founder had
             // protected their own brief, which is the opposite of what create mode is for.
+            try
+            {
             if (File.Exists(d.Resolved) && File.GetAttributes(d.Resolved).HasFlag(FileAttributes.ReadOnly)
                 && Writes(d, entries, harnessDir, kitRoot))
                 return d.Entry is { } readOnlyEntry
                     ? $"{manifestPath}: entry {readOnlyEntry} writes \"{d.Spelled}\", which is read-only in the repository."
                     : $"kit install writes \"{d.Spelled}\", which is read-only in the repository.";
+            }
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+            {
+                return InspectionFailure(manifestPath, d, $"{ex.GetType().Name}: {ex.Message}");
+            }
         }
         return null;
     }
@@ -392,6 +405,38 @@ public static partial class KitCommands
         return !ignored.Split('\n').Any(line => line.Trim() is ".worktrees/" or ".worktrees");
     }
 
+    private static string WritePrefix(string manifestPath, Destination d) => d.Entry is { } index
+        ? $"{manifestPath}: entry {index} writes \"{d.Spelled}\""
+        : $"kit install writes \"{d.Spelled}\"";
+
+    private static string InspectionFailure(string manifestPath, Destination d, string reason) =>
+        $"{WritePrefix(manifestPath, d)}, but its hard-link count could not be determined: {reason}. No files were written.";
+
+    private static string? HardLinks(string manifestPath, string harnessDir, string kitRoot,
+        List<Destination> destinations, List<KitEntry> entries, Func<string, HardLinkResult> inspector)
+    {
+        foreach (var d in destinations)
+        {
+            try
+            {
+                try { _ = File.GetAttributes(d.Resolved); }
+                catch (FileNotFoundException) { continue; }
+                catch (DirectoryNotFoundException) { continue; }
+                if (!Writes(d, entries, harnessDir, kitRoot)) continue;
+                var result = inspector(d.Resolved);
+                if (!result.Success || result.Count == 0)
+                    return InspectionFailure(manifestPath, d, result.Count == 0 && result.Success
+                        ? "native inspection returned zero hard links" : result.Reason);
+                if (result.Count > 1)
+                    return $"{WritePrefix(manifestPath, d)}, which has {result.Count} hard links; replace it with an independent file before installing.";
+            }
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+            {
+                return InspectionFailure(manifestPath, d, $"{ex.GetType().Name}: {ex.Message}");
+            }
+        }
+        return null;
+    }
     /// <summary>The first component between the repository root and this path that exists as a file, if any.</summary>
     private static string? AncestorFile(string repoRoot, string resolved)
     {
