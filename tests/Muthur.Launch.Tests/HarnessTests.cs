@@ -84,7 +84,7 @@ public sealed class HarnessTests : IDisposable
         var args = Harnesses.Find("codex")!.Build(Request(model: "gpt-6-astra", effort: "high")).Arguments.ToList();
 
         // -c and its setting are one pair: a stray "-c" would swallow the next argument instead.
-        var flag = args.IndexOf("-c");
+        var flag = args.IndexOf("model_reasoning_effort=\"high\"") - 1;
         Assert.True(flag >= 0);
         Assert.Equal("model_reasoning_effort=\"high\"", args[flag + 1]);
         Assert.Equal("gpt-6-astra", args[args.IndexOf("--model") + 1]);
@@ -98,7 +98,8 @@ public sealed class HarnessTests : IDisposable
     {
         var args = Harnesses.Find("codex")!.Build(Request(model: "gpt-6-astra", effort: effort)).Arguments.ToList();
 
-        Assert.DoesNotContain("-c", args);
+        Assert.Contains("service_tier=\"default\"", args);
+        Assert.Contains("features.fast_mode=false", args);
         Assert.DoesNotContain(args, a => a.Contains("model_reasoning_effort"));
     }
 
@@ -126,7 +127,7 @@ public sealed class HarnessTests : IDisposable
         Assert.All(codex, c =>
         {
             Assert.Equal("gpt-6-astra", c.GetProperty("model").GetString());
-            Assert.Equal("high", c.GetProperty("reasoningEffort").GetString());
+            Assert.Equal("medium", c.GetProperty("reasoningEffort").GetString());
         });
     }
 

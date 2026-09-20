@@ -18,7 +18,12 @@ public sealed class ConductorTests : IDisposable
     private readonly HubFactory _hub = new();
     private readonly TestRepo _repo = new();
 
-    public ConductorTests() => _hub.Settings["Muthur:ConductorEnabled"] = "true";
+    public ConductorTests()
+    {
+        _hub.Settings["Muthur:ConductorEnabled"] = "true";
+        // These tests isolate the per-process retry/cooldown policy. Durable budgets have separate coverage.
+        _hub.Settings["Muthur:ConductorSessionsPerTaskDay"] = "0";
+    }
 
     public void Dispose()
     {

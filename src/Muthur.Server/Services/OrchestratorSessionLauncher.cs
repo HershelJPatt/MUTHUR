@@ -157,6 +157,10 @@ public sealed class OrchestratorSessionLauncher(
         already has it: stop immediately and do nothing else.
 
         Rules that are not yours to bend:
+        - Use deterministic commands for waiting, heartbeats and test execution. Do not spend model turns repeatedly polling.
+        - Summarize large logs or incoming text with `muthur utility summarize --file <path> --task {assignment.TaskKey}` before reading full logs. Summaries are advisory; verify cited evidence.
+        - For a small mechanical unit with a frozen spec and objective checks, use `muthur worker run --tier local-implementer --spec <path> --unit <unit> --task {assignment.TaskKey} --base <commit> --timeout-minutes 10` once. Review the diff and run checks. Escalate an unsuccessful attempt to the implementer tier with its evidence; do not repeat local attempts.
+        - Architecture, ambiguous requirements, complex debugging and final review stay on the mastermind tier. Do not route these to local workers merely to fit a budget.
         - You own this task and no other. Do not claim a second one.
         - Write a frozen spec before you delegate, and delegate the building; you do not write product code yourself.
         - Never push, never merge into the default branch. `muthur task land` is how work lands.

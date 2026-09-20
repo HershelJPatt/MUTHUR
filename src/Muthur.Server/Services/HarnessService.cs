@@ -76,8 +76,8 @@ public sealed class HarnessService(Ledger ledger, MuthurOptions options)
             // Absent, not null, when an orchestrator started the run itself: a parent key on every row would say
             // every run came from somewhere, and a tree is only readable while that stays false.
             object payload = report.Parent is { Length: > 0 } parent
-                ? new { report.Tier, worker, report.Account, report.Branch, report.Unit, seconds, report.CostUsd, parent }
-                : new { report.Tier, worker, report.Account, report.Branch, report.Unit, seconds, report.CostUsd };
+                ? new { report.Tier, worker, report.Account, report.Branch, report.Unit, seconds, report.CostUsd, report.InputTokens, report.OutputTokens, parent }
+                : new { report.Tier, worker, report.Account, report.Branch, report.Unit, seconds, report.CostUsd, report.InputTokens, report.OutputTokens };
             m.Record(report.Success ? "worker.finished" : "worker.failed", taskId, payload);
         }, ct);
     }

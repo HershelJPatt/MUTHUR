@@ -163,6 +163,7 @@ public sealed class ConductorService(
     /// </para>
     /// </summary>
     private readonly Dictionary<string, Stall> _stalls = [];
+    private readonly Dictionary<string, ConductorStallDto> _budgetBlocks = [];
 
     /// <summary>Why a session produced nothing. The founder is sent to a different place for each.</summary>
     private enum Unproductive { NeverStarted, RanAndFailed, NoVerdict }
@@ -243,6 +244,57 @@ public sealed class ConductorService(
                 .OrderBy(s => s.Task, StringComparer.Ordinal).ThenBy(s => s.Role, StringComparer.Ordinal)];
     }
 
+    private List<ConductorStallDto> BudgetBlocks()
+    {
+        lock (_budgetBlocks) return [.. _budgetBlocks.Values];
+    }
+
+    // The ledger survives hub restarts. Claims, heartbeats and clean process exits do not reset this budget.
+    // A new implementation head, an answered decision, or an explicit conductor on does.
+    private async Task<HashSet<string>> BudgetBlockedAsync(MuthurDb db, DateTimeOffset now, CancellationToken ct)
+    {
+        var since = now.AddDays(-1);
+        var events = await db.Events.Where(e => e.At >= since &&
+            (e.Type == "conductor.staffing" || e.Type == "conductor.on" ||
+             e.Type == "task.implemented" || e.Type == "request.answered")).OrderBy(e => e.Seq).ToListAsync(ct);
+        var attempts = new Dictionary<string, List<DateTimeOffset>>();
+        var heads = new Dictionary<int, string>();
+        foreach (var e in events)
+        {
+            if (e.Type == "conductor.on") { attempts.Clear(); continue; }
+            if (e.TaskId is not { } id) continue;
+            var prefix = Wire.TaskId(id) + "/";
+            using var payload = JsonDocument.Parse(e.PayloadJson);
+            if (e.Type != "conductor.staffing")
+            {
+                if (e.Type == "task.implemented")
+                {
+                    if (!payload.RootElement.TryGetProperty("head", out var head) || head.GetString() is not { Length: > 0 } value) continue;
+                    if (heads.GetValueOrDefault(id) == value) continue;
+                    heads[id] = value;
+                }
+                foreach (var key in attempts.Keys.Where(k => k.StartsWith(prefix, StringComparison.Ordinal)).ToList()) attempts.Remove(key);
+                continue;
+            }
+            if (!payload.RootElement.TryGetProperty("role", out var role)) continue;
+            var pair = prefix + role.GetString();
+            if (!attempts.TryGetValue(pair, out var times)) attempts[pair] = times = [];
+            times.Add(e.At);
+        }
+        lock (_budgetBlocks)
+        {
+            _budgetBlocks.Clear();
+            if (options.ConductorSessionsPerTaskDay > 0)
+                foreach (var (key, times) in attempts.Where(p => p.Value.Count >= options.ConductorSessionsPerTaskDay))
+                {
+                    var (task, role) = Split(key);
+                    _budgetBlocks[key] = new(task, role, "daily session budget exhausted; waiting for new work", times.Count,
+                        times[times.Count - options.ConductorSessionsPerTaskDay].AddDays(1));
+                }
+            return [.. _budgetBlocks.Keys];
+        }
+    }
+
     /// <summary>
     /// Only the pairs that have actually stalled. A pair with one failure and two attempts left is not
     /// something a founder acts on, and listing it would bury the ones that are.
@@ -258,6 +310,8 @@ public sealed class ConductorService(
                     return new ConductorStallDto(task, role, Describe(e.Value.Last), e.Value.Failures,
                         e.Value.StalledAt + TimeSpan.FromMinutes(options.ConductorStallProbeMinutes));
                 })
+                .Concat(BudgetBlocks())
+                .GroupBy(s => (s.Task, s.Role)).Select(g => g.Last())
                 .OrderBy(s => s.Task, StringComparer.Ordinal).ThenBy(s => s.Role, StringComparer.Ordinal)];
     }
 
@@ -602,6 +656,7 @@ public sealed class ConductorService(
             // A task that has failed too many times and come back unchanged is a judgment call, and judgment
             // calls go to the founder.
             var cap = await CapStateAsync(db, ids, ct);
+            var budgetBlocked = await BudgetBlockedAsync(db, now, ct);
 
             // "harness/model" of whoever declared the task implemented.
             var built = await db.Events
@@ -624,6 +679,7 @@ public sealed class ConductorService(
                     // A session that cannot take the role is a session that does nothing.
                     if (liveHolders.GetValueOrDefault(validation.ValidatorKey) >= capacity) continue;
                     var key = $"{Wire.TaskId(task.Id)}/{validation.ValidatorKey}";
+                    if (budgetBlocked.Contains(key)) continue;
                     lock (_running)
                         if (_running.Contains(key)) continue;
                     lock (_stalls)
@@ -721,11 +777,13 @@ public sealed class ConductorService(
                 .ThenBy(t => t.Id)
                 .ToList();
             var owners = await PreviousOwnersAsync(db, [.. tasks.Where(CarriesWork).Select(t => t.Id)], ct);
+            var budgetBlocked = await BudgetBlockedAsync(db, now, ct);
 
             var plan = new List<OrchestratorAssignment>();
             foreach (var task in tasks)
             {
                 var key = OrchestratorKey(Wire.TaskId(task.Id));
+                if (budgetBlocked.Contains(key)) continue;
                 lock (_running)
                     if (_running.Contains(key)) continue;
                 lock (_stalls)

@@ -26,7 +26,7 @@ public static class WorkerCommands
         var worker = new Command("worker", "Headless workers on any harness (claude, codex, local models).");
         root.Subcommands.Add(worker);
 
-        var tier = new Option<string>("--tier") { Description = "mastermind | implementer | utility", DefaultValueFactory = _ => "implementer" };
+        var tier = new Option<string>("--tier") { Description = "mastermind | implementer | local-implementer | utility", DefaultValueFactory = _ => "implementer" };
         var spec = new Option<string>("--spec") { Description = "Frozen spec, relative to the repository root. Must be committed on the base branch.", Required = true };
         var unit = new Option<string?>("--unit") { Description = "The unit of the spec this worker owns (default: the whole spec)." };
         var task = new Option<string?>("--task") { Description = "Task id, recorded in the ledger with the run." };
@@ -175,9 +175,16 @@ public static class WorkerCommands
         if (!tiers.IsSuccess) return Output.Emit(parse, tiers);
         var catalog = JsonSerializer.Deserialize(tiers.Body, MuthurJsonContext.Default.IReadOnlyListTierDto) ?? [];
         var candidates = Candidates(catalog, o.Harness);
+        var local = o.Tier is "local-implementer" or "utility";
+        if (local) candidates = [.. candidates.Where(c => c.Account == "local").Take(1)];
         if (candidates.Count == 0)
             return Output.Error("no_candidates", $"No available candidate for tier '{o.Tier}'" + (o.Harness is null ? "" : $" on harness '{o.Harness}'") +
                 ". Every account may be limited: muthur harness tiers", ExitCodes.RuleViolation);
+
+        FileStream? lease;
+        try { lease = local ? LocalInferenceLease.Acquire(MuthurEnvironment.Home) : null; }
+        catch (IOException) { return Output.Error("local_busy", "Another local job is running. Wait for it; no cloud fallback was attempted.", ExitCodes.RuleViolation); }
+        using var localLease = lease;
 
         // 2. The contract and the project's verification commands.
         if (KitCommands.LocateKit() is not { } kit) return KitCommands.KitMissing();
@@ -208,7 +215,7 @@ public static class WorkerCommands
         var attempts = await new WorkerLauncher(processes).RunAsync(
             candidates,
             c => RequestFor(c, worktree, PromptFor(c), gitCommon, [.. DefaultAllowed, .. extraAllowed], scratch),
-            TimeSpan.FromMinutes(o.TimeoutMinutes),
+            TimeSpan.FromMinutes(local ? Math.Min(o.TimeoutMinutes, 10) : o.TimeoutMinutes),
             async c =>
             {
                 if (c.Account is { Length: > 0 } account)

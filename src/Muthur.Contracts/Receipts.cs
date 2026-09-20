@@ -25,7 +25,8 @@ public sealed record AccountReceiptDto(string Account, int Times, DateTimeOffset
 /// </param>
 public sealed record WorkerRunDto(
     string? Task, string Tier, string Worker, string? Account, string? Unit,
-    int Seconds, decimal? CostUsd, bool Success, DateTimeOffset At, string? Parent = null);
+    int Seconds, decimal? CostUsd, bool Success, DateTimeOffset At, string? Parent = null,
+    int? InputTokens = null, int? OutputTokens = null);
 
 /// <param name="Sessions">Identities taken in the window: <c>agent.registered</c> plus <c>agent.reregistered</c>.</param>
 /// <param name="ConductorSessions">

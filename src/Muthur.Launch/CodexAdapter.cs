@@ -24,6 +24,8 @@ public sealed class CodexAdapter(string name, string? openSourceProvider) : IHar
             "--sandbox", "workspace-write",
             "--output-last-message", LastMessageFile(request),
             "--color", "never",
+            "-c", "service_tier=\"default\"",
+            "-c", "features.fast_mode=false",
         };
         if (request.GitCommonDirectory is { Length: > 0 } git)
         {

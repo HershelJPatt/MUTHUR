@@ -43,6 +43,8 @@ public sealed class MuthurOptions
     public const int MinimumConductorIntervalSeconds = 15;
     /// <summary>After a pair gives up starting, how long before one probe is let through. Its cause is usually fixed from outside the hub.</summary>
     public int ConductorStallProbeMinutes { get; set; } = 30;
+    /// <summary>Persistent daily staffing budget per task/role without new work. Zero disables this additional cap.</summary>
+    public int ConductorSessionsPerTaskDay { get; set; } = 3;
 
     /// <summary>
     /// The ceiling on one `doctor` run, whatever its checks do. Under the CLI's 180s client timeout, so a

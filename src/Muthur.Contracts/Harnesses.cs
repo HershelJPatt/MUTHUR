@@ -22,7 +22,9 @@ public sealed record WorkerRunReport(
     bool Success,
     int DurationSeconds,
     decimal? CostUsd,
-    string? Parent = null);
+    string? Parent = null,
+    int? InputTokens = null,
+    int? OutputTokens = null);
 
 /// <summary>One validator session the conductor believes it has running.</summary>
 /// <param name="Task">"T-n".</param>
