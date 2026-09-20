@@ -1,0 +1,18 @@
+# T-91 orchestrator review evidence
+
+Frozen spec: 9855e53fb23bbf25488b1337e3d756d08f5f6993; source baseline main 6c99654777c7edf9108e9653d3d3a6c3f747a7ce. Implementer tier via installed worker launcher; two initial dispatches stopped before edits on sandbox Git ownership verification. Both empty worktrees and redundant branches were removed. Third dispatch used explicit forward-slash per-command repository trust.
+
+Independent baseline `dotnet build Muthur.slnx --disable-build-servers -m:1`: exit 0.
+Independent full `dotnet test Muthur.slnx --no-build --disable-build-servers -m:1 --blame-hang-timeout 2m`: Core 3736 passed and Server 701 passed. CLI 297/298 and Launch 53/54 initially passed; exactly two tests named A_file_outside_any_repository_has_no_provenance_and_is_not_dirty failed because the orchestrator placed TEMP inside this Git worktree. Source inspection confirms both use CreateTempSubdirectory and require no repository ancestry. This was a verification setup error, not a product change. Re-ran the complete CLI and Launch projects with TEMP outside every repository: 298 and 54 passed, exits 0. Total passing coverage: 4789 tests. Child processes had finite timeouts and were disposed; owned temporary trees were removed after completion. No scratch hub, push or default-branch merge was used.
+
+The advisory local summary was checked against original failure lines and source. Inventory was also locally summarized and original JSON independently aggregated: baseline zero diagnostics; documentation generation 1773 CS1591, 124 CS1573, 8 CS1587; CS1591-only suppression fails with 82 CS1573 plus 3 CS1587 before downstream compilation. All eight compiler probes agree with the proposal. Adjacent summaries compile in both modes; invalid placement yields CS1587 only with documentation generation; semantic mismatch compiles in both.
+
+Follow-up T-96 records focused syntax-aware enforcement and waits on T-91 and T-92. T-92 already tracks the remaining HarnessService.ExhaustedAsync adjacent summaries; no repair was made by this task. Final policy leaves existing documentation/build settings unchanged.
+
+## Final integration review
+
+Worker report: success/done, codex/gpt-6-astra implementer tier. committedByLauncher=true; reviewed the actual launcher-created commit d091de974b544b2e2df1ab8902e0558dba6fd943 in full rather than relying on the worker's precommit report. It contains exactly docs/xml-documentation-policy.md and scripts/test-xml-documentation-policy.ps1. Worker ran both default and exact serial build/test commands successfully (4789 tests each). Integrated by fast-forward into task/T-91-xml-policy only, then removed the clean worker worktree and redundant unit branch.
+
+Independent final runner at d091de974b544b2e2df1ab8902e0558dba6fd943: exit 0 on SDK 10.0.204. All 120 project/mode/code table cells compared directly with final inventory JSON and matched. All eight fixtures matched. Mode exits 0/0/1 as documented. Independent final normal build: exit 0, 0 warnings, 0 errors. git diff --check passed. Source/build/test files are unchanged from the baseline tested independently above, so that full test coverage applies after the documentation/runner-only integration; no redundant full test rerun was needed.
+
+Evidence is preserved in the task worktree artifacts/final-inventory, final-build.log, review-test.log, review-cli-retest.log, review-launch-retest.log, worker-evidence and t91-worker3.log. Temporary fixture and test trees and worker worktrees are cleaned. No runtime application or hub was started. The task branch and review evidence remain for validation; no push or default-branch merge occurred.
