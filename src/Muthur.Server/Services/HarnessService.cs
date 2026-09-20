@@ -43,7 +43,6 @@ public sealed class HarnessService(Ledger ledger, MuthurOptions options)
         return ledger.MutateAsync(caller, m => ApplyAsync(m, request.Account.Trim(), request.Until, ct), ct);
     }
 
-    /// <summary>Shared with <see cref="AgentService"/>: an agent reporting itself limited also limits its account.</summary>
     /// <summary>Automatic exhaustion never clears or shortens an existing account limit.</summary>
     internal static async Task ExhaustedAsync(Mutation m, string account, CancellationToken ct)
     {
@@ -53,6 +52,7 @@ public sealed class HarnessService(Ledger ledger, MuthurOptions options)
         await ApplyAsync(m, account, until, ct);
     }
 
+    /// <summary>Shared with <see cref="AgentService"/>: an agent reporting itself limited also limits its account.</summary>
     public static async Task ApplyAsync(Mutation m, string account, DateTimeOffset? until, CancellationToken ct)
     {
         var existing = await m.Db.AccountLimits.SingleOrDefaultAsync(l => l.Account == account, ct);
