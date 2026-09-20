@@ -144,8 +144,14 @@ public sealed class CensusTests
         var options = Options();
         var runner = new CensusFakeRunner();
         var source = new CensusSource(options, runner);
+        if (!OperatingSystem.IsWindows())
+        {
+            Assert.Equal("Census execution requires Windows.", (await Assert.ThrowsAsync<InvalidOperationException>(() => source.ProbeAsync("smoke"))).Message);
+            Assert.Equal(0, runner.Calls);
+            return;
+        }
         await source.ProbeAsync("smoke");
-        options.CensusChecks["smoke"].FileName = OperatingSystem.IsWindows() ? "cmd.exe" : "sh";
+        options.CensusChecks["smoke"].FileName = "cmd.exe";
         await source.ProbeAsync("smoke");
         options.CensusChecks["smoke"].FileName = "census-missing-" + Guid.NewGuid();
         Assert.Equal("Census executable unavailable.", (await Assert.ThrowsAsync<InvalidOperationException>(() => source.ProbeAsync("smoke"))).Message);

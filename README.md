@@ -184,6 +184,9 @@ on a different vendor than the author.
 (also on hub startup and `muthur inbound poll`). No check is enabled by default, and a sweep launches no
 model or agent session. Findings enter inbound for comms on-call triage and normal claim/convert handling.
 
+Census execution currently requires Windows. On other platforms execution and doctor probes report
+that limitation without launching a check; the other ingest adapters remain available as before.
+
 Configure the hub locally, for example in its `appsettings.json`, then restart it:
 
 ```json
@@ -206,7 +209,7 @@ Environment settings also work: `Muthur__CensusChecks__backup-status__FileName`,
 restart. Keys must match `[a-z0-9][a-z0-9-]{0,63}` exactly. The executable must be nonblank, the working
 directory must be an existing absolute directory, arguments must be a list of strings, and the timeout
 must be 1–60 seconds (default 30). Arguments are literal; scripts require an explicit interpreter such
-as `pwsh -File` or `sh` with the script as an argument. Source locations contain only the key, never commands.
+as `pwsh -File` with the script as an argument. Source locations contain only the key, never commands.
 
 Register the source as founder (this replaces the project's ingest list; include any other sources to retain):
 

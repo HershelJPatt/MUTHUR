@@ -16,15 +16,26 @@ public sealed class CensusCommandRunnerTests : IDisposable
 
     public void Dispose() => Directory.Delete(_root, recursive: true);
 
+    [CensusNonWindowsFact]
+    public async Task Unsupported_platform_is_rejected_before_launching_a_fixture()
+    {
+        var marker = Path.Combine(_root, "launched");
+        var result = await _runner.RunAsync("/bin/sh", ["-c", "touch \"$1\"", "fixture", marker], _root, Eventually.Budget);
+        Assert.Equal(127, result.ExitCode);
+        Assert.Equal("Census execution requires Windows.", result.StdErr);
+        Assert.Empty(result.StdOut);
+        Assert.False(File.Exists(marker));
+    }
+
     private Task<ProcessResult> Run(string script, TimeSpan? timeout = null, CancellationToken ct = default, params string[] arguments)
     {
-        var file = Path.Combine(_root, Guid.NewGuid() + ".ps1");
+        var file = Path.Combine(_root, "script with spaces " + Guid.NewGuid() + ".ps1");
         File.WriteAllText(file, script);
         return _runner.RunAsync("pwsh", ["-NoLogo", "-NoProfile", "-NonInteractive", "-File", file, .. arguments],
             _root, timeout ?? Eventually.Budget, ct);
     }
 
-    [Fact]
+    [CensusWindowsFact]
     public async Task Arguments_are_literal_streams_are_utf8_stdin_is_closed_and_secrets_are_scrubbed()
     {
         string[] secrets = ["MUTHUR_AGENT", "MUTHUR_TOKEN", "Muthur__DiscordBotToken"];
@@ -32,7 +43,7 @@ public sealed class CensusCommandRunnerTests : IDisposable
         try
         {
             foreach (var name in secrets) Environment.SetEnvironmentVariable(name, "secret");
-            string[] arguments = ["space separated", "quote\"literal", "$env:MUTHUR_TOKEN", "; exit 17", "é漢字", ""];
+            string[] arguments = ["space separated", "quote\"literal", "$env:MUTHUR_TOKEN", "; exit 17", "é漢字", "", @"C:\trailing\", @"C:\space separated\", "\"C:\\quoted path\\file.txt\"", "slash\\\"quote"];
             var result = await Run("""
                 [Console]::OutputEncoding = [Text.UTF8Encoding]::new($false)
                 $value = @{
@@ -58,7 +69,7 @@ public sealed class CensusCommandRunnerTests : IDisposable
         }
     }
 
-    [Fact]
+    [CensusWindowsFact]
     public async Task Startup_failure_has_a_fixed_code_and_message()
     {
         var result = await _runner.RunAsync(Path.Combine(_root, "missing-secret-command"), ["secret"], _root, Eventually.Budget);
@@ -66,7 +77,7 @@ public sealed class CensusCommandRunnerTests : IDisposable
         Assert.DoesNotContain("secret", result.Message);
     }
 
-    [Theory]
+    [CensusWindowsTheory]
     [InlineData("Out")]
     [InlineData("Error")]
     public async Task Each_stream_is_capped_while_reading_and_the_child_is_reaped(string stream)
@@ -84,7 +95,7 @@ public sealed class CensusCommandRunnerTests : IDisposable
         AssertStopped(int.Parse(File.ReadAllText(pidFile)));
     }
 
-    [Fact]
+    [CensusWindowsFact]
     public async Task Exactly_the_stream_limit_is_accepted()
     {
         var result = await Run("[Console]::Out.Write(('x' * 1048576)); [Console]::Error.Write(('y' * 1048576))");
@@ -93,7 +104,7 @@ public sealed class CensusCommandRunnerTests : IDisposable
         Assert.Equal(CensusCommandRunner.OutputLimit, result.StdErr.Length);
     }
 
-    [Fact]
+    [CensusWindowsFact]
     public async Task Timeout_covers_execution_and_reaps_the_child()
     {
         var pidFile = Path.Combine(_root, "pid");
@@ -105,7 +116,7 @@ public sealed class CensusCommandRunnerTests : IDisposable
         AssertStopped(int.Parse(File.ReadAllText(pidFile)));
     }
 
-    [Fact]
+    [CensusWindowsFact]
     public async Task Cancellation_reaps_the_child_before_rethrowing()
     {
         var pidFile = Path.Combine(_root, "pid");
@@ -121,10 +132,15 @@ public sealed class CensusCommandRunnerTests : IDisposable
             await Assert.ThrowsAnyAsync<OperationCanceledException>(() => running.WaitAsync(Eventually.Budget));
             AssertStopped(int.Parse(File.ReadAllText(pidFile)));
         }
-        finally { cancellation.Cancel(); }
+        finally
+        {
+            cancellation.Cancel();
+            try { await running; }
+            catch (OperationCanceledException) { }
+        }
     }
 
-    [Theory]
+    [CensusWindowsTheory]
     [InlineData(false)]
     [InlineData(true)]
     public async Task Timeout_also_covers_descendants_holding_pipes_after_parent_exit(bool parentExits)
@@ -149,6 +165,26 @@ public sealed class CensusCommandRunnerTests : IDisposable
         AssertStopped(int.Parse(File.ReadAllText(pidFile)));
     }
 
+    [CensusWindowsFact]
+    public async Task Nonzero_exit_reaps_descendants_even_when_the_parent_has_exited()
+    {
+        var childFile = Path.Combine(_root, "child.ps1");
+        File.WriteAllText(childFile, "[Threading.ManualResetEvent]::new($false).WaitOne() | Out-Null");
+        var pidFile = Path.Combine(_root, "child-pid");
+        var result = await Eventually.CompletesAsync(Run("""
+            $start = [Diagnostics.ProcessStartInfo]::new('pwsh')
+            $start.UseShellExecute = $false
+            $start.CreateNoWindow = $true
+            $start.WindowStyle = [Diagnostics.ProcessWindowStyle]::Hidden
+            foreach ($arg in @('-NoProfile', '-File', $args[0])) { $start.ArgumentList.Add($arg) }
+            $child = [Diagnostics.Process]::Start($start)
+            [IO.File]::WriteAllText($args[1], [string]$child.Id)
+            exit 17
+            """, arguments: [childFile, pidFile]), "nonzero exit left a descendant holding pipes");
+        Assert.Equal(17, result.ExitCode);
+        AssertStopped(int.Parse(File.ReadAllText(pidFile)));
+    }
+
     private static void AssertStopped(int pid)
     {
         try
@@ -157,5 +193,29 @@ public sealed class CensusCommandRunnerTests : IDisposable
             Assert.True(process.HasExited, $"Census child {pid} remains alive.");
         }
         catch (ArgumentException) { }
+    }
+}
+
+public sealed class CensusWindowsFactAttribute : FactAttribute
+{
+    public CensusWindowsFactAttribute()
+    {
+        if (!OperatingSystem.IsWindows()) Skip = "Census execution requires Windows.";
+    }
+}
+
+public sealed class CensusWindowsTheoryAttribute : TheoryAttribute
+{
+    public CensusWindowsTheoryAttribute()
+    {
+        if (!OperatingSystem.IsWindows()) Skip = "Census execution requires Windows.";
+    }
+}
+
+public sealed class CensusNonWindowsFactAttribute : FactAttribute
+{
+    public CensusNonWindowsFactAttribute()
+    {
+        if (OperatingSystem.IsWindows()) Skip = "Exercises rejection on non-Windows platforms.";
     }
 }

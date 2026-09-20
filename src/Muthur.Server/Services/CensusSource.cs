@@ -51,6 +51,7 @@ public sealed partial class CensusSource(MuthurOptions options, ICensusCommandRu
     {
         ct.ThrowIfCancellationRequested();
         var check = Configuration(location);
+        if (!OperatingSystem.IsWindows()) throw new InvalidOperationException(CensusCommandRunner.PlatformError);
         try
         {
             if (!ExecutableExists(check.FileName)) throw new InvalidOperationException();
