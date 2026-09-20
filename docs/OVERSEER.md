@@ -48,13 +48,24 @@ revokes decision authority immediately. The role defaults off on upgrade.
 
 ## Authority
 
-Agents use `muthur ask --kind technical` for engineering decisions within the founder's
-established direction. The default `human` kind and all older unclassified requests
-remain founder-only. The author must not label product preferences, spending, permission
-changes, account access, secrets or outbound approvals as technical. The overseer must
-also defer mislabeled or ambiguous requests. Classification is a semantic judgment;
-the server enforces the recorded category, not the meaning of arbitrary prose.
+Ordinary `muthur ask` requests now default to `triage`. The overseer classifies them
+with `muthur overseer triage <id> --kind technical|human --reason <why> --evidence <references>`.
+Classification is recorded and visible in CLI request output and the decision cards; it
+never unblocks a task. A technical classification allows the separate decide command.
+Explicit `--kind technical` is still supported for known engineering questions.
+Explicit `--kind human`, old human records and missing-category legacy records remain
+founder-only: the overseer cannot downgrade them. Older clients that explicitly send
+human retain that protection rather than silently acquiring new semantics.
 
+The standing mandate includes preserving documented compatibility, enforcing shared
+rules, resolving duplicate implementation scope and consistent internal identifiers.
+The words policy, compatibility and contract do not alone justify deferral. Product
+commitments/preferences, spending/concurrency, account access, permission expansion,
+secrets and outbound approvals remain human. Mixed questions retain their human portion.
+Semantic classification needs evidence-based agent judgment; the server enforces the
+recorded route and authenticated authority, not the meaning of arbitrary prose.
+Mislabeled technical requests may be escalated to human, never automatically reversed.
+Current route metadata takes precedence over stale labels in a checkpoint summary.
 `muthur overseer decide <id> <answer> --reason <why> --evidence <references>` requires
 the active enabled overseer's identity. It records the actual agent, rationale and
 evidence, and uses the ordinary transactional request-unblocking path. The overseer can

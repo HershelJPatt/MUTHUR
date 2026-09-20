@@ -15,6 +15,8 @@ public static class MessageEndpoints
         { await service.CheckpointAsync(http.GetCaller(), checkpoint, ct); return Results.Ok(); });
         app.MapPost(Routes.Api + "/overseer/decide", (HttpContext http, OverseerDecision decision, RequestService service, CancellationToken ct) =>
             service.DecideAsync(http.GetCaller(), decision, ct));
+        app.MapPost(Routes.Api + "/overseer/triage", (HttpContext http, OverseerTriage request, RequestService service, CancellationToken ct) =>
+            service.TriageAsync(http.GetCaller(), request, ct));
         app.MapPost(Routes.Messages, (HttpContext http, SendMessageRequest request, MessageService messages, CancellationToken ct) =>
             messages.SendAsync(http.GetCaller(), request, ct));
 

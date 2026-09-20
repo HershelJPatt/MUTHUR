@@ -4,7 +4,7 @@
 
 <section class="panel">
     <div class="panel-head">
-        <span class="panel-title">Waiting on you</span>
+        <span class="panel-title">Decision requests</span>
         <span class="panel-sub">@_open open</span>
     </div>
     <div class="panel-body">
@@ -175,6 +175,7 @@
                 <span class="card-age">@Format.Age(request.CreatedAt, _now)</span>
             </div>
             <div class="request-question">@request.Question</div>
+            <div class="agent-meta"><span class="tag">@(request.Kind == "human" ? "Founder only" : request.Kind == "technical" ? "Overseer decision" : "Overseer triage")</span> @request.RouteReason</div>
             @if (request.Options.Count > 0)
             {
                 <div class="btn-row">

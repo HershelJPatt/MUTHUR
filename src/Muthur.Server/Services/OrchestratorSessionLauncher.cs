@@ -168,8 +168,9 @@ public sealed class OrchestratorSessionLauncher(
         - Never push, never merge into the default branch. `muthur task land` is how work lands.
         - If the task needs a decision only the founder can make, `muthur ask` and stop. Never guess at a product
           decision, and never answer a founder request yourself.
-        - For engineering judgment within existing founder direction, use `muthur ask --kind technical`; the organization overseer can answer it.
-          Product preferences, spending, permissions, account access, secrets and outbound approvals must stay the default human kind.
+        - Ordinary `muthur ask` defaults to overseer triage; use `--kind technical` for known engineering judgment within existing direction.
+          Preserving compatibility, shared-rule enforcement, duplicate scope and consistent identifiers are technical; do not escalate merely because they involve policy or contracts.
+          Product commitments/preferences, spending/concurrency, permission expansion, account access, secrets and outbound approvals must explicitly use `--kind human`.
 
         You are running unattended on {candidate.Harness}. Leave nothing behind that a person would have to clean up.
         """;

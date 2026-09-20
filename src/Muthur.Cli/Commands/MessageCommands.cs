@@ -44,10 +44,10 @@ public static class MessageCommands
 
     private static void AddAsk(RootCommand root)
     {
-        var question = new Argument<string>("question") { Description = "A concrete question only a founder can settle." };
+        var question = new Argument<string>("question") { Description = "A concrete decision for overseer triage or an explicitly reserved founder question." };
         var task = new Option<string?>("--task") { Description = "The task this blocks; it moves to 'blocked' until answered." };
         var option = new Option<string[]>("--option") { Description = "An answer you propose (repeatable). Offer options whenever you can.", AllowMultipleArgumentsPerToken = true };
-        var kind = new Option<string>("--kind") { DefaultValueFactory = _ => "human", Description = "human (default), or technical for delegated engineering judgment. Never technical for preferences, spending, permissions, account access, secrets or outbound approvals." };
+        var kind = new Option<string>("--kind") { DefaultValueFactory = _ => "triage", Description = "triage (default): overseer classifies and directs engineering work; technical: delegated engineering judgment; human: explicit founder-only product, spending, permission, account, secret or outbound decision." };
         var ask = new Command("ask", "Ask for a decision; human requests remain founder-only.") { question, task, option, kind };
         ask.SetAction(async (parse, ct) => Output.Emit(parse, await HubClient.For(parse).PostAsync(Routes.Requests,
             new AskRequest(parse.GetValue(question)!, parse.GetValue(task), parse.GetValue(option), parse.GetValue(kind)!), MuthurJsonContext.Default.AskRequest, ct)));

@@ -1,4 +1,6 @@
 using Microsoft.EntityFrameworkCore;
+using System.Text.Json;
+using Muthur.Data;
 using Muthur.Contracts;
 using Muthur.Core;
 using Muthur.Core.Entities;
@@ -6,13 +8,13 @@ using Muthur.Server.Auth;
 
 namespace Muthur.Server.Services;
 
-/// <summary>Questions only a founder can answer. Asking blocks the task; the answer unblocks it and wakes the asker.</summary>
+/// <summary>Decision requests: overseer triage, delegated technical judgment, or protected human decisions.</summary>
 public sealed class RequestService(Ledger ledger, LeasePolicy leases)
 {
     public Task<FounderRequestDto> AskAsync(Caller caller, AskRequest request, CancellationToken ct = default)
     {
         var agentId = caller.RequireAgent();
-        if (request.Kind is not ("human" or "technical")) throw Fail.Rule("request_kind", "Request kind must be human or technical.");
+        if (request.Kind is not ("triage" or "human" or "technical")) throw Fail.Rule("request_kind", "Request kind must be triage, human or technical.");
         if (string.IsNullOrWhiteSpace(request.Question))
             throw Fail.Rule("question_required", "Ask a concrete question; offer options when you can.");
 
@@ -29,7 +31,7 @@ public sealed class RequestService(Ledger ledger, LeasePolicy leases)
                 {
                     task.State = TaskState.Blocked;
                     task.UpdatedAt = m.Now;
-                    m.Record("task.blocked", task.Id, new { reason = "waiting on a founder" });
+                    m.Record("task.blocked", task.Id, new { reason = "waiting on a decision", kind = request.Kind });
                 }
             }
 
@@ -46,8 +48,8 @@ public sealed class RequestService(Ledger ledger, LeasePolicy leases)
             m.Db.FounderRequests.Add(entity);
             await m.Db.SaveChangesAsync(ct);
             await OverseerService.Store(m, $"request.kind.{entity.Id}", request.Kind, ct);
-            m.Record("request.asked", task?.Id, new { request = entity.Id, agent = caller.Name, entity.Question, entity.Options });
-            return ToDto(entity, task?.Title);
+            m.Record("request.asked", task?.Id, new { request = entity.Id, agent = caller.Name, entity.Question, entity.Options, kind = request.Kind });
+            return ToDto(entity, task?.Title) with { Kind = request.Kind, RouteReason = DefaultReason(request.Kind) };
         }, ct);
     }
 
@@ -68,6 +70,52 @@ public sealed class RequestService(Ledger ledger, LeasePolicy leases)
         return AnswerCoreAsync(caller, decision.Request, new AnswerRequest(answer), true, ct);
     }
 
+    public Task<FounderRequestDto> TriageAsync(Caller caller, OverseerTriage request, CancellationToken ct = default)
+    {
+        if (request.Kind is not ("technical" or "human") || string.IsNullOrWhiteSpace(request.Reason) ||
+            string.IsNullOrWhiteSpace(request.Evidence) || request.Reason.Length > 2000 || request.Evidence.Length > 2000)
+            throw Fail.Rule("triage_evidence", "Choose technical or human with a reason and evidence (at most 2000 characters each).");
+        return ledger.MutateAsync(caller, async m =>
+        {
+            await OverseerService.RequireActive(m, ct);
+            var entity = await m.Db.FounderRequests.SingleOrDefaultAsync(r => r.Id == request.Request, ct)
+                ?? throw Fail.NotFound("Request", request.Request.ToString());
+            if (entity.Status != RequestStatus.Open) throw Fail.Conflict("request_closed", "Only an open request can be triaged.");
+            var current = await WithRouteAsync(m.Db, ToDto(entity, null), ct);
+            if (current.Kind == "human") throw Fail.Unauthorized("Explicit or legacy human-only requests cannot be reclassified by the overseer.");
+            var reason = $"{request.Reason.Trim()}\nEvidence: {request.Evidence.Trim()}";
+            await OverseerService.Store(m, $"request.kind.{entity.Id}", request.Kind, ct);
+            await OverseerService.Store(m, $"request.routeReason.{entity.Id}", reason, ct);
+            m.Record("request.triaged", entity.TaskId, new { request = entity.Id, from = current.Kind,
+                kind = request.Kind, request.Reason, request.Evidence });
+            var title = entity.TaskId is { } id ? await m.Db.Tasks.Where(t => t.Id == id).Select(t => t.Title).SingleAsync(ct) : null;
+            return ToDto(entity, title) with { Kind = request.Kind, RouteReason = reason };
+        }, ct);
+    }
+
+    internal static string KindFor(IReadOnlyDictionary<string, string> routes, int id) =>
+        routes.GetValueOrDefault($"request.kind.{id}") switch
+        {
+            "\"triage\"" => "triage",
+            "\"technical\"" => "technical",
+            _ => "human"
+        };
+    private static string DefaultReason(string kind) => kind switch
+    {
+        "triage" => "Awaiting overseer classification and technical direction.",
+        "technical" => "Delegated engineering decision; overseer may answer with reasoning and evidence.",
+        _ => "Reserved for the founder; legacy or explicit human-only request."
+    };
+    internal static string ReasonFor(IReadOnlyDictionary<string, string> routes, int id) =>
+        routes.TryGetValue($"request.routeReason.{id}", out var text)
+            ? JsonSerializer.Deserialize<string>(text) ?? DefaultReason(KindFor(routes, id)) : DefaultReason(KindFor(routes, id));
+    private static async Task<FounderRequestDto> WithRouteAsync(MuthurDb db, FounderRequestDto dto, CancellationToken ct)
+    {
+        var keys = new[] { $"request.kind.{dto.Id}", $"request.routeReason.{dto.Id}" };
+        var routes = await db.Meta.Where(x => keys.Contains(x.Key)).ToDictionaryAsync(x => x.Key, x => x.Value, ct);
+        return dto with { Kind = KindFor(routes, dto.Id), RouteReason = ReasonFor(routes, dto.Id) };
+    }
+
     private Task<FounderRequestDto> AnswerCoreAsync(Caller caller, int id, AnswerRequest request, bool delegated, CancellationToken ct) =>
         ledger.MutateAsync(caller, async m =>
         {
@@ -75,7 +123,7 @@ public sealed class RequestService(Ledger ledger, LeasePolicy leases)
             {
                 await OverseerService.RequireActive(m, ct);
                 var kind = await m.Db.Meta.Where(x => x.Key == $"request.kind.{id}").Select(x => x.Value).SingleOrDefaultAsync(ct);
-                if (kind != "\"technical\"") throw Fail.Unauthorized("This request is human-only; it has not been explicitly delegated as technical.");
+                if (kind != "\"technical\"") throw Fail.Unauthorized("Only technical requests can be answered. Classify triage requests first; human-only requests remain protected.");
             }
             var entity = await m.Db.FounderRequests.SingleOrDefaultAsync(r => r.Id == id, ct) ?? throw Fail.NotFound("Request", id.ToString());
             if (entity.Status != RequestStatus.Open)
@@ -89,7 +137,7 @@ public sealed class RequestService(Ledger ledger, LeasePolicy leases)
             var title = await UnblockAsync(m, entity, ct);
             MessageService.Post(m, null, caller.Name, Recipient.Agent, entity.AgentName,
                 $"Answer to your request #{id} (\"{entity.Question}\"): {entity.Answer}", entity.TaskId);
-            return ToDto(entity, title);
+            return await WithRouteAsync(m.Db, ToDto(entity, title), ct);
         }, ct);
 
     /// <summary>
@@ -138,7 +186,7 @@ public sealed class RequestService(Ledger ledger, LeasePolicy leases)
             if (caller.AgentId != entity.AgentId) // someone else closed the asker's question: they should hear about it
                 MessageService.Post(m, null, caller.Name, Recipient.Agent, entity.AgentName,
                     $"Your request #{id} (\"{entity.Question}\") was withdrawn without an answer. Decide it yourself within your remit, or ask again with more context.", entity.TaskId);
-            return ToDto(entity, title);
+            return await WithRouteAsync(m.Db, ToDto(entity, title), ct);
         }, ct);
 
     /// <summary>
@@ -175,11 +223,14 @@ public sealed class RequestService(Ledger ledger, LeasePolicy leases)
                     .Select(g => new { Parent = g.Key, Count = g.Count() })
                     .ToDictionaryAsync(x => x.Parent, x => x.Count, ct);
 
+            var routeKeys = rows.SelectMany(r => new[] { $"request.kind.{r.Id}", $"request.routeReason.{r.Id}" }).ToArray();
+            var routes = await db.Meta.Where(x => routeKeys.Contains(x.Key)).ToDictionaryAsync(x => x.Key, x => x.Value, ct);
             var dtos = rows.Select(r =>
             {
                 var task = r.TaskId is { } id ? tasks.GetValueOrDefault(id) : null;
                 var blocks = task is { State: TaskState.Blocked };
-                return ToDto(r, task?.Title, blocks, blocks ? dependents.GetValueOrDefault(task!.Id) : 0);
+                return ToDto(r, task?.Title, blocks, blocks ? dependents.GetValueOrDefault(task!.Id) : 0)
+                    with { Kind = KindFor(routes, r.Id), RouteReason = ReasonFor(routes, r.Id) };
             });
 
             return openOnly
