@@ -107,6 +107,9 @@ task to the backlog for someone else to pick up.
    default branch as well — the implementer's contract needs it to tell an inherited lineage from work of its
    own. And say in the prompt that the worktree may have arrived somewhere else, and that checking is the
    first thing it does.
+   If the named base no longer matches the full dispatch SHA, the worker must return `STATUS: blocked`.
+   Redispatch with an updated frozen assignment after verifying the current base and spec; do not tell the
+   worker to ignore the mismatch or use the old SHA instead of the live branch.
 5. **Review like it's going to production, because it is.** Read every diff. Run the build and the tests
    yourself. Check the change against the spec line by line, and against the codebase's conventions.
    Send work back with specific corrections until it is right. Fix trivial things by instructing the

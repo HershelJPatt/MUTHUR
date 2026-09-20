@@ -1,6 +1,6 @@
 ---
 name: muthur-specialist
-description: Mastermind-tier worker for a unit that is itself a large, subtle or high-cost-of-error problem (concurrency, security, data migration, core algorithms). Becomes the domain expert for that unit and makes the change itself in an isolated worktree. Use instead of muthur-implementer when a frozen spec cannot honestly remove all the judgment from the work.
+description: Mastermind-tier worker for a unit that is itself a large, subtle or high-cost-of-error problem (concurrency, security, data migration, core algorithms). Becomes the domain expert for that unit and makes the change itself in an isolated worktree. Use instead of muthur-implementer when a frozen spec cannot honestly remove all the judgment from the work. Give it the spec path, the unit it owns, the named local base branch, its full commit SHA at dispatch, the named default branch, and the exact verification commands.
 model: inherit
 isolation: worktree
 disallowedTools:
