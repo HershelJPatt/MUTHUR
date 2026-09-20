@@ -21,6 +21,23 @@ public sealed partial class AgentService(Ledger ledger, LeasePolicy leases, Time
         else throw new InvalidOperationException("Child identity was revoked; stop the session instead of renewing another owner's lease.");
     }
 
+    internal Task ReleaseChildAsync(Muthur.Launch.AgentIdentity identity, CancellationToken ct) =>
+        ledger.MutateAsync(Caller.Founder, async m =>
+        {
+            var hash = Tokens.Hash(identity.Token);
+            var agent = await m.Db.Agents.SingleOrDefaultAsync(a => a.Name == identity.Name && a.TokenHash == hash, ct);
+            if (agent is null) return; // Re-registration belongs to another session.
+            var holds = await m.Db.RoleHolds.Where(h => h.AgentId == agent.Id).ToListAsync(ct);
+            foreach (var hold in holds)
+            {
+                m.Db.RoleHolds.Remove(hold);
+                m.Record("role.released", payload: new { role = hold.RoleKey, agent = agent.Name, reason = "child exited" });
+            }
+            var claims = await m.Db.TaskValidations.Where(v => v.ClaimedByAgentId == agent.Id).ToListAsync(ct);
+            foreach (var claim in claims) { claim.ClaimedByAgentId = null; claim.ClaimExpires = null; }
+            m.Record("conductor.child_exited", payload: new { agent = agent.Name, roles = holds.Count, claims = claims.Count });
+        }, ct);
+
     [GeneratedRegex("^[a-z0-9][a-z0-9._-]{0,79}$")]
     private static partial Regex NamePattern();
 

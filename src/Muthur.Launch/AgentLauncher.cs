@@ -16,7 +16,8 @@ public sealed record AgentIdentity(string Name, string Token);
 /// </para>
 /// </summary>
 public sealed class AgentLauncher(IProcessRunner processes, Func<string, (string FileName, IReadOnlyList<string> Prefix)?>? resolve = null,
-    Func<AgentIdentity, CancellationToken, Task>? heartbeat = null, TimeProvider? timeProvider = null)
+    Func<AgentIdentity, CancellationToken, Task>? heartbeat = null, TimeProvider? timeProvider = null,
+    Func<AgentIdentity, CancellationToken, Task>? exited = null)
 {
     private readonly Func<string, (string FileName, IReadOnlyList<string> Prefix)?> _resolve = resolve ?? ExecutableResolver.Resolve;
 
@@ -81,7 +82,11 @@ public sealed class AgentLauncher(IProcessRunner processes, Func<string, (string
                 try { await running; } catch { /* Observe the child shutdown before releasing the session slot. */ }
                 throw;
             }
-            finally { await lifetime.CancelAsync(); }
+            finally
+            {
+                await lifetime.CancelAsync();
+                if (exited is not null) await exited(identity, CancellationToken.None);
+            }
             var outcome = adapter.Interpret(request, result);
             attempts.Add(new(candidate, outcome, clock.Elapsed));
 

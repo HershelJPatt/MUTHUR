@@ -15,6 +15,8 @@ requests retain their separate blocked state and human gate.
 The launcher renews task and role leases every 30 seconds while its child remains
 running. Process completion, timeout or cancellation stops renewal. Revoked identity
 stops the child rather than extending authority. Existing session timeouts still apply.
+An exited child's role holds and validation claims are released immediately; a later
+re-registration is protected by checking the original child's token before cleanup.
 
 Conductor-started orchestrators clean up before submitting work for validation, record
 their final branch/head/checks report and exit. This frees capacity for validators.

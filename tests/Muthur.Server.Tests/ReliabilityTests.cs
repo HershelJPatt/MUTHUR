@@ -160,6 +160,22 @@ public sealed class ReliabilityTests : IDisposable
         Assert.True(runner.Token.IsCancellationRequested);
     }
 
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task Child_exit_releases_roles_but_cannot_release_a_reregistered_session(bool reregister)
+    {
+        var agents = _hub.Services.GetRequiredService<AgentService>();
+        var registration = await agents.RegisterConductorSessionAsync(new("reviewer", "codex", "test"));
+        var child = _hub.CreateClient(registration.Token);
+        (await _hub.Founder().PutAsJsonAsync(Routes.Roles, new DefineRoleRequest("review", "Review", true))).EnsureSuccessStatusCode();
+        (await child.PostAsync(Routes.RoleAction("review", "take"), null)).EnsureSuccessStatusCode();
+        if (reregister) await agents.RegisterConductorSessionAsync(new("reviewer", "codex", "test"));
+        await agents.ReleaseChildAsync(new("reviewer", registration.Token), default);
+        var roles = await _hub.Services.GetRequiredService<RoleService>().ListAsync();
+        Assert.Equal(reregister ? 1 : 0, Assert.Single(roles).Holders.Count);
+    }
+
     private sealed class HeldProcess : IProcessRunner
     {
         public TaskCompletionSource Started { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);

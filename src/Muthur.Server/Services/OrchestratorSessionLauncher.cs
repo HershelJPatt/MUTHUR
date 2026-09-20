@@ -38,7 +38,7 @@ public sealed class OrchestratorSessionLauncher(
         var scratch = Path.Combine(options.DataDir, "conductor", $"{assignment.TaskKey}-orchestrator");
         Directory.CreateDirectory(scratch);
 
-        var launcher = new AgentLauncher(processes, heartbeat: agents.RenewChildAsync, timeProvider: clock);
+        var launcher = new AgentLauncher(processes, heartbeat: agents.RenewChildAsync, timeProvider: clock, exited: agents.ReleaseChildAsync);
         var attempts = await launcher.RunAsync(
             candidates,
             candidate => new WorkerRequest(
