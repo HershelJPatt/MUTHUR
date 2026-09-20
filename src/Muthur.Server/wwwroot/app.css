@@ -124,6 +124,7 @@ b { font-weight: 600; }
 .role-row .role-holder { margin-left: auto; color: var(--faint); font-size: 10.5px; }
 
 /* ---------- receipts ---------- */
+.notice { font: 11px var(--mono); color: var(--amber); background: var(--amber-bg); border: 1px solid var(--amber); border-radius: 6px; padding: 8px 10px; margin: 6px 4px 0; }
 .section-note { font: 11px var(--mono); color: var(--faint); padding: 0 4px 4px; }
 .receipt-task { color: var(--blue); }
 .receipt-title { flex: 1; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }

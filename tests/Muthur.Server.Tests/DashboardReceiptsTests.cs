@@ -271,6 +271,106 @@ public sealed class DashboardReceiptsTests : IDisposable
             Assert.Matches($"<a [^>]*href=\"/receipts\\?hours={hours}\"[^>]*>{label}</a>", row);
     }
 
+    [Theory]
+    [InlineData("", 24)]
+    [InlineData(" ", 24)]
+    [InlineData("7d", 24)]
+    [InlineData("24h", 24)]
+    [InlineData("30d", 24)]
+    [InlineData("abc", 24)]
+    [InlineData("1e9", 24)]
+    [InlineData("24,168", 24)]
+    [InlineData("null", 24)]
+    [InlineData("9223372036854775808", 24)]
+    [InlineData("0", 1)]
+    [InlineData("-9", 1)]
+    [InlineData("-9223372036854775808", 1)]
+    public async Task Every_invalid_supplied_window_explains_the_actual_window(string hours, int effective)
+    {
+        var response = await TypedAsync(hours);
+
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        var page = await response.Content.ReadAsStringAsync();
+        Assert.Equal($"hours={hours} is not a positive integer number of hours, so this is the last " +
+            $"{effective} {(effective == 1 ? "hour" : "hours")}. " +
+            "The windows are hours=24 (24h), hours=168 (7d), hours=720 (30d).", Notice(page));
+        Assert.Equal(Since(await PageAsync(effective)), Since(page));
+        var row = WindowRow(page);
+        if (effective == 1) Assert.DoesNotContain("btn-on", row);
+        else Assert.Matches("<a class=\"btn btn-on\"[^>]*href=\"/receipts\\?hours=24\"", row);
+    }
+
+    [Theory]
+    [InlineData(null, 24)]
+    [InlineData("24", 24)]
+    [InlineData("168", 168)]
+    [InlineData("720", 720)]
+    [InlineData("100000", 720)]
+    [InlineData("9999999999999", 720)]
+    [InlineData("9223372036854775807", 720)]
+    public async Task Absent_and_valid_positive_windows_are_quiet(string? hours, int effective)
+    {
+        var response = hours is null ? await _hub.CreateClient().GetAsync("/receipts") : await TypedAsync(hours);
+
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        var page = await response.Content.ReadAsStringAsync();
+        Assert.DoesNotContain("class=\"notice\"", page);
+        Assert.Equal(Since(await PageAsync(effective)), Since(page));
+        Assert.Matches($"<a class=\"btn btn-on\"[^>]*href=\"/receipts\\?hours={effective}\"", WindowRow(page));
+    }
+
+    [Fact]
+    public async Task The_notice_follows_the_numeric_controls_and_their_links_fix_the_window()
+    {
+        var page = await (await TypedAsync("7d")).Content.ReadAsStringAsync();
+        var row = WindowRow(page);
+
+        Assert.Contains("hours=7d ", Notice(page));
+        Assert.DoesNotContain("notice", row);
+        Assert.DoesNotContain("<button", row, StringComparison.OrdinalIgnoreCase);
+        Assert.Matches(Regex.Escape(row) + "\\s*<div class=\"notice\">[^<]+</div>\\s*<div class=\"stats\">", page);
+        Assert.Equal(3, Regex.Matches(row, "<a ").Count);
+        foreach (var (hours, label) in new[] { (24, "24h"), (168, "7d"), (720, "30d") })
+        {
+            var link = Regex.Match(row, $"<a [^>]*href=\"(/receipts\\?hours={hours})\"[^>]*>{label}</a>");
+            Assert.True(link.Success);
+            Assert.Contains($"hours={hours} ({label})", Notice(page));
+            var response = await _hub.CreateClient().GetAsync(link.Groups[1].Value);
+            Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+            var followed = await response.Content.ReadAsStringAsync();
+            Assert.DoesNotContain("class=\"notice\"", followed);
+            Assert.Equal(Since(await PageAsync(hours)), Since(followed));
+            var followedRow = WindowRow(followed);
+            Assert.Matches($"<a class=\"btn btn-on\"[^>]*href=\"/receipts\\?hours={hours}\"", followedRow);
+            Assert.Single(Regex.Matches(followedRow, "btn-on"));
+        }
+    }
+
+    [Fact]
+    public async Task The_notice_clips_long_input_and_encodes_markup()
+    {
+        var longResponse = await TypedAsync(new string('x', 200));
+        Assert.Equal(HttpStatusCode.OK, longResponse.StatusCode);
+        var longPage = await longResponse.Content.ReadAsStringAsync();
+        Assert.StartsWith("hours=" + new string('x', 40) + "… is not", Notice(longPage));
+        Assert.DoesNotContain(new string('x', 41), longPage);
+
+        const string payload = "<img src=x onerror=alert(1)>";
+        var htmlResponse = await TypedAsync(payload);
+        Assert.Equal(HttpStatusCode.OK, htmlResponse.StatusCode);
+        var htmlPage = await htmlResponse.Content.ReadAsStringAsync();
+        Assert.StartsWith($"hours={payload} is not", Notice(htmlPage));
+        Assert.Contains("&lt;img", htmlPage);
+        Assert.DoesNotContain("<img", htmlPage, StringComparison.OrdinalIgnoreCase);
+    }
+
+    private static string Notice(string page)
+    {
+        var notice = Regex.Match(page, "<div class=\"notice\">([^<]*)</div>");
+        Assert.True(notice.Success, "the invalid window must render a notice");
+        return WebUtility.HtmlDecode(notice.Groups[1].Value);
+    }
+
     /// <summary>The selector row alone, so "no button here" means in the selector and not elsewhere on the page.</summary>
     private static string WindowRow(string page)
     {
@@ -384,7 +484,7 @@ public sealed class DashboardReceiptsTests : IDisposable
     {
         var css = await File.ReadAllTextAsync(AppCss());
 
-        // One page with every section on it, and one with none of them, so both branches are covered.
+        // Full, empty and invalid pages cover the sections and the window notice.
         await SpendAsync();
         await RunsAsync();
         var agent = await RegisterAsync("limited", "codex", "gpt", "cheap", "work@example.com");
@@ -393,11 +493,14 @@ public sealed class DashboardReceiptsTests : IDisposable
         var full = await PageAsync();
         using var bare = new HubFactory();
         var empty = await bare.CreateClient().GetStringAsync("/receipts");
+        var invalid = await (await TypedAsync("7d")).Content.ReadAsStringAsync();
 
         Assert.Contains("conductor validator sessions report no cost", full);   // the fixture really did render it all
         Assert.Contains("nothing spent in this window", empty);
-        var classes = ClassesIn(full).Union(ClassesIn(empty), StringComparer.Ordinal).Order(StringComparer.Ordinal).ToList();
+        var classes = ClassesIn(full).Union(ClassesIn(empty), StringComparer.Ordinal)
+            .Union(ClassesIn(invalid), StringComparer.Ordinal).Order(StringComparer.Ordinal).ToList();
         Assert.Contains("receipt-cost", classes);
+        Assert.Contains("notice", classes);
         foreach (var name in classes)
             Assert.True(css.Contains("." + name, StringComparison.Ordinal),
                 $"the dashboard renders class '{name}', which app.css does not define. Styling uses only classes " +
