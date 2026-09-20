@@ -7,7 +7,9 @@ $cliName = if ($IsWindows) { 'muthur.exe' } else { 'muthur' }
 $serverName = if ($IsWindows) { 'Muthur.Server.exe' } else { 'Muthur.Server' }
 $cli = (Resolve-Path -LiteralPath (Join-Path $InstallPath $cliName)).Path
 $server = (Resolve-Path -LiteralPath (Join-Path $InstallPath "server/$serverName")).Path
-$pwsh = (Get-Command pwsh -CommandType Application).Source
+$pwshCommand = Get-Command pwsh -CommandType Application -ErrorAction SilentlyContinue | Select-Object -First 1
+if ($null -eq $pwshCommand) { throw 'PowerShell executable (pwsh) was not found.' }
+$pwsh = $pwshCommand.Source
 $tempRoot = [IO.Path]::GetFullPath([IO.Path]::GetTempPath())
 $scratch = [IO.Path]::GetFullPath((Join-Path $tempRoot ('census-' + [Guid]::NewGuid().ToString('N'))))
 $savedEnv = @{}
@@ -44,7 +46,7 @@ function StopChild([Diagnostics.Process]$Child) {
         if (-not $Child.WaitForExit(10000)) { throw 'Scratch child did not stop within its cleanup deadline.' }
     }
 }
-function Cli([string[]]$Arguments, [switch]$Doctor) {
+function Invoke-CensusCli([string[]]$Arguments, [switch]$Doctor) {
     $child = StartChild $cli $Arguments
     try {
         $stdout = $child.StandardOutput.ReadToEndAsync()
@@ -66,13 +68,13 @@ function Cli([string[]]$Arguments, [switch]$Doctor) {
     finally { StopChild $child; $child.Dispose() }
 }
 function Poll([int]$NewItems, [int]$Errors = 0) {
-    $result = Cli @('inbound', 'poll', '--founder')
+    $result = Invoke-CensusCli @('inbound', 'poll', '--founder')
     Check ($result.sources -eq 1) 'Expected exactly one configured source.'
     Check ($result.newItems -eq $NewItems) "Expected $NewItems new inbound items."
     Check (@($result.errors).Count -eq $Errors) "Expected $Errors poll errors."
 }
 function Source {
-    $sources = @(Cli @('inbound', 'sources'))
+    $sources = @(Invoke-CensusCli @('inbound', 'sources'))
     Check ($sources.Count -eq 1) 'Expected one source record.'
     Check ($sources[0].source -ceq 'census:smoke') 'Source identity changed.'
     return $sources[0]
@@ -84,7 +86,7 @@ function Optional([object]$Object, [string]$Name) {
 }
 function IngestDoctor([string]$Status) {
     # This scratch project intentionally has no git history: evaluate the census row independently.
-    $report = Cli @('doctor', '--offline') -Doctor
+    $report = Invoke-CensusCli @('doctor', '--offline') -Doctor
     $ingest = @($report.checks | Where-Object { $_.category -ceq 'ingest' })
     Check ($ingest.Count -eq 1 -and $ingest[0].subject -ceq 'census:smoke' -and $ingest[0].status -ceq $Status) "Expected census doctor status $Status."
 }
@@ -146,29 +148,29 @@ if ($text -ceq 'nonzero') { [Console]::Out.Write('[]'); [Console]::Error.Write('
         catch [Threading.Tasks.TaskCanceledException] { }
     } while (-not $ready -and [DateTime]::UtcNow -lt $deadline)
     Check $ready 'Scratch hub startup exceeded 30 seconds.'
-    $project = Cli @('project', 'add', 'census-scratch', '--repo', $repo, '--ingest', 'census:smoke', '--founder')
+    $project = Invoke-CensusCli @('project', 'add', 'census-scratch', '--repo', $repo, '--ingest', 'census:smoke', '--founder')
     Check ($project.ingestSources[0] -ceq 'census:smoke') 'Registered source was not literal census:smoke.'
     Poll 1
-    $items = @(Cli @('inbound', 'list', '--status', 'all'))
+    $items = @(Invoke-CensusCli @('inbound', 'list', '--status', 'all'))
     Check ($items.Count -eq 1 -and $items[0].externalId -ceq 'smoke/stable/1') 'First incident identity is incorrect.'
     Check ($items[0].author -ceq 'census:smoke' -and $items[0].source -ceq 'census:smoke') 'Inbound source/author identity is incorrect.'
     $first = $items[0].id
     Poll 0
     Put $findings '[{"id":"stable","title":"Changed text","body":"Changed"}]'
     Poll 0
-    $unchanged = Cli @('inbound', 'show', $first)
+    $unchanged = Invoke-CensusCli @('inbound', 'show', $first)
     Check ($unchanged.title -ceq 'First observation' -and $unchanged.body -ceq 'Original') 'Active text edit replaced inbound snapshot.'
-    $null = Cli @('agent', 'register', '--name', 'census-intake', '--harness', 'local', '--model', 'none', '--founder')
-    $converted = Cli @('inbound', 'claim', $first, '--as-task', '--as-agent', 'census-intake')
+    $null = Invoke-CensusCli @('agent', 'register', '--name', 'census-intake', '--harness', 'local', '--model', 'none', '--founder')
+    $converted = Invoke-CensusCli @('inbound', 'claim', $first, '--as-task', '--as-agent', 'census-intake')
     Check ($converted.status -ceq 'converted') 'Claim/convert failed.'
     Poll 0
-    $tasks = @(Cli @('task', 'list', '--all'))
+    $tasks = @(Invoke-CensusCli @('task', 'list', '--all'))
     Check ($tasks.Count -eq 1 -and $tasks[0].id -ceq $converted.task) 'Repeated poll created another task.'
     Put $findings '[]'
     Poll 0
     Put $findings '[{"id":"stable","title":"Recurrence"}]'
     Poll 1
-    $items = @(Cli @('inbound', 'list', '--status', 'all'))
+    $items = @(Invoke-CensusCli @('inbound', 'list', '--status', 'all'))
     Check ($items.Count -eq 2 -and $items[1].externalId -ceq 'smoke/stable/2') 'Recurrence did not create a fresh incident.'
     $before = (Source).cursor
     foreach ($invalid in @('[{"id":"partial","title":"No partial write"},{"id":null}]', 'nonzero')) {
@@ -178,23 +180,23 @@ if ($text -ceq 'nonzero') { [Console]::Out.Write('[]'); [Console]::Error.Write('
         Check ($source.cursor -ceq $before) 'Failed poll advanced the cursor.'
         Check (-not [string]::IsNullOrWhiteSpace((Optional $source 'lastError'))) 'Failure did not set LastError.'
         Check ((Optional $source 'lastError') -notmatch 'PRIVATE|partial') 'Adapter exposed process output.'
-        Check (@(Cli @('inbound', 'list', '--status', 'all')).Count -eq 2) 'Failure partially wrote inbound.'
+        Check (@(Invoke-CensusCli @('inbound', 'list', '--status', 'all')).Count -eq 2) 'Failure partially wrote inbound.'
         IngestDoctor 'fail'
     }
     Put $findings '[]'
     Poll 0
     Check ($null -eq (Optional (Source) 'lastError')) 'Recovery did not clear LastError.'
     IngestDoctor 'ok'
-    $events = @(Cli @('log', '--limit', '200'))
+    $events = @(Invoke-CensusCli @('log', '--limit', '200'))
     $completed = @($events | Where-Object { $_.type -ceq 'census.completed' })
     Check ($completed.Count -eq 7) 'Failed polls produced completion events, or successful polls lost them.'
     Check (@($completed | Where-Object { $_.payload.findings -eq 0 -and $_.payload.newItems -eq 0 -and $_.payload.source -ceq 'census:smoke' }).Count -eq 2) 'Missing zero-finding completion evidence.'
     Check (@($events | Where-Object { $_.type -ceq 'ingest.failing' }).Count -eq 1) 'Failure transition evidence is incorrect.'
     Check (@($events | Where-Object { $_.type -ceq 'ingest.recovered' }).Count -eq 1) 'Recovery transition evidence is incorrect.'
-    $receipts = Cli @('receipts')
+    $receipts = Invoke-CensusCli @('receipts')
     Check ($receipts.workerRuns -eq 0 -and $receipts.conductorSessions -eq 0 -and $receipts.sessions -eq 1) 'A sweep launched work or registered an unexpected session.'
     Check ($receipts.byAccount.Count -eq 1 -and $receipts.byAccount[0].harness -ceq 'local' -and $receipts.byAccount[0].model -ceq 'none') 'Unexpected paid session identity.'
-    Check (@(Cli @('agent', 'list', '--all')).Count -eq 1) 'Unexpected worker or session agent.'
+    Check (@(Invoke-CensusCli @('agent', 'list', '--all')).Count -eq 1) 'Unexpected worker or session agent.'
     Write-Output "Census verification: PASS ($checks assertions)."
 }
 finally {
