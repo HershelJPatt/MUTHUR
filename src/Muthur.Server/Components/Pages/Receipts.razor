@@ -4,7 +4,7 @@
 <PageTitle>MUTHUR · Receipts</PageTitle>
 
 <div class="page">
-    <ReceiptsPanel Hours="Window" />
+    <ReceiptsPanel Hours="Window" InvalidHours="@InvalidHours" />
 </div>
 
 @code {
@@ -14,6 +14,10 @@
     /// and this is a URL the page invites a hand to edit — the controls it prints are labelled "24h" and "7d".
     /// </summary>
     [SupplyParameterFromQuery(Name = "hours")] public string? Hours { get; set; }
+
+    private string? InvalidHours => Hours is not null
+        && (!long.TryParse(Hours, NumberStyles.Integer, CultureInfo.InvariantCulture, out var hours) || hours <= 0)
+        ? Hours : null;
 
     // Saturated to int rather than clamped to a window: the bounds are ReceiptsService's, where they are already
     // tested, so 9999999999999 arrives there as int.MaxValue and is clamped to 720 like any other number too big.

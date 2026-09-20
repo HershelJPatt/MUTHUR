@@ -17,6 +17,10 @@
                 <a class="btn @(Effective == hours ? "btn-on" : "")" href="/receipts?hours=@hours">@label</a>
             }
         </div>
+        @if (InvalidHours is { } invalid)
+        {
+            <div class="notice">hours=@(invalid.Length > 40 ? invalid[..40] + "…" : invalid) is not a positive integer number of hours, so this is the last @Effective.ToString(CultureInfo.InvariantCulture) @(Effective == 1 ? "hour" : "hours"). The windows are @WindowVocabulary.</div>
+        }
         <div class="stats">
             <span class="stat"><b>@_report.Sessions</b> sessions</span>
             <span class="stat"><b>@_report.ConductorSessions</b> conductor</span>
@@ -118,6 +122,8 @@
 
 @code {
     private static readonly (int Hours, string Label)[] Windows = [(24, "24h"), (168, "7d"), (720, "30d")];
+    private static readonly string WindowVocabulary = string.Join(", ",
+        Windows.Select(window => $"hours={window.Hours.ToString(CultureInfo.InvariantCulture)} ({window.Label})"));
 
     /// <summary>Somewhere to render from before the first read answers; every list empty and every count zero.</summary>
     private static readonly ReceiptsDto Unread = new(default, default, 0, 0, 0, 0, [], [], [], [], []);
@@ -127,6 +133,7 @@
 
     /// <summary>The window, in hours. Held in the query string so the founder can link to one.</summary>
     [Parameter] public int? Hours { get; set; }
+    [Parameter] public string? InvalidHours { get; set; }
 
     private int Window => Hours ?? Windows[0].Hours;
 
