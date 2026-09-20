@@ -69,6 +69,10 @@ $env:MUTHUR_AGENT = 'corner';   codex         # then: "orchestrate the next MUTH
 An agent registers once (`muthur agent register --name top-left --harness claude --model fable --tier mastermind`);
 the token is stored under `%LOCALAPPDATA%\Muthur\agents\`, never echoed.
 
+Harness identifiers have surrounding whitespace trimmed and case preserved; unknown identifiers are allowed.
+Match kit/catalog spelling exactly for doctor checks. Existing rows are unchanged: to correct casing previously
+folded to lowercase, re-register the existing agent as itself or with `--founder`.
+
 ## A task's life
 
 ```
