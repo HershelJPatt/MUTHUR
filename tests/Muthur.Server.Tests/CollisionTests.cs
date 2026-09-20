@@ -1,3 +1,5 @@
+using System.Collections.Concurrent;
+using System.Diagnostics;
 using System.Net.Http.Json;
 using Microsoft.AspNetCore.Components;
 using Microsoft.AspNetCore.Components.Web;
@@ -7,6 +9,7 @@ using Muthur.Contracts;
 using Muthur.Launch;
 using Muthur.Server.Components.Shared;
 using Muthur.Server.Services;
+using Xunit.Abstractions;
 
 namespace Muthur.Server.Tests;
 
@@ -16,11 +19,12 @@ namespace Muthur.Server.Tests;
 /// nothing in the measurement this feature was built on, so an indicator that fires on it would be worse
 /// than none.
 /// </summary>
-public sealed class CollisionTests : IDisposable
+public sealed class CollisionTests(ITestOutputHelper output) : IDisposable
 {
+    private static readonly TimeSpan HangDetector = TimeSpan.FromSeconds(30);
     private readonly HubFactory _hub = new();
     private readonly TestRepo _repo = new();
-    private readonly CountingProcessRunner _processes = new();
+    private readonly CountingProcessRunner _processes = new(output);
 
     public void Dispose()
     {
@@ -29,9 +33,9 @@ public sealed class CollisionTests : IDisposable
     }
 
     /// <summary>The service the dashboard resolves, but over a runner that counts what it spends.</summary>
-    private CollisionService Service() => new(
-        new GitLander(_processes, _hub.PullRequests),
-        _processes,
+    private CollisionService Service(IProcessRunner? processes = null) => new(
+        new GitLander(processes ?? _processes, _hub.PullRequests),
+        processes ?? _processes,
         _hub.Services.GetRequiredService<Ledger>(),
         _hub.Clock);
 
@@ -79,6 +83,7 @@ public sealed class CollisionTests : IDisposable
         Assert.Equal(TaskState.Validating, right.State);
 
         var collisions = await Service().CurrentAsync();
+        _processes.AssertMergeTree(1);
 
         var collision = Assert.Single(collisions);
         Assert.Equal(left.Id, collision.TaskA);
@@ -112,7 +117,9 @@ public sealed class CollisionTests : IDisposable
         Assert.Equal(TaskState.Validated, left.State);
         Assert.Equal(TaskState.Validated, right.State);
 
-        var collision = Assert.Single(await Service().CurrentAsync());
+        var collisions = await Service().CurrentAsync();
+        _processes.AssertMergeTree(1);
+        var collision = Assert.Single(collisions);
 
         Assert.Equal(left.Id, collision.TaskA);
         Assert.Equal(right.Id, collision.TaskB);
@@ -134,57 +141,134 @@ public sealed class CollisionTests : IDisposable
         Assert.Contains("shared.txt", _repo.Git("diff", "--name-only", "main...task/T-1-top"));
         Assert.Contains("shared.txt", _repo.Git("diff", "--name-only", "main...task/T-2-bottom"));
 
-        Assert.Empty(await Service().CurrentAsync());
+        var collisions = await Service().CurrentAsync();
+        _processes.AssertMergeTree(0);
+        Assert.Empty(collisions);
         Assert.DoesNotContain("pill-collision", await _hub.CreateClient().GetStringAsync("/"));
     }
 
     [Fact]
     public async Task A_second_call_inside_the_cache_window_runs_no_further_git_commands()
     {
-        await ProjectAsync("qa");
-        _repo.BranchWithFile("task/T-1-left", "shared.txt", "left\n");
-        _repo.BranchWithFile("task/T-2-right", "shared.txt", "right\n");
-        await InFlightAsync("first", "Rewrite the header", "task/T-1-left");
-        await InFlightAsync("second", "Rewrite the footer", "task/T-2-right");
-        var service = Service();
+        var (left, right) = await ConflictingTasksAsync();
+        var runner = new ScriptedProcessRunner(_repo.Path);
+        var service = Service(runner);
 
-        var first = await service.CurrentAsync();
-        var spent = _processes.Calls;
-        Assert.Single(first);
-        Assert.True(spent > 0, "the first pass has to actually ask git");
+        var first = await service.CurrentAsync().WaitAsync(HangDetector);
+        AssertCollision(first, left, right);
+        runner.AssertPasses(1);
 
-        var second = await service.CurrentAsync();
+        var second = await service.CurrentAsync().WaitAsync(HangDetector);
         Assert.Same(first, second);
-        Assert.Equal(spent, _processes.Calls);
+        runner.AssertPasses(1);
 
         // And it is the window that holds it, not a one-shot: past 60 seconds it asks again.
         _hub.Clock.Advance(TimeSpan.FromSeconds(61));
-        Assert.Single(await service.CurrentAsync());
-        Assert.True(_processes.Calls > spent, "past the cache window the pass runs again");
+        AssertCollision(await service.CurrentAsync().WaitAsync(HangDetector), left, right);
+        runner.AssertPasses(2);
     }
 
     [Fact]
     public async Task A_caller_that_arrives_mid_pass_takes_the_cached_answer_instead_of_queueing_behind_it()
     {
+        var (left, right) = await ConflictingTasksAsync();
+        var runner = new ScriptedProcessRunner(_repo.Path);
+        var gate = runner.ArmGate();
+        var service = Service(runner);
+
+        var pass = service.CurrentAsync();
+        try
+        {
+            await gate.Entered.WaitAsync(HangDetector);
+            Assert.False(pass.IsCompleted);
+            runner.AssertPasses(1);
+
+            // The second panel answers before release, with the empty initial cache.
+            Assert.Empty(await service.CurrentAsync().WaitAsync(HangDetector));
+            Assert.False(pass.IsCompleted);
+            runner.AssertPasses(1);
+
+            gate.Release();
+            var completed = await pass.WaitAsync(HangDetector);
+            AssertCollision(completed, left, right);
+            Assert.Same(completed, await service.CurrentAsync().WaitAsync(HangDetector));
+            runner.AssertPasses(1);
+        }
+        finally
+        {
+            gate.Release();
+            await pass.WaitAsync(HangDetector);
+        }
+    }
+
+    [Fact]
+    public async Task A_caller_during_refresh_takes_the_old_collision_until_the_clean_pass_completes()
+    {
+        var (left, right) = await ConflictingTasksAsync();
+        var runner = new ScriptedProcessRunner(_repo.Path);
+        var service = Service(runner);
+        var old = await service.CurrentAsync().WaitAsync(HangDetector);
+        AssertCollision(old, left, right);
+        runner.AssertPasses(1);
+
+        _hub.Clock.Advance(TimeSpan.FromSeconds(61));
+        runner.MergeResult = new ProcessResult(0, ScriptedProcessRunner.TreeOid + "\n", "");
+        var gate = runner.ArmGate();
+        var refresh = service.CurrentAsync();
+        try
+        {
+            await gate.Entered.WaitAsync(HangDetector);
+            Assert.False(refresh.IsCompleted);
+            runner.AssertPasses(2);
+
+            Assert.Same(old, await service.CurrentAsync().WaitAsync(HangDetector));
+            Assert.False(refresh.IsCompleted);
+            runner.AssertPasses(2);
+
+            gate.Release();
+            var completed = await refresh.WaitAsync(HangDetector);
+            Assert.Empty(completed);
+            Assert.NotSame(old, completed);
+            Assert.Same(completed, await service.CurrentAsync().WaitAsync(HangDetector));
+            runner.AssertPasses(2);
+        }
+        finally
+        {
+            gate.Release();
+            await refresh.WaitAsync(HangDetector);
+        }
+    }
+
+    [Theory]
+    [InlineData(0)]
+    [InlineData(124)]
+    [InlineData(127)]
+    public async Task Only_exit_one_is_evidence_of_a_collision_even_with_conflict_shaped_output(int exitCode)
+    {
+        await ConflictingTasksAsync();
+        var runner = new ScriptedProcessRunner(_repo.Path);
+        runner.MergeResult = runner.MergeResult with { ExitCode = exitCode };
+
+        Assert.Empty(await Service(runner).CurrentAsync().WaitAsync(HangDetector));
+        runner.AssertPasses(1);
+    }
+
+    private async Task<(TaskDto Left, TaskDto Right)> ConflictingTasksAsync()
+    {
         await ProjectAsync("qa");
         _repo.BranchWithFile("task/T-1-left", "shared.txt", "left\n");
         _repo.BranchWithFile("task/T-2-right", "shared.txt", "right\n");
-        await InFlightAsync("first", "Rewrite the header", "task/T-1-left");
-        await InFlightAsync("second", "Rewrite the footer", "task/T-2-right");
+        var (_, left) = await InFlightAsync("first", "Rewrite the header", "task/T-1-left");
+        var (_, right) = await InFlightAsync("second", "Rewrite the footer", "task/T-2-right");
+        return (left, right);
+    }
 
-        var gate = new GatedProcessRunner();
-        var service = new CollisionService(new GitLander(gate, _hub.PullRequests), gate,
-            _hub.Services.GetRequiredService<Ledger>(), _hub.Clock);
-
-        var pass = service.CurrentAsync();
-        await gate.Entered.WaitAsync(TimeSpan.FromSeconds(30));   // the pass is inside git, holding the semaphore
-
-        // Two panels rendering at once must not become two passes, and must not become a queue either:
-        // this call answers while the first is still blocked, with the nothing it has so far.
-        Assert.Empty(await service.CurrentAsync().WaitAsync(TimeSpan.FromSeconds(30)));
-
-        gate.Release();
-        Assert.Single(await pass);
+    private static void AssertCollision(IReadOnlyList<Collision> collisions, TaskDto left, TaskDto right)
+    {
+        var collision = Assert.Single(collisions);
+        Assert.Equal(left.Id, collision.TaskA);
+        Assert.Equal(right.Id, collision.TaskB);
+        Assert.Equal("shared.txt", Assert.Single(collision.Files));
     }
 
     [Fact]
@@ -235,41 +319,122 @@ public sealed class CollisionTests : IDisposable
         });
     }
 
-    /// <summary>The real runner, counted. Proving the cache by invocations rather than by timing.</summary>
-    private sealed class CountingProcessRunner : IProcessRunner
+    /// <summary>Real Git integration, with process evidence retained in the test result.</summary>
+    private sealed class CountingProcessRunner(ITestOutputHelper output) : IProcessRunner
     {
         private readonly ProcessRunner _real = new();
+        private readonly ConcurrentQueue<MergeResult> _merges = new();
         private int _calls;
 
         public int Calls => Volatile.Read(ref _calls);
 
-        public Task<ProcessResult> RunAsync(string fileName, IReadOnlyList<string> arguments, string workingDirectory,
-            string? stdin = null, TimeSpan? timeout = null, CancellationToken ct = default, IReadOnlyCollection<string>? scrubEnvironment = null,
-            IReadOnlyDictionary<string, string>? environment = null)
+        public void AssertMergeTree(int expectedExitCode)
         {
-            Interlocked.Increment(ref _calls);
-            return _real.RunAsync(fileName, arguments, workingDirectory, stdin, timeout, ct, scrubEnvironment, environment);
+            var merge = Assert.Single(_merges);
+            Assert.Equal(TimeSpan.FromSeconds(5), merge.RequestedTimeout);
+            Assert.Equal(HangDetector, merge.EffectiveTimeout);
+            Assert.Equal(expectedExitCode, merge.Result.ExitCode);
         }
-    }
-
-    /// <summary>Holds the first git call open, so a second caller can be observed arriving mid-pass.</summary>
-    private sealed class GatedProcessRunner : IProcessRunner
-    {
-        private readonly ProcessRunner _real = new();
-        private readonly TaskCompletionSource _entered = new(TaskCreationOptions.RunContinuationsAsynchronously);
-        private readonly TaskCompletionSource _released = new(TaskCreationOptions.RunContinuationsAsynchronously);
-
-        public Task Entered => _entered.Task;
-
-        public void Release() => _released.TrySetResult();
 
         public async Task<ProcessResult> RunAsync(string fileName, IReadOnlyList<string> arguments, string workingDirectory,
             string? stdin = null, TimeSpan? timeout = null, CancellationToken ct = default, IReadOnlyCollection<string>? scrubEnvironment = null,
             IReadOnlyDictionary<string, string>? environment = null)
         {
+            Interlocked.Increment(ref _calls);
+            var isMergeTree = fileName == "git" && arguments.Count > 0 && arguments[0] == "merge-tree";
+            // Integration proves Git's merge semantics; the scripted runner checks the responsiveness contract.
+            var effectiveTimeout = isMergeTree ? HangDetector : timeout;
+            var elapsed = Stopwatch.StartNew();
+            try
+            {
+                var result = await _real.RunAsync(fileName, arguments, workingDirectory, stdin, effectiveTimeout, ct, scrubEnvironment, environment);
+                if (isMergeTree) _merges.Enqueue(new MergeResult(timeout, effectiveTimeout, result));
+                output.WriteLine($"Process: {fileName}; arguments: [{string.Join(", ", arguments)}]; working directory: {workingDirectory}; " +
+                    $"elapsed milliseconds: {elapsed.Elapsed.TotalMilliseconds}; requested timeout: {timeout}; effective test timeout: {effectiveTimeout}; " +
+                    $"exit code: {result.ExitCode}\nstdout:\n{result.StdOut}\nstderr:\n{result.StdErr}");
+                return result;
+            }
+            catch (Exception exception)
+            {
+                output.WriteLine($"Process: {fileName}; arguments: [{string.Join(", ", arguments)}]; working directory: {workingDirectory}; " +
+                    $"elapsed milliseconds: {elapsed.Elapsed.TotalMilliseconds}; requested timeout: {timeout}; effective test timeout: {effectiveTimeout}; " +
+                    $"exception: {exception}");
+                throw;
+            }
+        }
+
+        private sealed record MergeResult(TimeSpan? RequestedTimeout, TimeSpan? EffectiveTimeout, ProcessResult Result);
+    }
+
+    /// <summary>Exact service-pass calls only: no external process can influence the cache assertions.</summary>
+    private sealed class ScriptedProcessRunner(string repoPath) : IProcessRunner
+    {
+        public const string TreeOid = "1111111111111111111111111111111111111111";
+        private static readonly string[][] PassArguments =
+        [
+            ["rev-parse", "--verify", "--quiet", "refs/heads/task/T-1-left"],
+            ["rev-parse", "--verify", "--quiet", "refs/heads/task/T-2-right"],
+            ["merge-tree", "--write-tree", "--name-only", "task/T-1-left", "task/T-2-right"],
+        ];
+        private readonly ConcurrentQueue<Call> _calls = new();
+        private readonly ConcurrentQueue<string> _unexpected = new();
+        private MergeGate? _gate;
+
+        public ProcessResult MergeResult { get; set; } = new(1,
+            TreeOid + "\nshared.txt\n\nCONFLICT (content): Merge conflict in shared.txt\n", "");
+
+        public MergeGate ArmGate() => _gate = new MergeGate();
+
+        public void AssertPasses(int count)
+        {
+            // CollisionService catches failures, so unexpected calls must be asserted outside it.
+            Assert.Empty(_unexpected);
+            var calls = _calls.ToArray();
+            Assert.Equal(count * 3, calls.Length);
+            for (var i = 0; i < calls.Length; i++)
+            {
+                Assert.Equal("git", calls[i].FileName);
+                Assert.Equal(repoPath, calls[i].WorkingDirectory);
+                Assert.Equal(PassArguments[i % 3], calls[i].Arguments);
+                if (i % 3 == 2) Assert.Equal(TimeSpan.FromSeconds(5), calls[i].Timeout);
+            }
+        }
+
+        public async Task<ProcessResult> RunAsync(string fileName, IReadOnlyList<string> arguments, string workingDirectory,
+            string? stdin = null, TimeSpan? timeout = null, CancellationToken ct = default, IReadOnlyCollection<string>? scrubEnvironment = null,
+            IReadOnlyDictionary<string, string>? environment = null)
+        {
+            _calls.Enqueue(new Call(fileName, arguments.ToArray(), workingDirectory, timeout));
+            var command = Array.FindIndex(PassArguments, expected => expected.SequenceEqual(arguments));
+            if (fileName != "git" || workingDirectory != repoPath || command < 0 || stdin is not null ||
+                scrubEnvironment is not null || environment is not null)
+            {
+                var unexpected = $"{fileName} {string.Join(' ', arguments)} in {workingDirectory}";
+                _unexpected.Enqueue(unexpected);
+                throw new InvalidOperationException($"Unexpected scripted process call: {unexpected}");
+            }
+
+            ct.ThrowIfCancellationRequested();
+            if (command < 2) return new ProcessResult(0, TreeOid + "\n", "");
+            if (_gate is { } gate) await gate.WaitAsync(ct);
+            return MergeResult;
+        }
+
+        private sealed record Call(string FileName, string[] Arguments, string WorkingDirectory, TimeSpan? Timeout);
+    }
+
+    private sealed class MergeGate
+    {
+        private readonly TaskCompletionSource _entered = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        private readonly TaskCompletionSource _released = new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        public Task Entered => _entered.Task;
+        public void Release() => _released.TrySetResult();
+
+        public async Task WaitAsync(CancellationToken ct)
+        {
             _entered.TrySetResult();
-            await _released.Task;
-            return await _real.RunAsync(fileName, arguments, workingDirectory, stdin, timeout, ct, scrubEnvironment, environment);
+            await _released.Task.WaitAsync(HangDetector, ct);
         }
     }
 }
