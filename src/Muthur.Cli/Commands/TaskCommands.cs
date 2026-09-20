@@ -201,12 +201,6 @@ public static class TaskCommands
     }
 
     /// <summary>
-    /// Why `task attended` will not be sent, or null when the flags are usable. The hub cannot tell "clear" from
-    /// "set, but the reason was left out" — both arrive as a null reason — so the refusal belongs here, before a
-    /// round trip that would silently lift the flag instead. It branches on whether --reason was *supplied*, never
-    /// on whether it has content: `--reason "   " --clear` is a contradiction to refuse, not a clear to obey.
-    /// </summary>
-    /// <summary>
     /// What to say to somebody who has just landed over a live hold, or null when they have not. Who, when
     /// and the reason verbatim — "this task had a hold" is not something a reader can weigh.
     /// <para>
@@ -237,6 +231,12 @@ public static class TaskCommands
             _ => ("reason_required", "Say why this should not be landed yet: --reason \"<why>\", or --clear to lift it."),
         };
 
+    /// <summary>
+    /// Why `task attended` will not be sent, or null when the flags are usable. The hub cannot tell "clear" from
+    /// "set, but the reason was left out" — both arrive as a null reason — so the refusal belongs here, before a
+    /// round trip that would silently lift the flag instead. It branches on whether --reason was *supplied*, never
+    /// on whether it has content: `--reason "   " --clear` is a contradiction to refuse, not a clear to obey.
+    /// </summary>
     public static (string Code, string Message)? AttendedRefusal(bool reasonSupplied, string? reason, bool clear) =>
         (reasonSupplied, clear) switch
         {

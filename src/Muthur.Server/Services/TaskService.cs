@@ -404,10 +404,6 @@ public sealed partial class TaskService(Ledger ledger, LeasePolicy leases, ITask
             "and a 'needs:' line past the cut would be silently missed. Shorten it, or split what belongs elsewhere out of it.");
 
     /// <summary>
-    /// The task id in the spec's first non-blank line, or null if the heading names none. Takes the content
-    /// rather than a path, because a spec read out of a branch must be checked exactly as one on disk is.
-    /// </summary>
-    /// <summary>
     /// What a spec says it needs that an unattended session does not have, or null when it declares nothing.
     /// <para>
     /// One line, anywhere in the document: <c>needs: browser</c>, with any leading list marker, quote marker
@@ -425,6 +421,10 @@ public sealed partial class TaskService(Ledger ledger, LeasePolicy leases, ITask
         return null;
     }
 
+    /// <summary>
+    /// The task id in the spec's first non-blank line, or null if the heading names none. Takes the content
+    /// rather than a path, because a spec read out of a branch must be checked exactly as one on disk is.
+    /// </summary>
     private static string? FirstHeadingTaskId(string content)
     {
         foreach (var line in content.Split('\n'))
