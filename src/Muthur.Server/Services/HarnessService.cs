@@ -44,6 +44,15 @@ public sealed class HarnessService(Ledger ledger, MuthurOptions options)
     }
 
     /// <summary>Shared with <see cref="AgentService"/>: an agent reporting itself limited also limits its account.</summary>
+    /// <summary>Automatic exhaustion never clears or shortens an existing account limit.</summary>
+    internal static async Task ExhaustedAsync(Mutation m, string account, CancellationToken ct)
+    {
+        var existing = await m.Db.AccountLimits.SingleOrDefaultAsync(l => l.Account == account, ct);
+        var until = m.Now.AddHours(1);
+        if (existing?.LimitedUntil > until) return;
+        await ApplyAsync(m, account, until, ct);
+    }
+
     public static async Task ApplyAsync(Mutation m, string account, DateTimeOffset? until, CancellationToken ct)
     {
         var existing = await m.Db.AccountLimits.SingleOrDefaultAsync(l => l.Account == account, ct);

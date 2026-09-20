@@ -97,6 +97,10 @@ public sealed partial class TaskService(Ledger ledger, LeasePolicy leases, ITask
                 task.ClaimExpires = m.Now + lease; // re-claiming your own task just renews it
                 return task.ToDto();
             }
+            var completed = await TaskDependencies.CompletedAsync(m.Db, ct);
+            var pending = task.DependsOn.Where(d => !completed.Contains(d)).ToList();
+            if (pending.Count > 0)
+                throw Fail.Conflict("dependency_wait", "Waiting for " + string.Join(", ", pending) + " to land.");
             if (!LeasePolicy.IsClaimable(task, m.Now))
                 throw Fail.Conflict("not_claimable", task.State == TaskState.InProgress
                     ? $"{Wire.TaskId(task.Id)} is held by '{task.Owner?.Name}' until {task.ClaimExpires:O}."
@@ -122,6 +126,38 @@ public sealed partial class TaskService(Ledger ledger, LeasePolicy leases, ITask
             ReturnToBacklog(task, m.Now);
             await RequestService.WithdrawForTaskAsync(m, task.Id, "task released", ct);
             m.Record("task.released", task.Id, new { agent = caller.Name, request.Reason });
+            return task.ToDto();
+        }, ct);
+
+    public Task<TaskDto> SetDependenciesAsync(Caller caller, string id, DependenciesRequest request, CancellationToken ct = default) =>
+        ledger.MutateAsync(caller, async m =>
+        {
+            var task = await LoadAsync(m.Db, id, ct);
+            if (task.OwnerAgentId is not null) RequireOwnerOrFounder(task, caller);
+            else caller.RequireIdentified();
+            if (task.State is not (TaskState.Backlog or TaskState.InProgress or TaskState.Blocked))
+                throw Fail.Rule("dependency_state", "Set prerequisites before submitting work for validation.");
+            if (request.Tasks is null || request.Tasks.Count > 50)
+                throw Fail.Rule("invalid_dependencies", "Provide at most 50 prerequisite task IDs.");
+            var targets = new List<string>();
+            foreach (var key in request.Tasks)
+            {
+                var dependency = await LoadAsync(m.Db, key, ct);
+                if (dependency.ProjectId != task.ProjectId)
+                    throw Fail.Rule("dependency_project", "Prerequisites must belong to the same project.");
+                targets.Add(Wire.TaskId(dependency.Id));
+            }
+            var graph = await m.Db.Tasks.Where(t => t.ProjectId == task.ProjectId).ToListAsync(ct);
+            var edges = graph.ToDictionary(t => Wire.TaskId(t.Id), t => t.DependsOn);
+            var own = Wire.TaskId(task.Id);
+            var visited = new HashSet<string>();
+            bool ReachesSelf(string key) => key == own || (visited.Add(key) && edges.GetValueOrDefault(key, []).Any(ReachesSelf));
+            if (targets.Any(ReachesSelf)) throw Fail.Rule("dependency_cycle", "Prerequisites cannot form a cycle.");
+            task.DependsOn = targets.Distinct(StringComparer.Ordinal).ToList();
+            task.DependencyReason = task.DependsOn.Count == 0 ? null : request.Reason?.Trim();
+            if (task.State == TaskState.InProgress && task.DependsOn.Count > 0) ReturnToBacklog(task, m.Now);
+            task.UpdatedAt = m.Now;
+            m.Record("task.dependencies_set", task.Id, new { tasks = task.DependsOn, reason = task.DependencyReason });
             return task.ToDto();
         }, ct);
 

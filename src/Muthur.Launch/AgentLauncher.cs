@@ -15,7 +15,8 @@ public sealed record AgentIdentity(string Name, string Token);
 /// other's behaviour: the tests assert the inversion in both directions.
 /// </para>
 /// </summary>
-public sealed class AgentLauncher(IProcessRunner processes, Func<string, (string FileName, IReadOnlyList<string> Prefix)?>? resolve = null)
+public sealed class AgentLauncher(IProcessRunner processes, Func<string, (string FileName, IReadOnlyList<string> Prefix)?>? resolve = null,
+    Func<AgentIdentity, CancellationToken, Task>? heartbeat = null, TimeProvider? timeProvider = null)
 {
     private readonly Func<string, (string FileName, IReadOnlyList<string> Prefix)?> _resolve = resolve ?? ExecutableResolver.Resolve;
 
@@ -57,9 +58,30 @@ public sealed class AgentLauncher(IProcessRunner processes, Func<string, (string
                 continue;
             }
 
-            var result = await processes.RunAsync(executable.FileName, [.. executable.Prefix, .. invocation.Arguments],
-                request.WorkingDirectory, invocation.Stdin, timeout, ct,
-                scrubEnvironment: null, environment: EnvironmentFor(await identityFor(candidate)));
+            var identity = await identityFor(candidate);
+            using var lifetime = CancellationTokenSource.CreateLinkedTokenSource(ct);
+            var running = processes.RunAsync(executable.FileName, [.. executable.Prefix, .. invocation.Arguments],
+                request.WorkingDirectory, invocation.Stdin, timeout, lifetime.Token,
+                scrubEnvironment: null, environment: EnvironmentFor(identity));
+            ProcessResult result;
+            try
+            {
+                while (heartbeat is not null && !running.IsCompleted)
+                {
+                    var tick = Task.Delay(TimeSpan.FromSeconds(30), timeProvider ?? TimeProvider.System, lifetime.Token);
+                    if (await Task.WhenAny(running, tick) == running) break;
+                    await tick;
+                    if (!running.IsCompleted) await heartbeat(identity, ct);
+                }
+                result = await running;
+            }
+            catch
+            {
+                await lifetime.CancelAsync();
+                try { await running; } catch { /* Observe the child shutdown before releasing the session slot. */ }
+                throw;
+            }
+            finally { await lifetime.CancelAsync(); }
             var outcome = adapter.Interpret(request, result);
             attempts.Add(new(candidate, outcome, clock.Elapsed));
 

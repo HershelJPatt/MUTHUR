@@ -7,6 +7,7 @@ public sealed record AddTaskRequest(string Title, string? Project = null, string
 public sealed record ClaimTaskRequest(int? LeaseMinutes = null);
 
 public sealed record ReleaseTaskRequest(string? Reason = null);
+public sealed record DependenciesRequest(IReadOnlyList<string> Tasks, string? Reason = null);
 
 public sealed record SetSpecRequest(string Path, string? Branch = null);
 
@@ -37,7 +38,9 @@ public sealed record TaskDto(
     string? AttendedReason,
     string? HoldReason = null,
     string? HoldBy = null,
-    DateTimeOffset? HoldExpires = null);
+    DateTimeOffset? HoldExpires = null,
+    IReadOnlyList<string>? DependsOn = null,
+    string? DependencyReason = null);
 
 /// <summary>A reason that is null or blank is the clear, the same convention <c>attended</c> uses.</summary>
 public sealed record HoldRequest(string? Reason);

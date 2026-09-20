@@ -104,14 +104,22 @@ task to the backlog for someone else to pick up.
    Send work back with specific corrections until it is right. Fix trivial things by instructing the
    implementer, not by editing silently — the spec and the branch must stay the record of what was asked and done.
 6. **Integrate** the unit branches into `task/T-n-<slug>`, rebuild, retest.
-7. **Hand to validation.** `muthur task implemented T-n --branch task/T-n-<slug>`. The task moves to
+7. **Hand to validation.** Clean up scratch processes first, then `muthur task implemented T-n --branch task/T-n-<slug>`. The task moves to
    `validating`; validators you do not control will exercise it end to end. If a validator fails it, the task
    returns to you `in_progress` with evidence: fix, re-review, mark implemented again.
+   **Conductor-started sessions exit after submission**, with a final branch/head/checks report. Do not
+   occupy a paid session waiting for validation. The conductor staffs the next phase and lands approved work
+   when the task's sessions have exited. A later rejection resumes the preserved branch and evidence.
 8. **Land.** When the task is `validated`: `muthur task land T-n`. MUTHUR performs the merge (or opens the
    pull request, for projects where a human merges). You never run `git merge` into the default branch or
    `git push` yourself. If landing reports a conflict, rebase the task branch, re-verify, mark implemented again.
 
 ## Verification a conductor-started session can run
+
+If another task must land first, use `muthur task dependencies T-n --after T-prerequisite --reason "why"`
+and exit. This preserves the spec and branch, prevents restaffing and wakes when every prerequisite lands.
+Use `--clear` only when the dependency no longer applies. Cancelled prerequisites do not count as landed.
+Keep genuine founder questions in Needs You; dependencies do not answer or withdraw them.
 
 Validation here is done by sessions a conductor starts: no browser, no GUI, no hands. **A spec whose
 *Verification* asks for a click, on a task not marked attended, is a defect in the spec** — and an

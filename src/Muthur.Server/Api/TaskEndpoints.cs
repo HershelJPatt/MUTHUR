@@ -9,6 +9,8 @@ public static class TaskEndpoints
 {
     public static void MapTaskEndpoints(this IEndpointRouteBuilder app)
     {
+        app.MapPost(Routes.Tasks + "/{id}/dependencies", (HttpContext http, string id, DependenciesRequest request, TaskService tasks, CancellationToken ct) =>
+            tasks.SetDependenciesAsync(http.GetCaller(), id, request, ct));
         app.MapPost(Routes.Tasks, (HttpContext http, AddTaskRequest request, TaskService tasks, CancellationToken ct) =>
             tasks.AddAsync(http.GetCaller(), request, ct));
 

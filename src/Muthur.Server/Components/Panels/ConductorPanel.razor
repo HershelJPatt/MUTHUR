@@ -50,6 +50,18 @@
             </div>
         }
 
+        @if (_status.StaffingWait is { } waiting)
+        {
+            <div class="agent-meta">@waiting</div>
+        }
+        @foreach (var landing in _status.Landings ?? [])
+        {
+            <div class="agent">
+                <a class="agent-name" href="/tasks/@landing.Task">@landing.Task</a>
+                <div class="agent-meta">approved @Format.Age(landing.Since, _now) · @landing.Reason</div>
+            </div>
+        }
+
         @* Last and loudest: a stall is the one conductor state a founder has to act on. *@
         @foreach (var stall in _status.Stalls)
         {

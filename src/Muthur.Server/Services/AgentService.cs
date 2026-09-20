@@ -13,6 +13,14 @@ public sealed partial class AgentService(Ledger ledger, LeasePolicy leases, Time
     private static readonly TimeSpan TouchInterval = TimeSpan.FromSeconds(30);
     private readonly ConcurrentDictionary<Guid, DateTimeOffset> _lastTouch = new();
 
+    /// <summary>Called only by the launcher while its child process is still running.</summary>
+    internal async Task RenewChildAsync(Muthur.Launch.AgentIdentity identity, CancellationToken ct)
+    {
+        if (await AuthenticateAsync(identity.Token, ct) is { } caller)
+            await HeartbeatAsync(caller, new HeartbeatRequest(), ct);
+        else throw new InvalidOperationException("Child identity was revoked; stop the session instead of renewing another owner's lease.");
+    }
+
     [GeneratedRegex("^[a-z0-9][a-z0-9._-]{0,79}$")]
     private static partial Regex NamePattern();
 

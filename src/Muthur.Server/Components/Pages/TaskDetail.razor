@@ -27,6 +27,10 @@
                 </div>
                 <dl class="kv" style="margin-top: 12px">
                     <dt>Project</dt><dd>@task.Project</dd>
+                    @if (task.DependsOn is { Count: > 0 })
+                    {
+                        <dt>Prerequisites</dt><dd>@string.Join(", ", task.DependsOn) — @task.DependencyReason</dd>
+                    }
                     <dt>Owner</dt>
                     <dd>
                         @(task.Owner ?? "—")@(task.ClaimExpires is { } lease ? " · lease " + Format.Until(lease, _now) : "")

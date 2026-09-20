@@ -34,7 +34,7 @@ public static class Mapper
             t.AttendedReason,
             t.HoldReason,
             t.HoldBy,
-            t.HoldExpires);
+            t.HoldExpires, t.DependsOn, t.DependencyReason);
 
     public static EventDto ToDto(this LedgerEvent e)
     {

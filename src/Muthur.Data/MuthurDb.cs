@@ -60,6 +60,7 @@ public sealed class MuthurDb(DbContextOptions<MuthurDb> options) : DbContext(opt
         modelBuilder.Entity<WorkTask>(e =>
         {
             e.ToTable("tasks");
+            e.Property(x => x.DependsOn).HasConversion(StringListConverter.Instance, StringListConverter.Comparer);
             e.HasOne(x => x.Project).WithMany().HasForeignKey(x => x.ProjectId).OnDelete(DeleteBehavior.Restrict);
             e.HasOne(x => x.Owner).WithMany().HasForeignKey(x => x.OwnerAgentId).OnDelete(DeleteBehavior.Restrict);
             e.HasIndex(x => x.State);

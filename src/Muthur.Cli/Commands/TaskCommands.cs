@@ -77,6 +77,23 @@ public static class TaskCommands
             Routes.TaskAction(parse.GetValue(releaseId)!, "release"), new ReleaseTaskRequest(parse.GetValue(reason)), MuthurJsonContext.Default.ReleaseTaskRequest, ct)));
         task.Subcommands.Add(release);
 
+        var dependencyId = Id();
+        var after = new Option<string[]>("--after") { Description = "Prerequisite task IDs; all must land before staffing resumes.", AllowMultipleArgumentsPerToken = true };
+        var dependencyReason = new Option<string?>("--reason");
+        var dependencyClear = new Option<bool>("--clear");
+        var dependencies = new Command("dependencies", "Park work behind prerequisites, preserving its branch and spec. Cancelled prerequisites do not count as completed.")
+            { dependencyId, after, dependencyReason, dependencyClear };
+        dependencies.SetAction(async (parse, ct) =>
+        {
+            var ids = parse.GetValue(after) ?? [];
+            if (parse.GetValue(dependencyClear) == (ids.Length > 0))
+                return Output.Error("dependencies_required", "Use --after T-n [T-n ...] or --clear, exclusively.", ExitCodes.RuleViolation);
+            return Output.Emit(parse, await HubClient.For(parse).PostAsync(
+                Routes.TaskAction(parse.GetValue(dependencyId)!, "dependencies"),
+                new DependenciesRequest(ids, parse.GetValue(dependencyReason)), MuthurJsonContext.Default.DependenciesRequest, ct));
+        });
+        task.Subcommands.Add(dependencies);
+
         var specId = Id();
         var specPath = new Argument<string>("path") { Description = "Spec file path relative to the repository root, e.g. specs/T-12.md." };
         var specBranch = new Option<string?>("--branch") { Description = "The branch the spec is committed on (default: the branch this checkout is on)." };

@@ -21,7 +21,7 @@ public sealed class OrchestratorSessionLauncher(
     AgentService agents,
     HarnessService harnesses,
     IProcessRunner processes,
-    ILogger<OrchestratorSessionLauncher> logger) : IOrchestratorSessionLauncher
+    ILogger<OrchestratorSessionLauncher> logger, TimeProvider? clock = null) : IOrchestratorSessionLauncher
 {
     private const string Tier = "mastermind";
 
@@ -38,7 +38,7 @@ public sealed class OrchestratorSessionLauncher(
         var scratch = Path.Combine(options.DataDir, "conductor", $"{assignment.TaskKey}-orchestrator");
         Directory.CreateDirectory(scratch);
 
-        var launcher = new AgentLauncher(processes);
+        var launcher = new AgentLauncher(processes, heartbeat: agents.RenewChildAsync, timeProvider: clock);
         var attempts = await launcher.RunAsync(
             candidates,
             candidate => new WorkerRequest(
@@ -90,9 +90,9 @@ public sealed class OrchestratorSessionLauncher(
     internal static string IdentityName(string task) => $"orchestrator-{task.ToLowerInvariant()}";
 
     /// <summary>An account that could not answer leaves the rotation, exactly as `muthur agent limited` does.</summary>
-    private Task MarkLimitedAsync(string? account, CancellationToken ct) =>
+    internal Task MarkLimitedAsync(string? account, CancellationToken ct) =>
         account is { Length: > 0 }
-            ? ledger.MutateAsync(Caller.Founder, m => HarnessService.ApplyAsync(m, account, null, ct), ct)
+            ? ledger.MutateAsync(Caller.Founder, m => HarnessService.ExhaustedAsync(m, account, ct), ct)
             : Task.CompletedTask;
 
     /// <summary>
@@ -158,6 +158,8 @@ public sealed class OrchestratorSessionLauncher(
 
         Rules that are not yours to bend:
         - Use deterministic commands for waiting, heartbeats and test execution. Do not spend model turns repeatedly polling.
+        - When a prerequisite task prevents progress, use `muthur task dependencies {assignment.TaskKey} --after T-n --reason "<why>"` and exit. Do not release it into runnable backlog or ask the founder to poll a dependency.
+        - Clean up your scratch processes before submitting `muthur task implemented`. After submission, report the branch/head and completed checks and EXIT. Do not occupy a session waiting for validation or landing; the conductor handles the next phase and lands approved work after you exit.
         - Summarize large logs or incoming text with `muthur utility summarize --file <path> --task {assignment.TaskKey}` before reading full logs. Summaries are advisory; verify cited evidence.
         - Local coding is disabled by default: the installed Codex/Ollama combination failed its tool-execution pilot. Use the implementer tier. Only when the local-implementer catalog has explicitly been enabled after a successful pilot, use it once for a small mechanical unit with a frozen spec and objective checks. Review its diff and run checks; do not repeat failed local attempts.
         - Architecture, ambiguous requirements, complex debugging and final review stay on the mastermind tier. Do not route these to local workers merely to fit a budget.

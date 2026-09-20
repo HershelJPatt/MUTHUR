@@ -46,7 +46,7 @@ public sealed class ValidatorSessionLauncher(
     AgentService agents,
     HarnessService harnesses,
     IProcessRunner processes,
-    ILogger<ValidatorSessionLauncher> logger) : IValidatorSessionLauncher
+    ILogger<ValidatorSessionLauncher> logger, TimeProvider? clock = null) : IValidatorSessionLauncher
 {
     private const string Tier = "mastermind";
 
@@ -63,7 +63,7 @@ public sealed class ValidatorSessionLauncher(
         var scratch = Path.Combine(options.DataDir, "conductor", $"{assignment.TaskKey}-{assignment.RoleKey}");
         Directory.CreateDirectory(scratch);
 
-        var launcher = new AgentLauncher(processes);
+        var launcher = new AgentLauncher(processes, heartbeat: agents.RenewChildAsync, timeProvider: clock);
         var attempts = await launcher.RunAsync(
             candidates,
             candidate => new WorkerRequest(
@@ -148,9 +148,9 @@ public sealed class ValidatorSessionLauncher(
         $"conductor-{role}-{task.ToLowerInvariant()}";       // "T-3" -> "conductor-win-validator-t-3"
 
     /// <summary>An account that could not answer leaves the rotation, exactly as `muthur agent limited` does.</summary>
-    private Task MarkLimitedAsync(string? account, CancellationToken ct) =>
+    internal Task MarkLimitedAsync(string? account, CancellationToken ct) =>
         account is { Length: > 0 }
-            ? ledger.MutateAsync(Caller.Founder, m => HarnessService.ApplyAsync(m, account, null, ct), ct)
+            ? ledger.MutateAsync(Caller.Founder, m => HarnessService.ExhaustedAsync(m, account, ct), ct)
             : Task.CompletedTask;
 
     /// <summary>

@@ -21,6 +21,10 @@
         {
             <span class="pill pill-blocked">needs a human</span>
         }
+        @if (Task.DependsOn is { Count: > 0 })
+        {
+            <span class="pill pill-blocked" title="@Task.DependencyReason">after @string.Join(", ", Task.DependsOn)</span>
+        }
         @* Who and how long, not just that: "this task has a hold" tells the next lander nothing they can weigh. *@
         @if (Task.HoldExpires is { } until && until > Now && Task.HoldBy is { } by)
         {

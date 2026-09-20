@@ -67,7 +67,8 @@ public sealed class ConductorService(
     IValidatorSessionLauncher launcher,
     IOrchestratorSessionLauncher orchestrators,
     LifecycleService lifecycle,
-    ITaskLander lander)
+    ITaskLander lander,
+    HarnessService harnesses)
 {
     private readonly SemaphoreSlim _pass = new(1, 1);
     private readonly HashSet<string> _running = [];
@@ -256,7 +257,7 @@ public sealed class ConductorService(
         var since = now.AddDays(-1);
         var events = await db.Events.Where(e => e.Type == "task.implemented" || (e.At >= since &&
             (e.Type == "conductor.staffing" || e.Type == "conductor.on" ||
-             e.Type == "request.answered"))).OrderBy(e => e.Seq).ToListAsync(ct);
+             e.Type == "request.answered" || e.Type == "task.dependencies_ready"))).OrderBy(e => e.Seq).ToListAsync(ct);
         var attempts = new Dictionary<string, List<DateTimeOffset>>();
         var heads = new Dictionary<int, string>();
         foreach (var e in events)
@@ -398,7 +399,40 @@ public sealed class ConductorService(
             ceiling.Reason,
             await OrchestratorsEnabledAsync(ct),
             Sessions(),
-            Stalls());
+            Stalls(), await StaffingWaitAsync(ct), await LandingWaitsAsync(ct));
+    }
+
+    private async Task<string?> StaffingWaitAsync(CancellationToken ct)
+    {
+        var candidates = (await harnesses.TiersAsync("mastermind", ct)).SelectMany(t => t.Candidates).ToList();
+        if (candidates.Count == 0 || candidates.Any(c => !c.Limited)) return null;
+        return $"All mastermind accounts are limited; earliest retry {candidates.Min(c => c.LimitedUntil):O}.";
+    }
+
+    private async Task<IReadOnlyList<LandingWaitDto>> LandingWaitsAsync(CancellationToken ct)
+    {
+        var enabled = await EnabledAsync(ct);
+        return await ledger.ReadAsync<IReadOnlyList<LandingWaitDto>>(async (db, now) =>
+        {
+            var exited = await ExitedOwnersAsync(db, ct);
+            var tasks = await db.Tasks.Include(t => t.Owner).Where(t => t.State == TaskState.Validated).ToListAsync(ct);
+            var rows = new List<LandingWaitDto>();
+            foreach (var task in tasks)
+            {
+                var key = Wire.TaskId(task.Id);
+                bool running;
+                lock (_running) running = _running.Any(s => s.StartsWith(key + "/", StringComparison.Ordinal));
+                var reason = !enabled ? "Conductor paused" : running ? "Waiting for the task session to exit" :
+                    task.Owner is null ? "No owner recorded; founder landing required" :
+                    exited.GetValueOrDefault(task.Id) != task.Owner.Name && task.Owner.LastHeartbeat >= now.AddSeconds(-options.AgentStaleSeconds)
+                        ? "Attended owner is still live" : "Ready for automatic landing on the next pass";
+                lock (_landStalls)
+                    if (enabled && _landStalls.GetValueOrDefault(task.Id)?.RefusedAt is { } at)
+                        reason = $"Landing refused; inspect task history. Retry after {at.AddMinutes(options.ConductorStallProbeMinutes):O}";
+                rows.Add(new(key, task.UpdatedAt, reason));
+            }
+            return rows;
+        }, ct);
     }
 
     /// <summary>The founder turns staffing on and off; the decision is in the ledger like any other.</summary>
@@ -606,6 +640,7 @@ public sealed class ConductorService(
     public async Task<IReadOnlyList<ConductorAssignment>> PlanAsync(CancellationToken ct = default)
     {
         if (!await EnabledAsync(ct)) return [];
+        if (await StaffingWaitAsync(ct) is not null) return [];
         // Callers that already know staffing is on pass it in; PlanAsync on its own re-reads it.
 
         return await ledger.ReadAsync<IReadOnlyList<ConductorAssignment>>(async (db, now) =>
@@ -762,6 +797,7 @@ public sealed class ConductorService(
         // Two switches, both of which must be on. The main one is the conductor as a whole; the second is the half
         // that begins new work, and it is off until the founder has said otherwise on this hub.
         if (!await EnabledAsync(ct) || !await OrchestratorsEnabledAsync(ct)) return [];
+        if (await StaffingWaitAsync(ct) is not null) return [];
 
         return await ledger.ReadAsync<IReadOnlyList<OrchestratorAssignment>>(async (db, now) =>
         {
@@ -783,11 +819,13 @@ public sealed class ConductorService(
                 .ToList();
             var owners = await PreviousOwnersAsync(db, [.. tasks.Where(CarriesWork).Select(t => t.Id)], ct);
             var budgetBlocked = await BudgetBlockedAsync(db, now, ct);
+            var completed = await TaskDependencies.CompletedAsync(db, ct);
 
             var plan = new List<OrchestratorAssignment>();
             foreach (var task in tasks)
             {
                 var key = OrchestratorKey(Wire.TaskId(task.Id));
+                if (task.DependsOn.Any(d => !completed.Contains(d))) continue;
                 if (budgetBlocked.Contains(key)) continue;
                 lock (_running)
                     if (_running.Contains(key)) continue;
@@ -822,6 +860,38 @@ public sealed class ConductorService(
     /// this task, the task is not orphaned.
     /// </para>
     /// </summary>
+    private static async Task<Dictionary<int, string>> ExitedOwnersAsync(MuthurDb db, CancellationToken ct)
+    {
+        var events = await db.Events.Where(e => e.TaskId != null &&
+            (e.Type == "conductor.orchestrator_exited" || e.Type == "task.claimed")).OrderBy(e => e.Seq).ToListAsync(ct);
+        var ended = new Dictionary<int, string>();
+        foreach (var e in events)
+        {
+            var id = e.TaskId!.Value;
+            if (e.Type == "task.claimed") { ended.Remove(id); continue; }
+            using var payload = JsonDocument.Parse(e.PayloadJson);
+            if (payload.RootElement.TryGetProperty("agent", out var agent) && agent.GetString() is { } name) ended[id] = name;
+        }
+        return ended;
+    }
+
+    private Task RecoverExitedOwnersAsync(CancellationToken ct) => ledger.MutateAsync(Caller.Founder, async m =>
+    {
+        var exited = await ExitedOwnersAsync(m.Db, ct);
+        var tasks = await m.Db.Tasks.Include(t => t.Owner).Where(t => t.State == TaskState.InProgress && t.Owner != null).ToListAsync(ct);
+        foreach (var task in tasks.Where(t => exited.GetValueOrDefault(t.Id) == t.Owner!.Name))
+        {
+            lock (_running) if (_running.Any(k => k.StartsWith(Wire.TaskId(task.Id) + "/", StringComparison.Ordinal))) continue;
+            var owner = task.Owner!.Name;
+            task.State = TaskState.Backlog;
+            task.Owner = null;
+            task.OwnerAgentId = null;
+            task.ClaimExpires = null;
+            task.UpdatedAt = m.Now;
+            m.Record("task.released", task.Id, new { agent = owner, reason = "Owning conductor session exited; resume preserved work." });
+        }
+    }, ct);
+
     private async Task<IReadOnlyList<Orphaned>> PlanOrphanedAsync(CancellationToken ct)
     {
         var now = clock.GetUtcNow();
@@ -829,11 +899,12 @@ public sealed class ConductorService(
 
         var waiting = await ledger.ReadAsync<IReadOnlyList<Candidate>>(async (db, _) =>
         {
+            var exited = await ExitedOwnersAsync(db, ct);
             // A project with no repository on record has nothing to merge into, and asking git about it only
             // produces a refusal to tell the founder about.
             var validated = await db.Tasks.Include(t => t.Project).Include(t => t.Owner)
                 .Where(t => t.State == TaskState.Validated &&
-                            t.Owner != null && t.Owner.LastHeartbeat < stale &&
+                            t.Owner != null &&
                             t.Project != null && t.Project.RepoPath != "")
                 .OrderByDescending(t => t.Priority).ThenBy(t => t.Id)
                 .ToListAsync(ct);
@@ -841,6 +912,7 @@ public sealed class ConductorService(
             var candidates = new List<Candidate>();
             foreach (var task in validated)
             {
+                if (task.Owner!.LastHeartbeat >= stale && exited.GetValueOrDefault(task.Id) != task.Owner.Name) continue;
                 var key = Wire.TaskId(task.Id);
                 // "T-n/", never "T-n": the keys are "T-n/role" and a bare prefix would read T-11's session as T-1's.
                 var prefix = key + "/";
@@ -996,6 +1068,8 @@ public sealed class ConductorService(
         try
         {
             _lastPass = clock.GetUtcNow();
+            await TaskDependencies.ResolveAsync(ledger, ct);
+            await RecoverExitedOwnersAsync(ct);
             await EscalateExhaustedAsync(ct);
 
             // Before any staffing, and deliberately not behind the orchestrator switch: a task validated before
@@ -1152,7 +1226,16 @@ public sealed class ConductorService(
         }
         finally
         {
-            lock (_running) _running.Remove(key);
+            try
+            {
+                await ledger.MutateAsync(Caller.Founder, m =>
+                {
+                    m.Record("conductor.orchestrator_exited", assignment.TaskId,
+                        new { agent = OrchestratorSessionLauncher.IdentityName(assignment.TaskKey) });
+                    return Task.CompletedTask;
+                }, CancellationToken.None);
+            }
+            finally { lock (_running) _running.Remove(key); }
         }
     }
 

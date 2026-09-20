@@ -2533,6 +2533,25 @@ public sealed class ConductorTests : IDisposable
     /// </summary>
     private void OwnerGoesQuiet() => _hub.Clock.Advance(TimeSpan.FromMinutes(4));
 
+    [Fact]
+    public async Task A_finished_conductor_owner_does_not_wait_for_its_recent_heartbeat_to_expire_before_landing()
+    {
+        await SetUpAsync();
+        var registration = await _hub.Services.GetRequiredService<AgentService>()
+            .RegisterConductorSessionAsync(new RegisterAgentRequest("conductor-owner", "codex", "test"));
+        var owner = _hub.CreateClient(registration.Token);
+        var id = await ValidatedTaskAsync(owner);
+        await _hub.Services.GetRequiredService<Ledger>().MutateAsync(Caller.Founder, m =>
+        {
+            m.Record("conductor.orchestrator_exited", int.Parse(id.AsSpan(2)), new { agent = "conductor-owner" });
+            return Task.CompletedTask;
+        });
+        Assert.Contains((await Conductor.StatusAsync()).Landings!, r => r.Task == id && r.Reason.Contains("Ready"));
+        Assert.Equal(0, await Conductor.RunPassAsync());
+        Assert.Equal(TaskState.Done, (await _hub.Founder().GetTaskAsync(id)).Task.State);
+        Assert.Empty((await Conductor.StatusAsync()).Landings!);
+    }
+
     /// <summary>
     /// The default branch checked out with uncommitted changes, which is the refusal that fires most often on a
     /// machine that is also worked in. Unlike a deleted branch it leaves the task branch alone, so a test can

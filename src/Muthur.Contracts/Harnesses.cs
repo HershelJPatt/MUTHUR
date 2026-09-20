@@ -54,7 +54,10 @@ public sealed record ConductorStatusDto(
     bool Enabled, int Running, int MaxSessions, int SessionMinutes, int MaxAttempts, int IntervalSeconds,
     int StallProbeMinutes, DateTimeOffset? LastPass, string? LastAction, int Ceiling, string CeilingReason,
     bool Orchestrators,
-    IReadOnlyList<ConductorSessionDto> Sessions, IReadOnlyList<ConductorStallDto> Stalls);
+    IReadOnlyList<ConductorSessionDto> Sessions, IReadOnlyList<ConductorStallDto> Stalls,
+    string? StaffingWait = null, IReadOnlyList<LandingWaitDto>? Landings = null);
+
+public sealed record LandingWaitDto(string Task, DateTimeOffset Since, string Reason);
 
 public sealed record ConductorSwitch(bool Enabled);
 
