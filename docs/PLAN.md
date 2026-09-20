@@ -297,5 +297,8 @@ launch code and adapters, not schema surgery. M6 can move ahead of M3–M5 if su
 ## 11. Open decisions
 
 1. **First external project after the hub itself** — a personal project or the monorepo? Determines whether `land_mode=pr` + Azure DevOps ingest move up from M6.
+
+    **Next inbound channel — decided and deferred.** The founder decided on 2026-09-19 (T-21, request 26): none yet. No new inbound channel will be built until the first external project exists. If that project is the company monorepo, Azure DevOps is next; if it is a personal repository, calendar is next. The first external project remains an open decision. Email and WhatsApp are deferred. This avoids building a half-used adapter before there is a concrete project need; revisit the channel choice when that first external project exists.
+
 2. **What "validation" means for that project** — which platforms/validators are required, and can an agent already build, run, and drive the app unattended? If not, that harness is the real M4 work.
 3. **Answer channel** — browser "Needs you" page only, or also Discord/WhatsApp so you can unblock agents from your phone (pulls part of M7 forward). **Decided: both**, because being able to unblock an agent from a phone is the difference between an organization that runs while the founder is away and one that does not. `discord:` ingest and a `discord-webhook` outbound target. What it cost: ingest is a firehose — every message in the watched channel becomes an inbound item, and mentions arrive as raw ids rather than names. Filed, unfixed.
