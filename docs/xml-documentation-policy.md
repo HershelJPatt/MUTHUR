@@ -1,0 +1,92 @@
+# XML documentation diagnostics policy
+
+This is evidence and a proposed policy for T-91, not active enforcement. Preserve the existing policy that public members do not all require XML documentation. Comments should add information beyond a declaration's name.
+
+## Reproduce the evidence
+
+Run from the repository root with PowerShell 7, the repository-selected .NET SDK, and dependencies already in the local NuGet cache:
+
+```powershell
+pwsh -NoProfile -File scripts/test-xml-documentation-policy.ps1 -OutputDirectory artifacts/xml-documentation-policy
+dotnet build Muthur.slnx --disable-build-servers -m:1
+dotnet test Muthur.slnx --no-build --disable-build-servers -m:1 --blame-hang-timeout 2m
+git diff --check
+```
+
+The runner records actual source HEAD, UTC date, SDK, argument arrays, exits, diagnostics and log filenames in `inventory.json`. Each command has separate stdout/stderr logs. Builds run serially with build servers disabled; solution builds have a ten-minute timeout and fixture builds have a two-minute timeout. On expiry the runner kills only its child process tree. Fixtures live in a unique system temporary directory, outside solution compilation inputs, and are removed in `finally`; evidence remains in the output directory. No persistent environment or global configuration is changed.
+
+Solution commands share `dotnet build Muthur.slnx -t:Rebuild --disable-build-servers -m:1 -nologo -p:RestoreConfigFile=<temporary NuGet.Config> -p:NuGetAudit=false`. The temporary configuration clears package sources, so restore uses cached packages and does not require a network service. Missing SDKs or cached dependencies are infrastructure failures, not warning counts. The three modes append:
+
+| Mode | Additional arguments |
+| --- | --- |
+| Baseline | None |
+| Documentation | `-p:GenerateDocumentationFile=true -p:TreatWarningsAsErrors=false` |
+| Documentation, suppress CS1591 | `-p:GenerateDocumentationFile=true -p:NoWarn=1591` |
+
+Fixture commands are `dotnet build Probe.csproj -t:Rebuild --disable-build-servers -m:1 -nologo -p:GenerateDocumentationFile=false` and the same command with `true`. The isolated project targets `net10.0`, retains warnings-as-errors and suppresses only CS1591. It copies the repository's SDK selection and uses an empty package-source configuration. The exact fixture source is retained in JSON.
+
+## Measured baseline and results
+
+Source HEAD: 9855e53fb23bbf25488b1337e3d756d08f5f6993. SDK: 10.0.204. Run started (UTC): 2026-09-20T23:03:26.4695287+00:00.
+Branch: task/T-91-unit-a3; frozen base: task/T-91-xml-policy at the same SHA. Product sources and build settings match that complete baseline; only the two Unit A artifacts are added. Worktree: C:/WorkSrc/MUTHUR/.worktrees/T-91-policy/.worktrees/task-T-91-unit-a3.
+
+The runner exited 0. Inventory mode exits were baseline 0, documentation 0, and documentation with CS1591 suppressed 1 (expected compiler failure). All eight fixture observations matched expectations.
+
+Each cell below lists counts in code order **CS1570 / CS1573 / CS1587 / CS1591**. Project names map to the same-named .csproj under src/ or tests/ as indicated. Zeroes are measured counts for that attempted build, including projects whose compilation was blocked by upstream errors.
+
+| Project | Baseline | Documentation | Documentation, suppress CS1591 |
+| --- | --- | --- | --- |
+| src/Muthur.Cli | 0 / 0 / 0 / 0 | 0 / 12 / 0 / 51 | 0 / 0 / 0 / 0 |
+| src/Muthur.Contracts | 0 / 0 / 0 / 0 | 0 / 82 / 3 / 407 | 0 / 82 / 3 / 0 |
+| src/Muthur.Core | 0 / 0 / 0 / 0 | 0 / 0 / 0 / 179 | 0 / 0 / 0 / 0 |
+| src/Muthur.Data | 0 / 0 / 0 / 0 | 0 / 0 / 0 / 25 | 0 / 0 / 0 / 0 |
+| src/Muthur.Launch | 0 / 0 / 0 / 0 | 0 / 14 / 3 / 51 | 0 / 0 / 0 / 0 |
+| src/Muthur.Server | 0 / 0 / 0 / 0 | 0 / 15 / 2 / 248 | 0 / 0 / 0 / 0 |
+| tests/Muthur.Cli.Tests | 0 / 0 / 0 / 0 | 0 / 0 / 0 / 123 | 0 / 0 / 0 / 0 |
+| tests/Muthur.Core.Tests | 0 / 0 / 0 / 0 | 0 / 0 / 0 / 38 | 0 / 0 / 0 / 0 |
+| tests/Muthur.Launch.Tests | 0 / 0 / 0 / 0 | 0 / 0 / 0 / 60 | 0 / 0 / 0 / 0 |
+| tests/Muthur.Server.Tests | 0 / 0 / 0 / 0 | 0 / 1 / 0 / 591 | 0 / 0 / 0 / 0 |
+| **Total** | 0 / 0 / 0 / 0 | 0 / 124 / 8 / 1773 | 0 / 82 / 3 / 0 |
+
+The warnings-only build has 1,905 distinct diagnostics; suppressing CS1591 leaves 85 observed errors before downstream compilation can complete.
+
+| Fixture | Documentation generation | Exit | Diagnostic IDs | Expected behavior |
+| --- | --- | --- | --- | --- |
+| valid | false | 0 | none | Compiles; matched |
+| valid | true | 0 | none | Compiles; matched |
+| duplicate | false | 0 | none | Compiles; matched |
+| duplicate | true | 0 | none | Compiles; matched |
+| stranded | false | 0 | none | Compiles; matched |
+| stranded | true | 1 | CS1587 | CS1587 rejected as error; matched |
+| semantic | false | 0 | none | Compiles; matched |
+| semantic | true | 0 | none | Compiles; matched |
+
+The adjacent-summary result supports the proposed policy: documentation generation does not reject duplicate direct summaries. Only the stranded comment with generation enabled fails. The semantically incorrect summary compiles in both modes.
+
+## Compiler coverage and limits
+
+Diagnostics are deduplicated by project, file, line, column, code and message. Repeated MSBuild summary lines do not inflate the inventory. Counts include explicit zeroes for every solution project and observed code, plus CS1570, CS1587 and CS1591. CS1570 represents malformed XML, CS1573 missing parameter documentation, CS1587 invalid documentation placement, and CS1591 missing public-member documentation. These are compiler diagnostic counts, not counts of defective comments or public APIs.
+
+The strict documentation build can stop compilation of dependent projects after an upstream failure. Its counts describe that attempted build, not the complete repository's potential diagnostics. The warnings-only documentation build supplies the more complete inventory. Generated source can contribute compiler diagnostics; the current compiler inventory is deliberately distinct from the proposed hand-written-source enforcement scope.
+
+The duplicate fixture has two adjacent, direct `<summary>` elements in one documentation comment on one declaration. It does not have nested summary tags. A stranded fixture ends a class with a documentation comment and no following declaration: this is syntactically invalid placement. The semantic fixture attaches well-formed XML to a class but falsely says it deletes database records. The compiler cannot infer whether prose truthfully describes behavior, its intended owner or its provenance. Passing fixtures therefore do not establish documentation quality.
+
+## Options and recommendation
+
+| Option | Benefit | Limitation / cost |
+| --- | --- | --- |
+| Keep compiler settings unchanged | Preserves current build and missing-documentation policy | Does not provide the measured documentation-generation placement checks or duplicate-summary enforcement |
+| Enable documentation generation and suppress only CS1591 | Adds XML/placement diagnostics while retaining the missing-documentation exemption | Existing non-CS1591 diagnostics fail the build; adjacent summaries and false prose still pass |
+| Future focused source-analysis rule | Can reject more than one direct summary element associated with one declaration without requiring documentation everywhere | Requires syntax-aware implementation, scope decisions and dedicated tests; cannot establish semantic correctness or provenance |
+
+Prefer a future focused syntax-aware check for duplicate direct summaries. Do not enable documentation generation solely to prevent duplicate summaries: the adjacent-summary probe compiles in both modes. Evaluate invalid-placement compiler coverage separately, including the existing CS1573/CS1587 inventory and remediation cost. Neither this document nor the evidence runner changes project settings, CI, existing comments or build enforcement. Implementation needs its own reviewed task.
+
+## Follow-up acceptance criteria
+
+- Scope the future check to tracked, hand-written C# files under `src/` and `tests/`. Exclude generated files (including generated-source markers), `bin/`, `obj/` and fixtures; test each exclusion explicitly.
+- Parse C# documentation syntax and inspect direct XML elements belonging to each declaration. Do not enforce this with a regex. Distinguish multiple top-level summaries from summaries nested in other elements, malformed XML and summary-looking text inside examples or escaped text.
+- Test no documentation, one summary, two or more adjacent summaries, multiline and block documentation comments, attributes between documentation and declarations, and multiple attached documentation trivia separated by ordinary comments or whitespace. Define declaration ownership across these trivia before implementing; do not assume one trivia equals all of a declaration's documentation.
+- Test adjacent declarations, partial declarations, members and types, conditional compilation, generated exclusions and fixture exclusions. Give deterministic file/line diagnostics without automatically rewriting comments or merging prose.
+- Separately test stranded comments at class/file end and compiler documentation generation enabled/disabled. Decide placement enforcement and remediation independently from duplicate-summary enforcement.
+- Retain negative cases proving that semantically incorrect but well-formed prose is outside automatic detection. Do not claim semantic or provenance guarantees.
+- Re-run this inventory on the reviewed implementation baseline and SDK, preserve logs, verify JSON/table agreement, and demonstrate that new duplicate-summary tests fail without the focused check. Keep missing-documentation policy unchanged.
