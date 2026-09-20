@@ -1386,9 +1386,8 @@ public sealed class ConductorTests : IDisposable
         await SetUpAsync("win-validator");
         await DefineAsync("win-validator");
         await TaskInValidationAsync();
-        var founder = _hub.Founder();
-        foreach (var account in new[] { "claude-subscription", "chatgpt-subscription" })
-            (await founder.PostAsJsonAsync(Routes.AccountLimits, new AccountLimitRequest(account, _hub.Clock.GetUtcNow().AddHours(2)))).EnsureSuccessStatusCode();
+        // An empty catalog is a configuration failure. Known exhausted accounts now stop before staffing.
+        File.WriteAllText(Path.Combine(_hub.DataDir, MuthurEnvironment.HarnessFile), """{"tiers":{"mastermind":[]}}""");
         _hub.Validators.Delegate = RealLauncher();
 
         for (var pass = 0; pass < 4; pass++)
