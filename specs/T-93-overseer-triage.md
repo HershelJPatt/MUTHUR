@@ -30,5 +30,20 @@ existing checkpoint, condition, cooldown, account and two-slot rules remain unch
 Verify the three incidents (37/38/39 equivalents) via ask → triage → decide → unblock;
 human categories, explicit/legacy human preservation, unauthorized/stale callers,
 closed requests, reason/evidence enforcement, request route display, Native AOT CLI
-round-trip and existing request/overseer regressions. Browser checks use an isolated
-installed scratch hub. Independent validation is mandatory; the owner does not vote.
+round-trip and existing request/overseer regressions. Independently request
+`/needs-you` from the installed scratch hub after creating one request of each kind;
+assert `Overseer triage`, `Overseer decision`, `Founder only` and their route reasons
+in the returned server-rendered HTML. These fields are plain server-rendered card
+content; T-93 does not change the existing live request-event subscription or add
+browser-only behavior. A browser connector is therefore not a prerequisite for this
+task's required verification. The owner's Playwright check additionally exercised
+live arrival/removal without reload and remains supporting evidence, not a substitute
+for independent installed CLI/API/HTML checks. Independent validation is mandatory;
+the owner does not vote.
+
+Verification amendment after the first blocked verdict: the original wording implied
+a browser was a required gate, although this change is independently provable through
+the installed API and prerendered HTML. The validator confirmed all 4726 tests and
+installed routing/authority checks but had no browser connector. This amendment makes
+the required rendering check explicit without dropping any route/reason assertion.
+Do not treat an unavailable browser connector as a missing prerequisite here.
