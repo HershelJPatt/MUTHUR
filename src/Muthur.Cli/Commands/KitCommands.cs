@@ -69,76 +69,131 @@ public static partial class KitCommands
         if (!TryReadManifest(manifestPath, harnessDir, kitDir, repo, out var entries, out var problem))
             return Output.Error("invalid_manifest", problem, ExitCodes.RuleViolation);
 
+        var transaction = new InstallTransaction(repo);
         using var stream = new MemoryStream();
-        using (var json = new Utf8JsonWriter(stream))
+        // The whole write phase, including the source read and the Expand inside the loop: T-8 Amendment 1
+        // recorded those as the one place a manifest-proof read could still throw, and they roll back too.
+        try
         {
-            json.WriteStartObject();
-            json.WriteString("harness", harness);
-            json.WriteString("repo", repo);
-            var briefs = new List<(string Path, bool Validator)>();
-            json.WriteStartArray("files");
-            foreach (var entry in entries)
-            {
-                var from = Path.GetFullPath(Path.Combine(harnessDir, entry.From));
-                var content = Expand(File.ReadAllText(from), kitDir);
-                var status = WriteKitFile(Path.Combine(repo, entry.To), content, entry.Mode);
-                if (entry.To.StartsWith(BriefDirectory, StringComparison.Ordinal) && entry.To.EndsWith(".md", StringComparison.Ordinal))
-                    briefs.Add((entry.To, entry.Validator));
-                json.WriteStartObject();
-                json.WriteString("path", entry.To);
-                json.WriteString("status", status);
-                json.WriteEndObject();
-            }
-
-            // Worker and validator worktrees live under .worktrees/ and must never show up as untracked files.
-            var ignore = Path.Combine(repo, IgnoreFile);
-            var ignored = File.Exists(ignore) ? File.ReadAllText(ignore) : "";
-            if (!ignored.Split('\n').Any(line => line.Trim() is ".worktrees/" or ".worktrees"))
-            {
-                File.WriteAllText(ignore, (ignored.Length > 0 ? ignored.TrimEnd() + "\n" : "") + ".worktrees/\n");
-                json.WriteStartObject();
-                json.WriteString("path", IgnoreFile);
-                json.WriteString("status", "updated");
-                json.WriteEndObject();
-            }
-
-            var projectFile = Path.Combine(repo, ProjectContext.FileName);
-            if (!File.Exists(projectFile))
-            {
-                var k = (projectKey ?? new DirectoryInfo(repo).Name).Trim().ToLowerInvariant();
-                File.WriteAllText(projectFile, $$"""
-                    {
-                      "key": "{{k}}",
-                      "build": "",
-                      "test": "",
-                      "run": "",
-                      "notes": "How to build, test and launch this project unattended. Orchestrators and validators read this."
-                    }
-
-                    """);
-                json.WriteStartObject();
-                json.WriteString("path", ProjectContext.FileName);
-                json.WriteString("status", "created");
-                json.WriteEndObject();
-            }
-            json.WriteEndArray();
-
-            // A brief on disk does nothing until a role exists, and only the founder may create one.
-            json.WriteStartArray("roles");
-            foreach (var (brief, validator) in briefs.Where(b => File.Exists(Path.Combine(repo, b.Path))))
+            using (var json = new Utf8JsonWriter(stream))
             {
                 json.WriteStartObject();
-                json.WriteString("role", Path.GetFileNameWithoutExtension(brief));
-                json.WriteString("brief", brief);
-                json.WriteBoolean("validator", validator);
-                json.WriteString("define", RoleDefineCommand(brief, validator));
+                json.WriteString("harness", harness);
+                json.WriteString("repo", repo);
+                var briefs = new List<(string Path, bool Validator)>();
+                json.WriteStartArray("files");
+                foreach (var entry in entries)
+                {
+                    var from = Path.GetFullPath(Path.Combine(harnessDir, entry.From));
+                    transaction.Touching = from;
+                    var content = Expand(File.ReadAllText(from), kitDir);
+                    var status = transaction.Apply(Path.Combine(repo, entry.To), content, entry.Mode);
+                    if (entry.To.StartsWith(BriefDirectory, StringComparison.Ordinal) && entry.To.EndsWith(".md", StringComparison.Ordinal))
+                        briefs.Add((entry.To, entry.Validator));
+                    json.WriteStartObject();
+                    json.WriteString("path", entry.To);
+                    json.WriteString("status", status);
+                    json.WriteEndObject();
+                }
+
+                // Worker and validator worktrees live under .worktrees/ and must never show up as untracked
+                // files. Written verbatim rather than applied: Apply normalises line endings, and this appends
+                // to a file the repository owns and may have written with CRLF.
+                var ignore = Path.Combine(repo, IgnoreFile);
+                // Named before the read, not just before the write: a .gitignore another process holds throws
+                // here, and Touching would otherwise still be the last entry — a file that was written fine.
+                transaction.Touching = ignore;
+                var ignored = File.Exists(ignore) ? File.ReadAllText(ignore) : "";
+                if (!ignored.Split('\n').Any(line => line.Trim() is ".worktrees/" or ".worktrees"))
+                {
+                    transaction.Write(ignore, (ignored.Length > 0 ? ignored.TrimEnd() + "\n" : "") + ".worktrees/\n");
+                    json.WriteStartObject();
+                    json.WriteString("path", IgnoreFile);
+                    json.WriteString("status", "updated");
+                    json.WriteEndObject();
+                }
+
+                var projectFile = Path.Combine(repo, ProjectContext.FileName);
+                transaction.Touching = projectFile;
+                if (!File.Exists(projectFile))
+                {
+                    var k = (projectKey ?? new DirectoryInfo(repo).Name).Trim().ToLowerInvariant();
+                    transaction.Write(projectFile, $$"""
+                        {
+                          "key": "{{k}}",
+                          "build": "",
+                          "test": "",
+                          "run": "",
+                          "notes": "How to build, test and launch this project unattended. Orchestrators and validators read this."
+                        }
+
+                        """);
+                    json.WriteStartObject();
+                    json.WriteString("path", ProjectContext.FileName);
+                    json.WriteString("status", "created");
+                    json.WriteEndObject();
+                }
+                json.WriteEndArray();
+
+                // A brief on disk does nothing until a role exists, and only the founder may create one.
+                json.WriteStartArray("roles");
+                foreach (var (brief, validator) in briefs.Where(b => File.Exists(Path.Combine(repo, b.Path))))
+                {
+                    json.WriteStartObject();
+                    json.WriteString("role", Path.GetFileNameWithoutExtension(brief));
+                    json.WriteString("brief", brief);
+                    json.WriteBoolean("validator", validator);
+                    json.WriteString("define", RoleDefineCommand(brief, validator));
+                    json.WriteEndObject();
+                }
+                json.WriteEndArray();
                 json.WriteEndObject();
             }
-            json.WriteEndArray();
-            json.WriteEndObject();
         }
+        catch (Exception ex)
+        {
+            return Failed(repo, transaction, ex);
+        }
+        transaction.Commit();
         return Output.Emit(parse, new ApiResult(200, Encoding.UTF8.GetString(stream.ToArray())));
     }
+
+    /// <summary>
+    /// A write that failed, undone. Exit 1 and not 2: a rule violation is exit 2 and a conflict exit 3, and a
+    /// locked file is neither — the founder broke no rule and the manifest is valid.
+    /// </summary>
+    /// <remarks>
+    /// Catching <c>Exception</c> here is not the widening T-8 twice refused. Those were inside a rule, where a
+    /// broad catch shortens a specific sentence into a generic one; this is around the whole write phase, where
+    /// there are no rules to shorten, and it names the exception type so a defect in MUTHUR stays legible in a
+    /// bug report. T-8's objection was that a catch here would turn the crash into a sentence while leaving the
+    /// damage: the rollback is what removes the damage, and without it this would be the thing T-8 rejected.
+    /// </remarks>
+    private static int Failed(string repo, InstallTransaction transaction, Exception ex)
+    {
+        var touching = transaction.Touching is { } path
+            ? $" while installing \"{Name(repo, path)}\""
+            : "";
+        var failed = $"{repo}: the install failed{touching}: {ex.GetType().Name}: {ex.Message}.";
+
+        var stranded = transaction.Rollback();
+        return stranded.Count == 0
+            ? Output.Error("install_failed", $"{failed} The repository was put back the way it was found; "
+                + "nothing was left behind, and kit install is safe to re-run.")
+            : Output.Error("install_not_undone", $"{failed} Putting the repository back also failed, so it is "
+                + $"part-installed: {string.Join(", ", stranded)} could not be restored. Look at those paths "
+                + "before re-running.");
+    }
+
+    /// <summary>
+    /// The path as the founder would recognise it: relative to the repository when it is inside one, and in
+    /// full when it is not. A kit source is not under the repository, and rendering it as a chain of "..\"
+    /// segments names it less clearly than not trying to.
+    /// </summary>
+    private static string Name(string repo, string path) =>
+        Path.GetRelativePath(repo, path) is var relative && relative.StartsWith("..", StringComparison.Ordinal)
+            ? path
+            : relative;
 
     /// <summary>
     /// The manifest's entries, or the error to return. Everything a bad manifest can do is decided here, before
@@ -318,7 +373,7 @@ public static partial class KitCommands
             // nothing, so a founder who protected a current file is not refused.
             var entry = entries[index];
             var content = Expand(File.ReadAllText(Path.Combine(harnessDir, entry.From)), kitRoot);
-            if (Rendered(d.Resolved, content, entry.Mode) is not { } bytes) return false;
+            if (InstallTransaction.Rendered(d.Resolved, content, entry.Mode) is not { } bytes) return false;
             return !File.Exists(d.Resolved)
                 || File.ReadAllText(d.Resolved).ReplaceLineEndings("\n") != bytes.ReplaceLineEndings("\n");
         }
@@ -721,52 +776,5 @@ public static partial class KitCommands
         var role = Path.GetFileNameWithoutExtension(brief);
         var flag = validator && !role.EndsWith("-validator", StringComparison.Ordinal) ? " --validator" : "";
         return $"muthur role define {role} --brief-file {brief}{flag} --founder";
-    }
-
-    /// <summary>
-    /// Applies one manifest entry. <c>create</c> exists because a brief stops being MUTHUR's the moment the
-    /// founder edits it, and re-running the install must never take that edit away.
-    /// </summary>
-    internal static string WriteKitFile(string path, string content, string? mode) =>
-        Rendered(path, content, mode) is { } bytes ? WriteFile(path, bytes) : "kept";
-
-    /// <summary>
-    /// Exactly what this install would leave in <paramref name="path"/>, or null when it would not write at
-    /// all. One answer to "what does this produce", so the pre-flight's question — would this put bytes here —
-    /// and the write itself cannot drift apart. They did: F3 refused a read-only file whose content already
-    /// matched, because the pre-flight knew the mode and not the content.
-    /// </summary>
-    private static string? Rendered(string path, string content, string? mode) => mode switch
-    {
-        "section" => SectionDocument(path, content),
-        "create" => File.Exists(path) ? null : content.ReplaceLineEndings("\n"),
-        _ => content.ReplaceLineEndings("\n"),
-    };
-
-    private static string WriteFile(string path, string content)
-    {
-        content = content.ReplaceLineEndings("\n");
-        var existed = File.Exists(path);
-        if (existed && File.ReadAllText(path).ReplaceLineEndings("\n") == content) return "unchanged";
-        Directory.CreateDirectory(Path.GetDirectoryName(path)!);
-        File.WriteAllText(path, content);
-        return existed ? "updated" : "created";
-    }
-
-    /// <summary>For files the repository also owns (AGENTS.md): maintain only a marked MUTHUR section inside them.</summary>
-    /// <summary>The whole document a section-mode entry would produce, existing content and all.</summary>
-    private static string SectionDocument(string path, string content)
-    {
-        const string begin = "<!-- BEGIN MUTHUR -->";
-        const string end = "<!-- END MUTHUR -->";
-        var section = $"{begin}\n{content.ReplaceLineEndings("\n").Trim()}\n{end}\n";
-        if (!File.Exists(path)) return section;
-
-        var existing = File.ReadAllText(path).ReplaceLineEndings("\n");
-        var start = existing.IndexOf(begin, StringComparison.Ordinal);
-        var stop = existing.IndexOf(end, StringComparison.Ordinal);
-        return start >= 0 && stop > start
-            ? existing[..start] + section + existing[(stop + end.Length)..].TrimStart('\n')
-            : existing.TrimEnd('\n') + "\n\n" + section;
     }
 }
