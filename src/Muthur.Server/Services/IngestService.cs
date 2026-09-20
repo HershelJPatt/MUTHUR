@@ -56,6 +56,8 @@ public sealed class IngestService(Ledger ledger, IEnumerable<IInboundSource> sou
                     {
                         var created = await InboundService.StoreAsync(m, source, project.Id, fetched.Items, ct);
                         await SaveCursorAsync(m, source, fetched.Cursor ?? cursor, error: null, ct);
+                        if (scheme == "census")
+                            m.Record("census.completed", payload: new { source, findings = fetched.Items.Count, newItems = created.Count });
                         return created.Count;
                     }, ct);
                 }

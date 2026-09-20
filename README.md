@@ -178,6 +178,86 @@ muthur out send O-3                                    # the hub re-checks hash 
 `--founder-approval` targets also need you. Set `Muthur:RequireCrossProviderReview=true` to require the reviewer to run
 on a different vendor than the author.
 
+### Recurring local checks (census)
+
+`census:<check-key>` runs a founder-configured deterministic check on the existing ingest schedule
+(also on hub startup and `muthur inbound poll`). No check is enabled by default, and a sweep launches no
+model or agent session. Findings enter inbound for comms on-call triage and normal claim/convert handling.
+
+Configure the hub locally, for example in its `appsettings.json`, then restart it:
+
+```json
+{
+  "Muthur": {
+    "CensusChecks": {
+      "backup-status": {
+        "FileName": "C:\\Program Files\\PowerShell\\7\\pwsh.exe",
+        "Arguments": ["-NoProfile", "-NonInteractive", "-File", "C:\\checks\\backup-status.ps1"],
+        "WorkingDirectory": "C:\\checks",
+        "TimeoutSeconds": 30
+      }
+    }
+  }
+}
+```
+
+Environment settings also work: `Muthur__CensusChecks__backup-status__FileName`,
+`Muthur__CensusChecks__backup-status__Arguments__0`, and so on. Configuration changes take effect on
+restart. Keys must match `[a-z0-9][a-z0-9-]{0,63}` exactly. The executable must be nonblank, the working
+directory must be an existing absolute directory, arguments must be a list of strings, and the timeout
+must be 1–60 seconds (default 30). Arguments are literal; scripts require an explicit interpreter such
+as `pwsh -File` or `sh` with the script as an argument. Source locations contain only the key, never commands.
+
+Register the source as founder (this replaces the project's ingest list; include any other sources to retain):
+
+```powershell
+muthur project set my-repo --ingest census:backup-status --founder
+muthur inbound poll --founder
+muthur inbound sources
+muthur doctor
+```
+
+A tiny read-only `backup-status.ps1` could inspect an operator-maintained status file:
+
+```powershell
+$ErrorActionPreference = 'Stop'
+[Console]::OutputEncoding = [Text.UTF8Encoding]::new($false)
+if ([IO.File]::ReadAllText('C:\checks\backup-state.txt').Trim() -eq 'failed') {
+    [Console]::Out.Write('[{"id":"backup-last-run","title":"Last backup failed","body":"Inspect the local backup log.","url":"https://example.com/runbook/backup"}]')
+} else {
+    [Console]::Out.Write('[]')
+}
+```
+
+stdout must be one complete JSON array of **all currently active** findings, including `[]` when none
+are active. Each finding requires a case-sensitive stable `id` matching
+`[a-zA-Z0-9][a-zA-Z0-9._-]{0,127}` and a nonblank `title` of at most 500 characters. Optional `body` is a
+string of at most 16,000 characters (default empty); optional `url` is an absolute HTTP(S) string of at
+most 2,048 characters (default absent). Nulls, duplicate or unknown fields, duplicate IDs, malformed JSON,
+and more than 1,000 findings reject the entire snapshot. Findings are inert text, never commands or instructions.
+
+Keep IDs stable when editing scripts or changing finding text. An active ID retains its incident and
+original inbound text, including after conversion or dismissal. A successful snapshot omitting an ID
+ends its recurrence tracking; this does not close inbound or tasks. Reappearance creates new inbound
+with a fresh sequence. Failure, downtime, and removing/readding the same check key do not resolve an
+incident. Cursors survive restart, and different sources have independent identities. Renaming a key
+creates a new source and may repeat findings. Incidents entirely between polls cannot be observed.
+
+Nonzero exit, startup failure, timeout (including stream draining), excessive output (1,048,576 characters
+per stream), invalid configuration, invalid cursor, or invalid JSON fails the poll without partial ingest
+or advancing the cursor. `inbound sources` exposes `lastError`; `doctor` reports the failed ingest until a
+successful poll, including `[]`, clears it. Doctor probes validate configuration and executable resolution
+without running scripts. Errors expose only fixed categories and exit codes; process output, stderr, and
+arguments are not logged. Successful polls atomically record `census.completed` with source, finding
+count and newly created count, including zero; failures use the existing `ingest.failing`/`ingest.recovered`
+events. Inspect scripts locally when a safe category is insufficient to diagnose a failure.
+
+These are **trusted operator programs running as the hub user, not a sandbox**. Scripts must be read-only,
+must not invoke models, and must not perform outbound actions. `MUTHUR_AGENT`, `MUTHUR_TOKEN`, and
+`Muthur__DiscordBotToken` are removed from their environment; this is not isolation from other user data
+or credentials. Test against a scratch hub, never the live hub. Installed verification is available as
+`pwsh -NoProfile -File scripts/verify-census.ps1 -InstallPath ./artifacts/T-7-verify`.
+
 ## Configuration
 
 | Setting | Default | |
@@ -187,6 +267,7 @@ on a different vendor than the author.
 | `MUTHUR_AGENT` | — | the agent a session acts as (or `--as-agent`, `--founder`) |
 | `Muthur:ClaimLeaseMinutes` / `RoleLeaseMinutes` | 30 / 30 | appsettings or `Muthur__…` environment variables |
 | `Muthur:IngestIntervalSeconds` | 180 | |
+| `Muthur:CensusChecks` | empty | trusted local check definitions; restart after changes |
 | `Muthur:RequireCrossProviderReview` | false | |
 | `Muthur:ConductorEnabled` | false | the starting value only; `muthur conductor on --founder` is stored in the database and outlives a restart |
 | `Muthur:ConductorMaxSessions` | 2 | the starting value only; `muthur conductor sessions <n> --founder` is stored in the database and outlives a restart |

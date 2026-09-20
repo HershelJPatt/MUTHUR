@@ -73,6 +73,8 @@ public static class Startup
         builder.Services.AddSingleton<PushService>();
         builder.Services.AddSingleton<IInboundSource, GitHubIssuesSource>();
         builder.Services.AddSingleton<IInboundSource, DiscordChannelSource>();
+        builder.Services.AddSingleton<IInboundSource, CensusSource>();
+        builder.Services.AddSingleton<ICensusCommandRunner, CensusCommandRunner>();
         builder.Services.AddSingleton<IProcessRunner, ProcessRunner>();
         builder.Services.AddSingleton<IValidatorSessionLauncher, ValidatorSessionLauncher>();
         builder.Services.AddSingleton<IOrchestratorSessionLauncher, OrchestratorSessionLauncher>();
