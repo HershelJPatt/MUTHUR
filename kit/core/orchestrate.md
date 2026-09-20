@@ -8,7 +8,7 @@ text before loading them into cloud context; verify the original evidence when d
 Local coding is disabled by default because the Codex/Ollama tool pilot failed.
 Use the implementer tier until a successful pilot enables the local-implementer catalog.
 Once enabled, for a small mechanical unit with objective checks, make one `muthur worker run --tier
-local-implementer --spec <spec> --unit <unit> --task T-n --base <commit> --timeout-minutes 10`
+local-implementer --spec <spec> --unit <unit> --task T-n --base <base-branch> --timeout-minutes 10`
 attempt. Review its diff and run checks. Escalate failures with evidence to the
 implementer tier; do not retry locally in a loop. Keep architecture, ambiguity,
 complex debugging and final validation on the mastermind tier.
@@ -54,12 +54,27 @@ task to the backlog for someone else to pick up.
    then `muthur task spec T-n specs/T-n.md`. A spec is frozen when an implementer could complete it
    without making a single design decision. If you can't write it that precisely, you haven't finished step 2.
    Its *Verification* section has a bar of its own: see **Verification a conductor-started session can run**.
-4. **Split and delegate.** Break the spec into units that can be built independently. For each unit start an
-   implementer in its own git worktree on branch `task/T-n-<slug>` (or sub-branches you will merge into it).
-   Your harness may have a native way to do this; `muthur worker run --tier implementer --spec … --unit …` works from any
-   harness and staffs the tier with whichever model and account is available.
-   Give it: the spec path, the unit it owns, the branch you committed the frozen spec to and no other, the
-   default branch it should measure that base against, the exact verification commands. Nothing else — no
+4. **Split and delegate.** Break the spec into units that can be built independently. The frozen base branch
+   `task/T-n-<slug>` is distinct from each unit's output branch. Choose one of two dispatch modes:
+
+   - **Worker launcher:** prefer `muthur worker run` when deterministic output branch placement is required.
+     It creates a fresh worktree from `--base` and accepts an explicit new output branch with `--branch`:
+
+     ```
+     muthur worker run --tier implementer --spec specs/T-n.md --unit "Unit A" --task T-n --base task/T-n-<slug> --branch task/T-n-unit-a --note "Base branch task/T-n-<slug>; dispatch SHA <full-commit-sha>; default branch main."
+     ```
+
+     Replace placeholders and `main` with the actual assignment values. The output branch must not already
+     exist; do not pre-create its worktree. The launcher report supplies the actual path and output branch.
+   - **Native isolation:** the harness allocates the path and output branch. Pass the relative spec path,
+     unit, named local base branch, full dispatch SHA, named default branch and verification commands,
+     not a prepared absolute worktree as an assignment. Require WORKTREE and BRANCH in the report.
+
+   Neither mode adopts an already-prepared worktree. Do not call EnterWorktree or write through a prepared
+   sibling path to repair assignment. A contradictory explicit path assignment returns `STATUS: blocked`
+   before writes with expected/actual root and branch; redispatch via `muthur worker run`.
+   Do not copy uncommitted output by hand between trees as normal integration.
+   Give every worker the exact verification commands and the report format reminder. No
    hub access, no authority to merge or push. Use a stronger
    (mastermind-tier) sub-orchestrator instead of an implementer when the unit is itself a large or risky
    problem space.
@@ -106,7 +121,7 @@ task to the backlog for someone else to pick up.
    So every delegation prompt must **carry the branch name and the commit sha** of the frozen spec: the
    branch because that is the base, and an implementer reading the spec from a branch sees an amendment while
    one reading it from a sha never can; the sha because it is the only thing that tells the implementer,
-   before it writes a line, that the worktree it woke up in is not the one you meant. Name the project's
+   before it writes a line, whether the live base still matches the frozen assignment. Name the project's
    default branch as well — the implementer's contract needs it to tell an inherited lineage from work of its
    own. And say in the prompt that the worktree may have arrived somewhere else, and that checking is the
    first thing it does.
@@ -117,7 +132,9 @@ task to the backlog for someone else to pick up.
    yourself. Check the change against the spec line by line, and against the codebase's conventions.
    Send work back with specific corrections until it is right. Fix trivial things by instructing the
    implementer, not by editing silently — the spec and the branch must stay the record of what was asked and done.
-6. **Integrate** the unit branches into `task/T-n-<slug>`, rebuild, retest.
+6. **Integrate** committed unit branch output into `task/T-n-<slug>` only. Check the reported WORKTREE
+   (absolute actual root) and BRANCH against the native allocation or launcher report before integrating;
+   an explicit assignment mismatch must be resolved by redispatch. Rebuild and retest.
 7. **Hand to validation.** Clean up scratch processes first, then `muthur task implemented T-n --branch task/T-n-<slug>`. The task moves to
    `validating`; validators you do not control will exercise it end to end. If a validator fails it, the task
    returns to you `in_progress` with evidence: fix, re-review, mark implemented again.
