@@ -6,7 +6,7 @@
     <div class="panel-head"><span class="panel-title">Overseer</span><span class="panel-sub">@(_status.Config.Enabled ? "enabled" : "off")</span></div>
     <div class="panel-body">
         <div class="agent-meta">@_status.Config.Harness / @_status.Config.Model · @_status.Config.ReasoningEffort</div>
-        <div class="agent-meta">@_status.StartsToday / @_status.Config.MaxStartsPerDay starts in 24h · shares conductor slots</div>
+        <div class="agent-meta">@_status.StartsToday starts in 24h · @(_status.Config.MaxStartsPerDay == 0 ? "no daily limit" : $"limit {_status.Config.MaxStartsPerDay}") · shares conductor slots</div>
         <div class="agent-meta">@(_status.Run is null ? _status.LastOutcome ?? "waiting for work" : "session running")</div>
         @if (_status.Summary.Length > 0) { <details><summary>Durable memory</summary><p class="prose">@_status.Summary</p></details> }
         @foreach (var wait in _status.Waits)
@@ -23,7 +23,7 @@
             <div><label>Account key <input @bind="_account" /></label></div>
             <div><label>Effort <select aria-label="Effort" @bind="_effort">@foreach (var effort in new[] { "low", "medium", "high", "xhigh", "max" }) { <option value="@effort">@effort</option> }</select></label></div>
             <div><label>Minutes per session <input type="number" min="2" max="30" @bind="_minutes" /></label></div>
-            <div><label>Starts per 24 hours <input type="number" min="1" max="100" @bind="_starts" /></label></div>
+            <div><label>Starts per 24 hours (0 = unlimited) <input type="number" min="0" max="100" @bind="_starts" /></label></div>
             <div><label>Cooldown minutes <input type="number" min="1" max="1440" @bind="_cooldown" /></label></div>
             <div><label>Starting context characters <input type="number" min="8000" max="64000" @bind="_context" /></label></div>
             <div><label>Memory characters <input type="number" min="1000" max="12000" @bind="_memory" /></label></div>

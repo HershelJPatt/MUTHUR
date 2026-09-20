@@ -129,6 +129,26 @@ public sealed class OverseerTests : IDisposable
     }
 
     [Fact]
+    public async Task Unlimited_starts_survive_recreation_but_still_obey_cooldown()
+    {
+        Assert.Equal(20, new OverseerConfig().SessionMinutes);
+        Assert.Equal(0, new OverseerConfig().MaxStartsPerDay);
+        await Service.ConfigureAsync(Caller.Founder, Config with { SessionMinutes = 20, MaxStartsPerDay = 0 });
+        await Ledger.MutateAsync(Caller.System, m =>
+        {
+            for (var i = 0; i < 120; i++) m.Record("overseer.started");
+            return Task.CompletedTask;
+        });
+        var recreated = ActivatorUtilities.CreateInstance<OverseerService>(_hub.Services);
+        var assignment = await recreated.PrepareAsync();
+        Assert.NotNull(assignment);
+        Assert.Equal(20, assignment.Config.SessionMinutes);
+        Assert.Equal(121, (await recreated.StatusAsync()).StartsToday);
+        Assert.Null(await recreated.PrepareAsync());
+        await Assert.ThrowsAsync<MuthurException>(() => Service.ConfigureAsync(Caller.Founder, Config with { MaxStartsPerDay = -1 }));
+    }
+
+    [Fact]
     public async Task Saved_checkpoint_suppresses_unchanged_work_but_preserves_new_events()
     {
         var (assignment, caller, _) = await Start();
@@ -206,5 +226,4 @@ public sealed class OverseerTests : IDisposable
         await conductor.StopSessionsAsync();
     }
 }
-
 

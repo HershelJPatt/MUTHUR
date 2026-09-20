@@ -8,6 +8,8 @@ Deterministic checks also notice validated work unchanged for 15 minutes and in-
 or validating work unchanged for 90 minutes. An acknowledged unchanged situation does
 not repeatedly wake the model; use a durable time condition when a later recheck is needed.
 
+A daily start limit of `0` means unlimited starts while staffing is enabled; positive values remain available as an optional cap. The default session limit is 20 minutes. Cooldown, quota limits, unchanged-work suppression and the shared concurrency ceiling still apply.
+
 Configure it on the Board or Needs You page in the Overseer panel, or with:
 
 ```powershell
@@ -24,8 +26,8 @@ Example configuration (replaces the entire configuration):
   "model": "gpt-6-astra",
   "account": "chatgpt-subscription",
   "reasoningEffort": "medium",
-  "sessionMinutes": 12,
-  "maxStartsPerDay": 12,
+  "sessionMinutes": 20,
+  "maxStartsPerDay": 0,
   "cooldownMinutes": 10,
   "contextChars": 24000,
   "memoryChars": 6000
@@ -66,7 +68,7 @@ Every run starts a new harness conversation. Its prompt contains a bounded check
 up to 30 relevant changed events, and a small current issue packet. Old transcripts
 are never appended. Large questions are clipped and explicitly marked; the overseer
 must fetch original evidence before deciding. The context setting bounds the starting
-prompt in characters, not total runtime tokens. Timeouts and daily starts are additional
+prompt in characters, not total runtime tokens. Timeouts and an optional daily start cap are additional
 hard limits; instructions to checkpoint early and exit limit tool/context growth within
 a run. This is not an exact subscription-token budget.
 
@@ -97,7 +99,7 @@ The agent
 exits after checkpointing, and the next session starts fresh. The hub retains incomplete
 condition groups even if a new checkpoint accidentally omits them. Saved memory and
 waits survive process failure, model changes and hub restart. A run that dies without
-checkpointing retains the previous memory and is retried only within cooldown/daily
+checkpointing retains the previous memory and is retried only within cooldown and any configured daily
 limits. Successful checkpoints consume only the event range presented to that run, so
 events arriving during the session are not silently lost.
 

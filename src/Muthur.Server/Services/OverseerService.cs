@@ -42,7 +42,7 @@ public sealed class OverseerService(Ledger ledger, MuthurOptions options, AgentS
         if (config.Enabled && string.IsNullOrWhiteSpace(config.Account)) throw Fail.Rule("overseer_account", "Specify the account so quota limits apply to this role.");
         if (!OverseerDefaults.Supports(config.Harness) || string.IsNullOrWhiteSpace(config.Model) || config.Model.Length > 120 ||
             config.ReasoningEffort is not ("low" or "medium" or "high" or "xhigh" or "max") ||
-            config.SessionMinutes is < 2 or > 30 || config.MaxStartsPerDay is < 1 or > 100 ||
+            config.SessionMinutes is < 2 or > 30 || config.MaxStartsPerDay is < 0 or > 100 ||
             config.CooldownMinutes is < 1 or > 1440 || config.ContextChars is < 8000 or > 64000 ||
             config.MemoryChars is < 1000 or > 12000 || config.MemoryChars > config.ContextChars / 2)
             throw Fail.Rule("overseer_config", "Invalid harness, model, effort, session, daily, cooldown or context limits.");
@@ -90,7 +90,8 @@ public sealed class OverseerService(Ledger ledger, MuthurOptions options, AgentS
         if (state.LastStarted is { } last && m.Now < last.AddMinutes(Math.Max(config.CooldownMinutes,
             state.Run is null ? 0 : config.SessionMinutes + 1))) return null;
         var since = m.Now.AddDays(-1);
-        if (await m.Db.Events.CountAsync(x => x.Type == "overseer.started" && x.At >= since, ct) >= config.MaxStartsPerDay) return null;
+        if (config.MaxStartsPerDay > 0 &&
+            await m.Db.Events.CountAsync(x => x.Type == "overseer.started" && x.At >= since, ct) >= config.MaxStartsPerDay) return null;
         if (config.Account is { } account && await m.Db.AccountLimits.AnyAsync(x => x.Account == account && x.LimitedUntil > m.Now, ct)) return null;
         var events = await m.Db.Events.Where(x => x.Seq > state.Cursor && WakeEvents.Contains(x.Type))
             .OrderBy(x => x.Seq).Take(30).Select(x => new { x.Seq, x.Type, x.TaskId }).ToListAsync(ct);
