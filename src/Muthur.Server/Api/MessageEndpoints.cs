@@ -8,6 +8,13 @@ public static class MessageEndpoints
 {
     public static void MapMessageEndpoints(this IEndpointRouteBuilder app)
     {
+        app.MapGet(Routes.Api + "/overseer", (OverseerService service, CancellationToken ct) => service.StatusAsync(ct));
+        app.MapPost(Routes.Api + "/overseer/config", (HttpContext http, OverseerConfig config, OverseerService service, CancellationToken ct) =>
+            service.ConfigureAsync(http.GetCaller(), config, ct)).RequireFounder();
+        app.MapPost(Routes.Api + "/overseer/checkpoint", async (HttpContext http, OverseerCheckpoint checkpoint, OverseerService service, CancellationToken ct) =>
+        { await service.CheckpointAsync(http.GetCaller(), checkpoint, ct); return Results.Ok(); });
+        app.MapPost(Routes.Api + "/overseer/decide", (HttpContext http, OverseerDecision decision, RequestService service, CancellationToken ct) =>
+            service.DecideAsync(http.GetCaller(), decision, ct));
         app.MapPost(Routes.Messages, (HttpContext http, SendMessageRequest request, MessageService messages, CancellationToken ct) =>
             messages.SendAsync(http.GetCaller(), request, ct));
 

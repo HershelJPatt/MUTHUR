@@ -77,6 +77,7 @@ public static class Startup
         builder.Services.AddSingleton<IValidatorSessionLauncher, ValidatorSessionLauncher>();
         builder.Services.AddSingleton<IOrchestratorSessionLauncher, OrchestratorSessionLauncher>();
         builder.Services.AddSingleton<ConductorService>();
+        builder.Services.AddSingleton<OverseerService>();
         builder.Services.AddSingleton<CollisionService>();
         builder.Services.AddSingleton<IPullRequestOpener, GhPullRequestOpener>();
         builder.Services.AddSingleton<ITaskLander, GitLander>();
@@ -140,6 +141,7 @@ public static class Startup
         }
 
         app.Services.GetRequiredService<HarnessService>().EnsureCatalogExists();
+        await app.Services.GetRequiredService<OverseerService>().RecoverAfterRestartAsync(stopping);
 
         instance.StartedAt = clock.GetUtcNow();
         instance.FounderToken = LoadOrCreateFounderToken(options.DataDir);

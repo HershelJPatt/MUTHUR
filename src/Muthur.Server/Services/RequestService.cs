@@ -12,6 +12,7 @@ public sealed class RequestService(Ledger ledger, LeasePolicy leases)
     public Task<FounderRequestDto> AskAsync(Caller caller, AskRequest request, CancellationToken ct = default)
     {
         var agentId = caller.RequireAgent();
+        if (request.Kind is not ("human" or "technical")) throw Fail.Rule("request_kind", "Request kind must be human or technical.");
         if (string.IsNullOrWhiteSpace(request.Question))
             throw Fail.Rule("question_required", "Ask a concrete question; offer options when you can.");
 
@@ -44,6 +45,7 @@ public sealed class RequestService(Ledger ledger, LeasePolicy leases)
             };
             m.Db.FounderRequests.Add(entity);
             await m.Db.SaveChangesAsync(ct);
+            await OverseerService.Store(m, $"request.kind.{entity.Id}", request.Kind, ct);
             m.Record("request.asked", task?.Id, new { request = entity.Id, agent = caller.Name, entity.Question, entity.Options });
             return ToDto(entity, task?.Title);
         }, ct);
@@ -54,8 +56,27 @@ public sealed class RequestService(Ledger ledger, LeasePolicy leases)
         if (!caller.IsFounder) throw Fail.Unauthorized("Only the founder answers founder requests (pass --founder).");
         if (string.IsNullOrWhiteSpace(request.Answer)) throw Fail.Rule("answer_required", "An answer needs text.");
 
-        return ledger.MutateAsync(caller, async m =>
+        return AnswerCoreAsync(caller, id, request, false, ct);
+    }
+
+    public Task<FounderRequestDto> DecideAsync(Caller caller, OverseerDecision decision, CancellationToken ct = default)
+    {
+        if (string.IsNullOrWhiteSpace(decision.Answer) || string.IsNullOrWhiteSpace(decision.Reason) || string.IsNullOrWhiteSpace(decision.Evidence))
+            throw Fail.Rule("decision_evidence", "A delegated decision requires an answer, reasoning and evidence references.");
+        var answer = $"{decision.Answer}\n\nReason: {decision.Reason}\n\nEvidence: {decision.Evidence}";
+        if (answer.Length > 8000) throw Fail.Rule("decision_size", "Keep the recorded decision within 8000 characters.");
+        return AnswerCoreAsync(caller, decision.Request, new AnswerRequest(answer), true, ct);
+    }
+
+    private Task<FounderRequestDto> AnswerCoreAsync(Caller caller, int id, AnswerRequest request, bool delegated, CancellationToken ct) =>
+        ledger.MutateAsync(caller, async m =>
         {
+            if (delegated)
+            {
+                await OverseerService.RequireActive(m, ct);
+                var kind = await m.Db.Meta.Where(x => x.Key == $"request.kind.{id}").Select(x => x.Value).SingleOrDefaultAsync(ct);
+                if (kind != "\"technical\"") throw Fail.Unauthorized("This request is human-only; it has not been explicitly delegated as technical.");
+            }
             var entity = await m.Db.FounderRequests.SingleOrDefaultAsync(r => r.Id == id, ct) ?? throw Fail.NotFound("Request", id.ToString());
             if (entity.Status != RequestStatus.Open)
                 throw Fail.Conflict("request_closed", $"Request {id} is already {entity.Status.ToString().ToLowerInvariant()}.");
@@ -70,7 +91,6 @@ public sealed class RequestService(Ledger ledger, LeasePolicy leases)
                 $"Answer to your request #{id} (\"{entity.Question}\"): {entity.Answer}", entity.TaskId);
             return ToDto(entity, title);
         }, ct);
-    }
 
     /// <summary>
     /// One answer to several requests asked in the same words — but never one action. Each goes through

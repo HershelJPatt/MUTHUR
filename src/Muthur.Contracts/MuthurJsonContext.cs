@@ -8,6 +8,10 @@ namespace Muthur.Contracts;
     DefaultIgnoreCondition = JsonIgnoreCondition.WhenWritingNull,
     UseStringEnumConverter = true)]
 [JsonSerializable(typeof(ErrorResponse))]
+[JsonSerializable(typeof(OverseerConfig))]
+[JsonSerializable(typeof(OverseerCheckpoint))]
+[JsonSerializable(typeof(OverseerDecision))]
+[JsonSerializable(typeof(OverseerStatus))]
 [JsonSerializable(typeof(DependenciesRequest))]
 [JsonSerializable(typeof(StatusResponse))]
 [JsonSerializable(typeof(CheckDto))]

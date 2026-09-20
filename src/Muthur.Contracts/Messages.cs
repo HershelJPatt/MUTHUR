@@ -16,7 +16,7 @@ public sealed record MessageDto(
 
 public sealed record InboxDto(IReadOnlyList<MessageDto> Messages, bool TimedOut);
 
-public sealed record AskRequest(string Question, string? Task = null, IReadOnlyList<string>? Options = null);
+public sealed record AskRequest(string Question, string? Task = null, IReadOnlyList<string>? Options = null, string Kind = "human");
 
 public sealed record AnswerRequest(string Answer);
 

@@ -21,6 +21,11 @@ public sealed class ClaudeAdapter : IHarnessAdapter
             arguments.Add("--model");
             arguments.Add(request.Model);
         }
+        if (request.ReasoningEffort is { Length: > 0 } effort)
+        {
+            arguments.Add("--effort");
+            arguments.Add(effort);
+        }
         return new HarnessInvocation("claude", arguments, request.Prompt);
     }
 
@@ -49,6 +54,7 @@ public sealed class ClaudeAdapter : IHarnessAdapter
         using (var json = new Utf8JsonWriter(stream, new JsonWriterOptions { Indented = true }))
         {
             json.WriteStartObject();
+            json.WriteBoolean("fastMode", false);
             json.WriteStartObject("permissions");
             json.WriteStartArray("allow");
             foreach (var command in request.AllowedCommands) json.WriteStringValue($"Bash({command})");

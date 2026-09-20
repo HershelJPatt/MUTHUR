@@ -17,7 +17,8 @@ public sealed record AgentIdentity(string Name, string Token);
 /// </summary>
 public sealed class AgentLauncher(IProcessRunner processes, Func<string, (string FileName, IReadOnlyList<string> Prefix)?>? resolve = null,
     Func<AgentIdentity, CancellationToken, Task>? heartbeat = null, TimeProvider? timeProvider = null,
-    Func<AgentIdentity, CancellationToken, Task>? exited = null)
+    Func<AgentIdentity, CancellationToken, Task>? exited = null,
+    IReadOnlyDictionary<string, string>? extraEnvironment = null)
 {
     private readonly Func<string, (string FileName, IReadOnlyList<string> Prefix)?> _resolve = resolve ?? ExecutableResolver.Resolve;
 
@@ -61,9 +62,11 @@ public sealed class AgentLauncher(IProcessRunner processes, Func<string, (string
 
             var identity = await identityFor(candidate);
             using var lifetime = CancellationTokenSource.CreateLinkedTokenSource(ct);
+            var environment = new Dictionary<string, string>(extraEnvironment ?? new Dictionary<string, string>());
+            foreach (var pair in EnvironmentFor(identity)) environment[pair.Key] = pair.Value;
             var running = processes.RunAsync(executable.FileName, [.. executable.Prefix, .. invocation.Arguments],
                 request.WorkingDirectory, invocation.Stdin, timeout, lifetime.Token,
-                scrubEnvironment: null, environment: EnvironmentFor(identity));
+                scrubEnvironment: null, environment: environment);
             ProcessResult result;
             try
             {

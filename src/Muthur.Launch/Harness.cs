@@ -12,7 +12,8 @@ public sealed record WorkerRequest(
     /// <summary>Directory for files the adapter needs (settings, last-message capture). Outside the worktree.</summary>
     string ScratchDirectory,
     /// <summary>Harness-specific reasoning effort, e.g. "high". Null means the harness's own default.</summary>
-    string? ReasoningEffort = null);
+    string? ReasoningEffort = null,
+    bool RequireRepository = true);
 
 /// <summary>A process to start: executable, arguments, and the prompt on stdin.</summary>
 public sealed record HarnessInvocation(string FileName, IReadOnlyList<string> Arguments, string Stdin);

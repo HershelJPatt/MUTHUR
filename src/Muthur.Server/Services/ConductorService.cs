@@ -68,7 +68,8 @@ public sealed class ConductorService(
     IOrchestratorSessionLauncher orchestrators,
     LifecycleService lifecycle,
     ITaskLander lander,
-    HarnessService harnesses)
+    HarnessService harnesses,
+    OverseerService? overseer = null)
 {
     private readonly SemaphoreSlim _pass = new(1, 1);
     private readonly HashSet<string> _running = [];
@@ -1082,6 +1083,27 @@ public sealed class ConductorService(
             var ceiling = (await CeilingAsync(ct)).Sessions;
 
             var started = 0;
+            const string overseerKey = "organization/#overseer";
+            if (overseer is not null && RunningCount < ceiling)
+            {
+                bool reserved;
+                lock (_running) reserved = _running.Add(overseerKey);
+                if (reserved)
+                {
+                    try
+                    {
+                        var assignment = await overseer.PrepareAsync(ct);
+                        if (assignment is not null)
+                        {
+                            Track(RunOverseerAsync(assignment, overseerKey));
+                            _lastAction = "staffed organization overseer";
+                            started++;
+                        }
+                        else lock (_running) _running.Remove(overseerKey);
+                    }
+                    catch { lock (_running) _running.Remove(overseerKey); throw; }
+                }
+            }
             foreach (var assignment in await PlanAsync(ct))
             {
                 var key = $"{assignment.TaskKey}/{assignment.RoleKey}";
@@ -1128,6 +1150,12 @@ public sealed class ConductorService(
             return started;
         }
         finally { _pass.Release(); }
+    }
+
+    private async Task RunOverseerAsync(OverseerService.Assignment assignment, string key)
+    {
+        try { await overseer!.RunAsync(assignment, _sessions.Token); }
+        finally { lock (_running) _running.Remove(key); }
     }
 
     private async Task RunSessionAsync(ConductorAssignment assignment, string key)

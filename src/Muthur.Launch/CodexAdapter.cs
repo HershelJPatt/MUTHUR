@@ -27,6 +27,7 @@ public sealed class CodexAdapter(string name, string? openSourceProvider) : IHar
             "-c", "service_tier=\"default\"",
             "-c", "features.fast_mode=false",
         };
+        if (!request.RequireRepository) arguments.Add("--skip-git-repo-check");
         if (request.GitCommonDirectory is { Length: > 0 } git)
         {
             // A worktree's index and refs live in the main repository's .git; without this the worker cannot commit.

@@ -5,6 +5,25 @@ namespace Muthur.Launch.Tests;
 
 public sealed class HarnessTests : IDisposable
 {
+    [Fact]
+    public void Organization_session_can_run_outside_a_repository_without_enabling_fast_mode()
+    {
+        var args = new CodexAdapter("codex", null).Build(Request() with { RequireRepository = false }).Arguments;
+        Assert.Contains("--skip-git-repo-check", args);
+        Assert.Contains("features.fast_mode=false", args);
+        Assert.DoesNotContain("--skip-git-repo-check", new CodexAdapter("codex", null).Build(Request()).Arguments);
+    }
+
+    [Theory]
+    [InlineData("medium")]
+    [InlineData("high")]
+    public void Claude_receives_selected_effort(string effort)
+    {
+        var invocation = new ClaudeAdapter().Build(Request(effort: effort));
+        var arguments = invocation.Arguments.ToList();
+        Assert.Equal(effort, arguments[arguments.IndexOf("--effort") + 1]);
+    }
+
     private readonly string _scratch = Path.Combine(Path.GetTempPath(), "muthur-tests", "launch-" + Guid.NewGuid().ToString("n"));
 
     public HarnessTests() => Directory.CreateDirectory(_scratch);
@@ -30,6 +49,7 @@ public sealed class HarnessTests : IDisposable
 
         var settings = invocation.Arguments[invocation.Arguments.ToList().IndexOf("--settings") + 1];
         using var doc = JsonDocument.Parse(File.ReadAllText(settings));
+        Assert.False(doc.RootElement.GetProperty("fastMode").GetBoolean());
         var permissions = doc.RootElement.GetProperty("permissions");
         Assert.Equal(["Bash(dotnet *)", "Bash(git commit *)"], permissions.GetProperty("allow").EnumerateArray().Select(x => x.GetString()));
         Assert.Equal(["Bash(git push*)", "Bash(muthur *)"], permissions.GetProperty("deny").EnumerateArray().Select(x => x.GetString()));

@@ -44,7 +44,8 @@
         {
             <div class="agent">
                 <div class="agent-head">
-                    <a class="agent-name" href="/tasks/@session.Task">@session.Task</a>
+                    @if (session.Role == "#overseer") { <span class="agent-name">Organization overseer</span> }
+                    else { <a class="agent-name" href="/tasks/@session.Task">@session.Task</a> }
                     <span class="pill pill-role">@session.Role</span>
                 </div>
             </div>
@@ -99,7 +100,7 @@
     /// rather than only by a live circuit: everything the panel shows is written by the conductor, and
     /// nothing else the hub records can change it.
     /// </summary>
-    public static bool Watches(string eventType) => eventType.StartsWith("conductor.", StringComparison.Ordinal);
+    public static bool Watches(string eventType) => eventType.StartsWith("conductor.", StringComparison.Ordinal) || eventType.StartsWith("overseer.", StringComparison.Ordinal);
 
     protected override async Task LoadAsync()
     {

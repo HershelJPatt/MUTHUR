@@ -77,6 +77,15 @@ public sealed class CallerMiddleware(RequestDelegate next)
             else
                 throw Fail.Unauthorized("The bearer token is not recognized. Re-register the agent or check MUTHUR_AGENT.");
         }
+        // The overseer is a technical delegate, never a general-purpose founder or outbound actor.
+        if (http.GetCaller().Name == OverseerService.Identity && http.Request.Method != "GET")
+        {
+            if (http.Request.Method != "POST" || http.Request.Path.Value is not
+                ("/api/v1/overseer/checkpoint" or "/api/v1/overseer/decide" or "/api/v1/agents/heartbeat" or "/api/v1/tasks"))
+                throw Fail.Unauthorized("The overseer may only checkpoint, answer technical requests, file follow-ups, and renew its presence.");
+            if (http.Request.Path.Value == "/api/v1/tasks")
+                await http.RequestServices.GetRequiredService<Ledger>().MutateAsync(http.GetCaller(), m => OverseerService.RequireActive(m, http.RequestAborted), http.RequestAborted);
+        }
         await next(http);
     }
 }
