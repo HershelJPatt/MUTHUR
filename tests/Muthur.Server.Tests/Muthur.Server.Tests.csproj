@@ -14,5 +14,6 @@
   </ItemGroup>
   <ItemGroup>
     <Using Include="Xunit" />
+    <Content Include="..\..\benchmarks\workflow\scenarios.v1.json" Link="Benchmark/scenarios.v1.json" CopyToOutputDirectory="PreserveNewest" />
   </ItemGroup>
 </Project>
