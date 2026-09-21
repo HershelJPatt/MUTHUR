@@ -126,6 +126,71 @@ public sealed class CapabilityProbeTests : IDisposable
         Assert.False(Directory.Exists(request.Capabilities!.CacheDirectory));
     }
 
+    [Theory]
+    [InlineData("hooks")]
+    [InlineData("smudge")]
+    [InlineData("process")]
+    [InlineData("clean")]
+    public async Task Host_setup_never_runs_configured_helpers(string mode)
+    {
+        var request = await Request();
+        var marker = Path.Combine(_root, "helper-started");
+        var hooks = Path.Combine(_root, ".git", "marker-hooks");
+        Directory.CreateDirectory(hooks);
+        var helper = Path.Combine(hooks, "post-checkout");
+        File.WriteAllText(helper, "#!/bin/sh\nprintf started > '" + marker.Replace('\\', '/') + "'\n");
+        if (!OperatingSystem.IsWindows()) File.SetUnixFileMode(helper, UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute);
+        async Task Git(params string[] args) => Assert.True((await _runner.RunAsync("git", args, _root)).Ok);
+        File.WriteAllText(Path.Combine(_root, ".gitattributes"), "*.txt filter=marker\n");
+        File.WriteAllText(Path.Combine(_root, "filtered.txt"), "fixture\n");
+        await Git("add", ".gitattributes", "filtered.txt");
+        await Git("-c", "user.name=Fixture", "-c", "user.email=fixture@example.invalid", "-c", "commit.gpgsign=false", "commit", "-m", "filter fixture");
+        var head = (await _runner.RunAsync("git", ["rev-parse", "HEAD"], _root)).StdOut.Trim();
+        request = request with { Capabilities = request.Capabilities! with { BaseCommit = head } };
+        await Git("config", "core.hooksPath", hooks);
+        await Git("config", "core.fsmonitor", helper);
+        await Git("config", "diff.external", helper);
+        await Git("config", "submodule.recurse", "true");
+        if (mode != "hooks") await Git("config", "filter.marker." + mode, helper);
+        _adapter.VarySettings = true;
+        var admission = new Admission();
+        var result = await new CapabilityProbe(_runner, admission, resolve: Resolve, adapterFor: _ => _adapter)
+            .RunAsync("T-100", new("fixture", "fixture", "fixture"), request, TimeSpan.FromSeconds(90));
+        Assert.Equal(mode == "hooks" ? "capability_identity_unknown" : "capability_probe_checkout_filter", result.Code);
+        Assert.False(File.Exists(marker));
+        Assert.Equal(0, result.ProbeStarts);
+        Assert.Equal(0, _runner.ModelInvocations);
+        Assert.Equal(1, admission.Releases);
+        Assert.False(Directory.Exists(request.Capabilities!.CacheDirectory));
+        if (Directory.Exists(request.ScratchDirectory)) Assert.Empty(Directory.EnumerateDirectories(request.ScratchDirectory));
+    }
+
+    [Theory]
+    [InlineData("file")]
+    [InlineData("directory")]
+    [InlineData("link")]
+    [InlineData("broken-link")]
+    public async Task Reserved_entries_refuse_without_following_links_and_release_after_cleanup(string entry)
+    {
+        var request = await Request();
+        var external = Path.Combine(_root, "external");
+        Directory.CreateDirectory(external);
+        var marker = Path.Combine(external, "marker");
+        File.WriteAllText(marker, "preserve");
+        _runner.ReservedEntry = entry;
+        _runner.ExternalDirectory = external;
+        var admission = new Admission(() => Assert.Empty(Directory.EnumerateDirectories(request.ScratchDirectory)));
+        var result = await new CapabilityProbe(_runner, admission, resolve: Resolve, adapterFor: _ => _adapter)
+            .RunAsync("T-100", new("fixture", "fixture", "fixture"), request, TimeSpan.FromSeconds(90));
+        Assert.Equal("capability_probe_reserved_path", result.Code);
+        Assert.Equal(0, result.ProbeStarts);
+        Assert.Equal(0, _runner.ModelInvocations);
+        Assert.Equal(1, admission.Releases);
+        Assert.Equal("preserve", File.ReadAllText(marker));
+        Assert.Single(Directory.EnumerateFileSystemEntries(external));
+        Assert.False(Directory.Exists(request.Capabilities!.CacheDirectory));
+    }
+
     private sealed class Admission(Action? onRelease = null) : IProbeAdmissionClient
     {
         public int Count { get; private set; }
@@ -161,6 +226,8 @@ public sealed class CapabilityProbeTests : IDisposable
         private readonly CapabilityProcessRunner _real = new();
         public string Mode { get; set; } = "execute";
         public int ModelInvocations { get; private set; }
+        public string? ReservedEntry { get; set; }
+        public string? ExternalDirectory { get; set; }
         public async Task<ProcessResult> RunAsync(string fileName, IReadOnlyList<string> arguments, string workingDirectory,
             string? stdin = null, TimeSpan? timeout = null, CancellationToken ct = default, IReadOnlyCollection<string>? scrubEnvironment = null,
             IReadOnlyDictionary<string, string>? environment = null)
@@ -196,7 +263,25 @@ public sealed class CapabilityProbeTests : IDisposable
                 if (Mode == "tampered-fixture") File.AppendAllText(Path.Combine(fixture, "fixture.proj"), "<!-- changed -->");
                 return new(0, "Simulated harness, real deterministic SDK fixture commands.", "");
             }
-            return await _real.RunAsync(fileName, arguments, workingDirectory, stdin, timeout ?? TimeSpan.FromSeconds(10), ct, scrubEnvironment, isolated);
+            var run = await _real.RunAsync(fileName, arguments, workingDirectory, stdin, timeout ?? TimeSpan.FromSeconds(10), ct, scrubEnvironment, isolated);
+            if (run.Ok && ReservedEntry is not null && arguments.Contains("worktree") && arguments.Contains("add"))
+            {
+                var worktree = arguments[arguments.ToList().IndexOf("--detach") + 1];
+                var reserved = Path.Combine(worktree, ".muthur-capability");
+                if (ReservedEntry == "file") File.WriteAllText(reserved, "reserved");
+                else if (ReservedEntry == "directory") Directory.CreateDirectory(reserved);
+                else
+                {
+                    var target = ReservedEntry == "link" ? ExternalDirectory! : Path.Combine(ExternalDirectory!, "missing");
+                    if (OperatingSystem.IsWindows())
+                    {
+                        var link = await _real.RunAsync("cmd.exe", ["/c", "mklink", "/J", reserved, target], workingDirectory, ct: ct);
+                        Assert.True(link.Ok, link.Message);
+                    }
+                    else Directory.CreateSymbolicLink(reserved, target);
+                }
+            }
+            return run;
         }
     }
 }

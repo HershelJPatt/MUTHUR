@@ -37,14 +37,14 @@ internal static class CapabilityInputs
         if (head != request.Capabilities!.BaseCommit) return null;
         // Inspect never checks out another revision. A checkout whose effective inputs differ from the
         // pinned tree cannot predict the newly allocated worker and is deliberately unknown.
-        if ((await Run("git", ["diff", "--name-only", head, "--", .. ProjectFiles])).Length != 0) return null;
-        if ((await Run("git", ["ls-files", "--others", "--exclude-standard", "--", .. ProjectFiles])).Length != 0) return null;
+        if ((await Run("git", CapabilityHostGit.Arguments(["diff", "--no-ext-diff", "--no-textconv", "--name-only", head, "--", .. ProjectFiles]))).Length != 0) return null;
+        if ((await Run("git", CapabilityHostGit.Arguments(["ls-files", "--others", "--exclude-standard", "--", .. ProjectFiles]))).Length != 0) return null;
         foreach (var file in ProjectFiles)
         {
             try { _ = File.GetAttributes(Path.Combine(request.WorkingDirectory, file)); }
             catch (FileNotFoundException) { continue; }
             catch (DirectoryNotFoundException) { continue; }
-            if ((await Run("git", ["ls-files", "--", file])).Length == 0) return null;
+            if ((await Run("git", CapabilityHostGit.Arguments(["ls-files", "--", file]))).Length == 0) return null;
         }
         var common = Path.GetFullPath(Path.Combine(request.WorkingDirectory, await Run("git", ["rev-parse", "--git-common-dir"])));
         var parts = new List<string> { "capability-inputs-v2", RuntimeInformation.OSDescription, RuntimeInformation.OSArchitecture.ToString(),

@@ -27,7 +27,7 @@ foreach ($name in $envNames) { $previous[$name] = [Environment]::GetEnvironmentV
 $outcomes = [Collections.Generic.List[object]]::new()
 $cleanup = [Collections.Generic.List[string]]::new()
 $hubProcesses = [Collections.Generic.List[Diagnostics.Process]]::new()
-$hubStartAttempted = $false
+$server = Join-Path $installation $(if ($IsWindows) { 'server/Muthur.Server.exe' } else { 'server/Muthur.Server' })
 $evidence = [ordered]@{
     task = 'T-100'; cohort = 'installed-simulated-capability-fixture'; revision = $Revision; sampleCount = 1; realModelStarts = 0; startedAt = [DateTimeOffset]::UtcNow.ToString('O')
     installPath = $installation; status = 'running'; commands = $outcomes; cleanupFailures = $cleanup
@@ -79,12 +79,27 @@ function Check([bool]$Condition, [string]$Name) {
 }
 
 function Start-ScratchHub {
-    $script:hubStartAttempted = $true
-    $null = Invoke-T100Cli @('up')
-    $status = Invoke-T100Cli @('status')
-    Check ([IO.Path]::GetFullPath($status.dataDirectory) -eq [IO.Path]::GetFullPath($scratchHome)) 'hub uses unique scratch home'
-    $process = [Diagnostics.Process]::GetProcessById([int]$status.processId)
+    # Retain the process we create; a pid file is never proof of cleanup ownership.
+    $info = [Diagnostics.ProcessStartInfo]::new($server)
+    $info.UseShellExecute = $false
+    $info.CreateNoWindow = $true
+    $info.WorkingDirectory = [IO.Path]::GetDirectoryName($server)
+    $process = [Diagnostics.Process]::Start($info)
     $hubProcesses.Add($process)
+    $null = $process.Handle
+    $started = $process.StartTime
+    Check ([IO.Path]::GetFullPath($process.MainModule.FileName) -eq $server) 'owned installed server executable'
+    $deadline = [DateTimeOffset]::UtcNow.AddSeconds(30)
+    do {
+        if ($process.HasExited) { throw 'Owned scratch server exited before readiness.' }
+        $result = Run-Process $cli @('status') $repo 10
+        if ($result.Exit -eq 0) { break }
+        if ([DateTimeOffset]::UtcNow -ge $deadline) { throw 'Owned scratch server did not become ready.' }
+        Start-Sleep -Milliseconds 100
+    } while ($true)
+    $status = $result.Out | ConvertFrom-Json -AsHashtable
+    Check ([IO.Path]::GetFullPath($status.dataDirectory) -eq [IO.Path]::GetFullPath($scratchHome)) 'hub uses unique scratch home'
+    Check ($status.processId -eq $process.Id -and $process.StartTime -eq $started) 'hub is the retained owned process'
     return $status
 }
 
@@ -214,19 +229,6 @@ catch {
     $evidence.error = $_.Exception.Message
 }
 finally {
-    try {
-        if ($hubStartAttempted -and [IO.Directory]::Exists($scratchHome)) {
-            $pidPath = Join-Path $scratchHome 'muthur.pid'
-            if ([IO.File]::Exists($pidPath)) {
-                $scratchPid = [int][IO.File]::ReadAllText($pidPath)
-                if (-not ($hubProcesses | Where-Object Id -eq $scratchPid)) {
-                    $hubProcesses.Add([Diagnostics.Process]::GetProcessById($scratchPid))
-                }
-            }
-            $null = Invoke-T100Cli @('down')
-        }
-    }
-    catch { $cleanup.Add('Graceful scratch shutdown: ' + $_.Exception.Message) }
     foreach ($process in $hubProcesses) {
         try {
             if (-not $process.HasExited) {

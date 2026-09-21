@@ -51,6 +51,13 @@ public sealed class CapabilityProbe(IProcessRunner processes, IProbeAdmissionCli
         using var lifetime = CancellationTokenSource.CreateLinkedTokenSource(ct, budget.Token);
         try
         {
+            // Check before identity's working-tree diff as well as checkout: clean/process filters can run during diff.
+            var filters = await processes.RunAsync("git", ["config", "--null", "--get-regexp", "^filter\\..*\\.(clean|smudge|process)$"],
+                context.RepositoryRoot, timeout: TimeSpan.FromSeconds(5), ct: lifetime.Token, environment: request.GitEnvironment);
+            if (filters.ExitCode != 1 && !filters.Ok)
+                throw new ProbeRefusal("capability_probe_setup_failed", "Checkout filter configuration could not be read completely.");
+            if (filters.Ok && filters.StdOut.Split('\0').Any(entry => entry.IndexOf('\n') is var index && index >= 0 && entry[(index + 1)..].Length > 0))
+                throw new ProbeRefusal("capability_probe_checkout_filter", "Configured external checkout filters are unsupported; no checkout or model started.");
             var adapter = (adapterFor ?? Harnesses.Find)(candidate.Harness);
             var inspection = await new CapabilityEvaluator(processes, _clock, resolve).InspectAsync(adapter, request, lifetime.Token);
             identity = inspection.Identity;
@@ -58,9 +65,12 @@ public sealed class CapabilityProbe(IProcessRunner processes, IProbeAdmissionCli
                 throw new ProbeRefusal("capability_identity_unknown", inspection.Diagnostic ?? "Identity unavailable.");
             Directory.CreateDirectory(probeRoot);
             addAttempted = true;
-            var add = await processes.RunAsync("git", ["worktree", "add", "--detach", worktree, context.BaseCommit],
+            var add = await processes.RunAsync("git", CapabilityHostGit.Arguments(["worktree", "add", "--detach", worktree, context.BaseCommit]),
                 context.RepositoryRoot, timeout: TimeSpan.FromSeconds(10), ct: lifetime.Token, environment: request.GitEnvironment);
             if (!add.Ok) throw new ProbeRefusal("capability_probe_setup_failed", "Disposable pinned worktree could not be created.");
+            if (Directory.EnumerateFileSystemEntries(worktree).Any(path => Path.GetFileName(path).Equals(".muthur-capability", StringComparison.OrdinalIgnoreCase)))
+                throw new ProbeRefusal("capability_probe_reserved_path", "The pinned checkout contains the reserved .muthur-capability entry; no model started.");
+            EnsureOwnedPath(worktree, fixture);
             Directory.CreateDirectory(fixture);
             File.WriteAllText(Path.Combine(fixture, "fixture.proj"), CapabilityFixture.Project(nonce));
             var steps = CapabilityFixture.Steps(fixture, nonce);
@@ -121,7 +131,10 @@ public sealed class CapabilityProbe(IProcessRunner processes, IProbeAdmissionCli
                 {
                     if (addAttempted)
                     {
-                        var removed = await processes.RunAsync("git", ["worktree", "remove", "--force", "--force", worktree], context.RepositoryRoot,
+                        // Git for Windows can traverse directory junctions while removing a worktree.
+                        // Unlink reparse entries first, without enumerating or deleting their targets.
+                        RemoveLinks(worktree, cleanup.Token);
+                        var removed = await processes.RunAsync("git", CapabilityHostGit.Arguments(["worktree", "remove", "--force", "--force", worktree]), context.RepositoryRoot,
                             timeout: TimeSpan.FromSeconds(8), ct: cleanup.Token, environment: request.GitEnvironment);
                         if (!removed.Ok || Directory.Exists(worktree)) throw new IOException("Disposable worktree removal was not confirmed.");
                     }
@@ -140,10 +153,11 @@ public sealed class CapabilityProbe(IProcessRunner processes, IProbeAdmissionCli
     private async Task PrepareCommitAsync(string fixture, string nonce, CancellationToken ct)
     {
         var repository = Path.Combine(fixture, "commit");
+        EnsureOwnedPath(Path.GetDirectoryName(fixture)!, repository);
         Directory.CreateDirectory(repository);
         var prefix = new[] { "-c", "core.hooksPath=" + Path.Combine(fixture, "no-hooks"), "-c", "user.name=CapabilityFixture",
             "-c", "user.email=fixture@example.invalid", "-c", "commit.gpgsign=false" };
-        async Task<ProcessResult> Git(params string[] args) => await processes.RunAsync("git", [.. prefix, .. args], repository,
+        async Task<ProcessResult> Git(params string[] args) => await processes.RunAsync("git", CapabilityHostGit.Arguments([.. prefix, .. args]), repository,
             timeout: TimeSpan.FromSeconds(5), ct: ct, environment: SessionWorkspace.GitEnvironment(repository));
         if (!(await Git("init", "--quiet")).Ok || !(await Git("commit", "--quiet", "--allow-empty", "-m", "fixture baseline")).Ok)
             throw new ProbeRefusal("capability_probe_setup_failed", "Isolated commit fixture could not be initialized.");
@@ -170,15 +184,15 @@ public sealed class CapabilityProbe(IProcessRunner processes, IProbeAdmissionCli
         if (key == "worktree-base" && !Output("head.txt", basis)) return false;
         var directory = key == "commit" ? Path.Combine(fixture, "commit") : worktree;
         var args = key == "commit" ? new[] { "show", "HEAD:nonce.txt" } : ["rev-parse", "HEAD"];
-        var result = await processes.RunAsync("git", args, directory, timeout: TimeSpan.FromSeconds(5), ct: ct,
+        var result = await processes.RunAsync("git", CapabilityHostGit.Arguments(args), directory, timeout: TimeSpan.FromSeconds(5), ct: ct,
             environment: SessionWorkspace.GitEnvironment(directory));
         if (!result.Ok || result.StdOut.Trim() != (key == "commit" ? nonce : basis)) return false;
         if (key != "commit") return true;
         var before = File.ReadAllText(Path.Combine(fixture, "before.txt")).Trim();
-        var after = await processes.RunAsync("git", ["rev-parse", "HEAD"], directory, timeout: TimeSpan.FromSeconds(5), ct: ct,
+        var after = await processes.RunAsync("git", CapabilityHostGit.Arguments(["rev-parse", "HEAD"]), directory, timeout: TimeSpan.FromSeconds(5), ct: ct,
             environment: SessionWorkspace.GitEnvironment(directory));
         if (before.Length != 40 || !before.All(char.IsAsciiHexDigit) || !after.Ok || after.StdOut.Trim().Length != 40 || before == after.StdOut.Trim()) return false;
-        var ancestor = await processes.RunAsync("git", ["merge-base", "--is-ancestor", before, "HEAD"], directory,
+        var ancestor = await processes.RunAsync("git", CapabilityHostGit.Arguments(["merge-base", "--is-ancestor", before, "HEAD"]), directory,
             timeout: TimeSpan.FromSeconds(5), ct: ct, environment: SessionWorkspace.GitEnvironment(directory));
         return ancestor.Ok;
     }
@@ -195,8 +209,51 @@ public sealed class CapabilityProbe(IProcessRunner processes, IProbeAdmissionCli
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or JsonException or InvalidOperationException or KeyNotFoundException) { return null; }
     }
 
+    private static void EnsureOwnedPath(string worktree, string path)
+    {
+        var root = Path.GetFullPath(worktree);
+        var full = Path.GetFullPath(path);
+        if (!full.StartsWith(root + Path.DirectorySeparatorChar, OperatingSystem.IsWindows() ? StringComparison.OrdinalIgnoreCase : StringComparison.Ordinal))
+            throw new ProbeRefusal("capability_probe_reserved_path", "Fixture path is outside the owned worktree.");
+        for (var current = full; current is not null; current = Path.GetDirectoryName(current))
+        {
+            try
+            {
+                if ((File.GetAttributes(current) & FileAttributes.ReparsePoint) != 0)
+                    throw new ProbeRefusal("capability_probe_reserved_path", "Fixture path traverses a link or reparse point.");
+            }
+            catch (FileNotFoundException) { }
+            catch (DirectoryNotFoundException) { }
+            if (current == root) break;
+        }
+    }
+
+    private static void RemoveLinks(string path, CancellationToken ct)
+    {
+        ct.ThrowIfCancellationRequested();
+        FileAttributes attributes;
+        try { attributes = File.GetAttributes(path); }
+        catch (FileNotFoundException) { return; }
+        catch (DirectoryNotFoundException) { return; }
+        if ((attributes & FileAttributes.ReparsePoint) != 0)
+        {
+            if ((attributes & FileAttributes.Directory) != 0) Directory.Delete(path);
+            else File.Delete(path);
+        }
+        else if ((attributes & FileAttributes.Directory) != 0)
+            foreach (var entry in Directory.EnumerateFileSystemEntries(path)) RemoveLinks(entry, ct);
+    }
+
     private sealed class ProbeRefusal(string code, string message) : Exception(message)
     {
         public string Code { get; } = code;
     }
+}
+
+internal static class CapabilityHostGit
+{
+    // Host metadata/setup only. Never apply these overrides to the measured harness or its config identity.
+    internal static string[] Arguments(IReadOnlyList<string> arguments) =>
+        ["-c", "core.hooksPath=" + (OperatingSystem.IsWindows() ? "NUL" : "/dev/null"),
+         "-c", "core.fsmonitor=false", "-c", "submodule.recurse=false", "-c", "diff.external=", .. arguments];
 }
