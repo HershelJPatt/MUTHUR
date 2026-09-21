@@ -155,8 +155,12 @@ public sealed class CapabilityProbe(IProcessRunner processes, IProbeAdmissionCli
             "-c", "user.email=fixture@example.invalid", "-c", "commit.gpgsign=false" };
         async Task<ProcessResult> Git(params string[] args) => await processes.RunAsync("git", CapabilityHostGit.Arguments([.. prefix, .. args]), repository,
             timeout: TimeSpan.FromSeconds(5), ct: ct, environment: SessionWorkspace.GitEnvironment(repository));
-        if (!(await Git("init", "--quiet")).Ok || !(await Git("commit", "--quiet", "--allow-empty", "-m", "fixture baseline")).Ok)
-            throw new ProbeRefusal("capability_probe_setup_failed", "Isolated commit fixture could not be initialized.");
+        var init = await Git("init", "--quiet");
+        if (!init.Ok)
+            throw new ProbeRefusal("capability_probe_setup_failed", $"Isolated commit fixture git init failed with exit code {init.ExitCode}.");
+        var commit = await Git("commit", "--quiet", "--allow-empty", "-m", "fixture baseline");
+        if (!commit.Ok)
+            throw new ProbeRefusal("capability_probe_setup_failed", $"Isolated commit fixture git commit failed with exit code {commit.ExitCode}.");
         var before = await Git("rev-parse", "HEAD");
         if (!before.Ok) throw new ProbeRefusal("capability_probe_setup_failed", "Isolated baseline HEAD is unreadable.");
         File.WriteAllText(Path.Combine(fixture, "before.txt"), before.StdOut.Trim());

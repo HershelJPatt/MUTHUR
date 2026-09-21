@@ -88,7 +88,6 @@ function Start-ScratchHub {
     $hubProcesses.Add($process)
     $null = $process.Handle
     $started = $process.StartTime
-    Check ([IO.Path]::GetFullPath($process.MainModule.FileName) -eq $server) 'owned installed server executable'
     $deadline = [DateTimeOffset]::UtcNow.AddSeconds(30)
     do {
         if ($process.HasExited) { throw 'Owned scratch server exited before readiness.' }
@@ -100,6 +99,7 @@ function Start-ScratchHub {
     $status = $result.Out | ConvertFrom-Json -AsHashtable
     Check ([IO.Path]::GetFullPath($status.dataDirectory) -eq [IO.Path]::GetFullPath($scratchHome)) 'hub uses unique scratch home'
     Check ($status.processId -eq $process.Id -and $process.StartTime -eq $started) 'hub is the retained owned process'
+    Check ([IO.Path]::GetFullPath($process.MainModule.FileName) -eq $server) 'owned installed server executable'
     return $status
 }
 

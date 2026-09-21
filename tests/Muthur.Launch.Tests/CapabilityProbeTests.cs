@@ -69,6 +69,28 @@ public sealed class CapabilityProbeTests : IDisposable
         if (mode is "timeout" or "cancel") Assert.All(result.Observations, o => Assert.Equal(TimeSpan.FromMinutes(5), o.ExpiresAt - o.ObservedAt));
     }
 
+    [Theory]
+    [InlineData("init", 1)]
+    [InlineData("init", 124)]
+    [InlineData("commit", 1)]
+    [InlineData("commit", 124)]
+    public async Task Commit_setup_failure_identifies_step_and_exit_code(string step, int exitCode)
+    {
+        var request = await Request();
+        _runner.SetupFailureStep = step;
+        _runner.SetupFailureExitCode = exitCode;
+        var admission = new Admission(() => Assert.Empty(Directory.EnumerateDirectories(request.ScratchDirectory)));
+        var result = await new CapabilityProbe(_runner, admission, resolve: Resolve, adapterFor: _ => _adapter)
+            .RunAsync("T-100", new("fixture", "fixture", "fixture"), request, TimeSpan.FromSeconds(90));
+        Assert.Equal("capability_probe_setup_failed", result.Code);
+        Assert.Equal($"Isolated commit fixture git {step} failed with exit code {exitCode}.", result.Detail);
+        Assert.Equal(0, result.ProbeStarts);
+        Assert.Equal(0, _runner.ModelInvocations);
+        Assert.Equal(1, admission.Releases);
+        Assert.Empty(result.Observations);
+        Assert.False(Directory.Exists(request.Capabilities!.CacheDirectory));
+    }
+
     [Fact]
     public async Task Different_probe_settings_refuse_before_model_and_cleanup()
     {
@@ -258,11 +280,16 @@ public sealed class CapabilityProbeTests : IDisposable
         public int ModelInvocations { get; private set; }
         public string? ReservedEntry { get; set; }
         public string? ExternalDirectory { get; set; }
+        public string? SetupFailureStep { get; set; }
+        public int SetupFailureExitCode { get; set; }
         public async Task<ProcessResult> RunAsync(string fileName, IReadOnlyList<string> arguments, string workingDirectory,
             string? stdin = null, TimeSpan? timeout = null, CancellationToken ct = default, IReadOnlyCollection<string>? scrubEnvironment = null,
             IReadOnlyDictionary<string, string>? environment = null)
         {
             if (Mode == "cancel-setup" && arguments.Contains("--version")) throw new OperationCanceledException();
+            if (SetupFailureStep is not null && arguments.Contains(SetupFailureStep) &&
+                workingDirectory.EndsWith(Path.Combine(".muthur-capability", "commit"), StringComparison.Ordinal))
+                return new(SetupFailureExitCode, "private stdout", "private stderr");
             var isolated = new Dictionary<string, string>(environment ?? new Dictionary<string, string>())
             {
                 ["GIT_CONFIG_GLOBAL"] = OperatingSystem.IsWindows() ? "NUL" : "/dev/null",
