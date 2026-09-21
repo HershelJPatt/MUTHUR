@@ -21,6 +21,8 @@ public static class Routes
     public const string Tasks = Api + "/tasks";
     public static string Task(string id) => $"{Tasks}/{Uri.EscapeDataString(id)}";
     public static string TaskAction(string id, string action) => $"{Task(id)}/{action}";
+    public static string TaskUnits(string id) => TaskAction(id, "units");
+    public static string TaskResume(string id) => TaskAction(id, "resume");
 
     public const string Roles = Api + "/roles";
     public static string Role(string key) => $"{Roles}/{Uri.EscapeDataString(key)}";
