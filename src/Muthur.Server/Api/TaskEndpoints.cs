@@ -9,6 +9,13 @@ public static class TaskEndpoints
 {
     public static void MapTaskEndpoints(this IEndpointRouteBuilder app)
     {
+        app.MapGet(Routes.Tasks + "/{id}/units", async (string id, TaskUnitService units, CancellationToken ct) =>
+            Results.Json(await units.GetAsync(id, ct), MuthurJsonContext.Default.TaskUnitGraph));
+        app.MapGet(Routes.Tasks + "/{id}/resume", (string id, TaskUnitService units, CancellationToken ct) => units.ResumeAsync(id, ct));
+        app.MapPost(Routes.Tasks + "/{id}/units/define", (HttpContext http, string id, DefineTaskUnitsRequest request, TaskUnitService units, CancellationToken ct) =>
+            units.DefineAsync(http.GetCaller(), id, request, ct));
+        app.MapPost(Routes.Tasks + "/{id}/units/checkpoint", (HttpContext http, string id, TaskUnitCheckpointRequest request, TaskUnitService units, CancellationToken ct) =>
+            units.CheckpointAsync(http.GetCaller(), id, request, ct));
         app.MapPost(Routes.Tasks + "/{id}/dependencies", (HttpContext http, string id, DependenciesRequest request, TaskService tasks, CancellationToken ct) =>
             tasks.SetDependenciesAsync(http.GetCaller(), id, request, ct));
         app.MapPost(Routes.Tasks, (HttpContext http, AddTaskRequest request, TaskService tasks, CancellationToken ct) =>
