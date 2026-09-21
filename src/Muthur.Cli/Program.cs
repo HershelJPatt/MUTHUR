@@ -14,6 +14,7 @@ TaskCommands.AddTo(root);
 RoleCommands.AddTo(root);
 MessageCommands.AddTo(root);
 WorkerCommands.AddTo(root);
+CapabilityCommands.AddTo(root);
 UtilityCommands.AddTo(root);
 OverseerCommands.AddTo(root);
 InboundCommands.AddTo(root);
