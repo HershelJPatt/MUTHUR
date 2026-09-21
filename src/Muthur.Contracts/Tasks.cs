@@ -57,7 +57,8 @@ public sealed record TaskDto(
     IReadOnlyList<string>? DependsOn = null,
     string? DependencyReason = null,
     ValidationSubjectDto? CurrentSubject = null,
-    string ProvenanceStatus = "unknown");
+    string ProvenanceStatus = "unknown",
+    IntegrationCandidateDto? CurrentIntegrationCandidate = null);
 
 /// <summary>A reason that is null or blank is the clear, the same convention <c>attended</c> uses.</summary>
 public sealed record HoldRequest(string? Reason);
