@@ -13,6 +13,7 @@ function validateSmoke(value, agentName) {
 
 async function smoke(context, value, agentName, timeout = 30000) {
   const origin = validateSmoke(value, agentName);
+  const deadline = performance.now() + timeout;
   const errors = [];
   // Guard before following redirects, including subresources. Never send a request to a second origin.
   await context.route('**/*', async route => {
@@ -21,13 +22,13 @@ async function smoke(context, value, agentName, timeout = 30000) {
         errors.push('Cross-origin request or redirect refused.');
         await route.abort();
       } else {
-        // Inspect Location before the browser follows it; routing alone need not intercept a redirect chain.
-        const response = await route.fetch({ maxRedirects: 0 });
+        // Fetch without following redirects; routing alone need not intercept a redirect chain.
+        const remaining = Math.ceil(deadline - performance.now());
+        if (remaining <= 0) throw new Error('Smoke request deadline exceeded.');
+        const response = await route.fetch({ maxRedirects: 0, timeout: remaining });
         try {
-          const location = response.headers().location;
-          if (response.status() >= 300 && response.status() < 400 && location
-              && new URL(location, route.request().url()).origin !== origin) {
-            errors.push('Cross-origin redirect refused.');
+          if (response.status() >= 300 && response.status() < 400) {
+            errors.push('HTTP redirect refused: smoke does not support redirects.');
             await route.abort();
           } else await route.fulfill({ response });
         } finally { await response.dispose(); }
@@ -48,7 +49,9 @@ async function smoke(context, value, agentName, timeout = 30000) {
       if (payload.toString().includes('JS.RenderBatch')) signalConnected();
     });
   });
-  await page.goto(`${origin}/console`);
+  try { await page.goto(`${origin}/console`); }
+  catch (error) { throw new Error(errors.length ? errors.join(' ') : error.message); }
+  if (errors.length) throw new Error(errors.join(' '));
   // The first server render batch proves the interactive circuit has started, unlike prerendered inputs.
   let timer;
   try {

@@ -43,7 +43,9 @@ proof of product behavior: run the spec's exact interaction commands and record 
 Headless specs declare `needs: headless-browser` and exact probe/tool paths and interaction commands.
 Legacy `needs: browser` retains attended semantics for compatibility and human visual needs; other needs
 remain attended too. Replacing a spec does not clear existing or manual attended reasons.
-This repository's supported runner is `scripts/browser-capability.ps1`; generic kit consumers supply their
+This repository's supported runner is `scripts/browser-capability.ps1`. It requires Windows for kill-on-close
+job ownership and reports `unsupported-platform` elsewhere. Preflight compiles the checked-in process owner
+with Add-Type; no server build or package installation is needed. Generic kit consumers supply their
 own equivalent bounded runner. If neither permitted interaction path works, record exact missing tool or
 permission evidence and a blocked verdict. Never silently substitute HTML, install tooling, expand permissions,
 or start more harness sessions; preserve the shared two-session ceiling.

@@ -12,7 +12,6 @@ param(
 $ErrorActionPreference = 'Stop'
 $deadline = [System.Diagnostics.Stopwatch]::StartNew()
 $child = $null
-$started = $false
 $selectedNode = $null
 function Write-Unavailable([string] $Reason) {
     @{
@@ -24,6 +23,10 @@ function Write-Unavailable([string] $Reason) {
 }
 
 try {
+    if (-not $IsWindows) {
+        Write-Unavailable 'unsupported-platform: This runner requires Windows kill-on-close job ownership.'
+        exit 2
+    }
     $node = Get-Command -Name $NodePath -CommandType Application -ErrorAction SilentlyContinue | Select-Object -First 1
     if (-not $node) {
         Write-Unavailable "node-absent: Cannot resolve NodePath '$NodePath'; supply an installed Node executable."
@@ -35,24 +38,26 @@ try {
     if ($PSBoundParameters.ContainsKey('BrowserPath')) { $options.browserPath = $BrowserPath }
     if ($PSBoundParameters.ContainsKey('Url')) { $options.url = $Url }
     if ($PSBoundParameters.ContainsKey('AgentName')) { $options.agentName = $AgentName }
-    $start = [System.Diagnostics.ProcessStartInfo]::new()
-    $start.FileName = $selectedNode
-    $start.UseShellExecute = $false
-    $start.CreateNoWindow = $true
-    $start.RedirectStandardOutput = $true
-    $start.RedirectStandardError = $true
-    $start.ArgumentList.Add((Join-Path $PSScriptRoot 'browser-capability.cjs'))
-    $start.ArgumentList.Add(($options | ConvertTo-Json -Compress))
-    $child = [System.Diagnostics.Process]::new()
-    $child.StartInfo = $start
-    if (-not $child.Start()) { throw 'Node process did not start.' }
-    $started = $true
+    # Compile the standalone owner without building the server or changing its source.
+    if (-not ('Muthur.Server.Services.CensusWindowsProcess' -as [type])) {
+        $source = Get-Content -Raw (Join-Path $PSScriptRoot '../src/Muthur.Server/Services/CensusWindowsProcess.cs')
+        $source = "#nullable enable`nusing System;`nusing System.IO;`nusing System.Linq;`nusing System.Collections.Generic;`nusing System.Threading.Tasks;`n" +
+            $source.Replace('internal sealed class CensusWindowsProcess', 'public sealed class CensusWindowsProcess')
+        Add-Type -TypeDefinition $source
+    }
+    if ($deadline.ElapsedMilliseconds -ge $TimeoutSeconds * 1000) {
+        Write-Unavailable 'launch-timeout: Total deadline exceeded during process-owner initialization.'
+        exit 2
+    }
+    $arguments = [string[]] @((Join-Path $PSScriptRoot 'browser-capability.cjs'), ($options | ConvertTo-Json -Compress))
+    $child = [Muthur.Server.Services.CensusWindowsProcess]::Start($selectedNode, $arguments, $PSScriptRoot)
     $stdout = $child.StandardOutput.ReadToEndAsync()
     $stderr = $child.StandardError.ReadToEndAsync()
     $remaining = [Math]::Max(0, $TimeoutSeconds * 1000 - [int] $deadline.ElapsedMilliseconds)
-    if (-not $child.WaitForExit($remaining)) {
-        $child.Kill($true) # Only this invocation's child and descendants.
-        $child.WaitForExit()
+    $rootExited = $child.Process.WaitForExit($remaining)
+    $remaining = [Math]::Max(0, $TimeoutSeconds * 1000 - [int] $deadline.ElapsedMilliseconds)
+    if (-not $rootExited -or -not [System.Threading.Tasks.Task]::WaitAll(
+            [System.Threading.Tasks.Task[]] @($stdout, $stderr), $remaining)) {
         Write-Unavailable 'launch-timeout: Total discovery/interaction/cleanup deadline exceeded; owned process tree terminated.'
         exit 2
     }
@@ -62,7 +67,7 @@ try {
     else { Write-Unavailable "unexpected-error: Node returned no probe JSON. $diagnostic" }
     if ($diagnostic.Trim()) { [Console]::Error.Write($diagnostic) }
     if (-not $output.Trim()) { exit 1 }
-    exit $child.ExitCode
+    exit $child.Process.ExitCode
 }
 catch {
     Write-Unavailable "unexpected-error: $($_.Exception.Message)"
@@ -70,7 +75,7 @@ catch {
 }
 finally {
     if ($child) {
-        if ($started -and -not $child.HasExited) { $child.Kill($true); $child.WaitForExit() }
+        # Closing the job kills descendants even when the root already exited with pipes open.
         $child.Dispose()
     }
 }

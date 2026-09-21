@@ -136,11 +136,13 @@ test('smoke waits for Blazor, fills exact fields, checks UI and API without expo
 const runner = path.resolve(__dirname, '../scripts/browser-capability.ps1');
 test('smoke rejects redirect origins before following and fails on page errors or missing API evidence', async () => {
   const { EventEmitter } = require('node:events');
-  for (const failure of ['redirect', 'pageerror', 'roster']) {
+  for (const failure of ['redirect', 'same-origin-redirect', 'success', 'pageerror', 'roster']) {
     const page = new EventEmitter();
     let handler;
     let disposed = false;
     let aborted = false;
+    let fulfilled = false;
+    const redirect = failure.includes('redirect');
     const context = { route: async (_, callback) => { handler = callback; }, newPage: async () => page };
     page.goto = async () => {
       const socket = new EventEmitter();
@@ -148,15 +150,18 @@ test('smoke rejects redirect origins before following and fails on page errors o
       page.emit('websocket', socket);
       socket.emit('framereceived', { payload: 'JS.RenderBatch' });
       if (failure === 'pageerror') page.emit('pageerror', new Error('render exploded'));
-      if (failure === 'redirect') await handler({
+      if (redirect || failure === 'success') await handler({
         request: () => ({ url: () => 'http://localhost:7494/console' }),
         fetch: async options => {
           assert.equal(options.maxRedirects, 0);
-          return { headers: () => ({ location: 'http://localhost:7420/console' }), status: () => 302,
+          assert.ok(options.timeout > 0 && options.timeout <= 30000);
+          return { headers: () => ({ location: failure === 'same-origin-redirect' ? '/console' : 'http://localhost:7420/console' }),
+            status: () => redirect ? 302 : 200,
             dispose: async () => { disposed = true; } };
         },
         abort: async () => { aborted = true; },
-        fulfill: async () => assert.fail('Unsafe redirect must not reach browser')
+        continue: async () => assert.fail('HTTP requests must never continue unchecked'),
+        fulfill: async ({ response }) => { assert.equal(response.status(), 200); fulfilled = true; }
       });
     };
     page.locator = () => ({ fill: async () => {} });
@@ -165,19 +170,29 @@ test('smoke rejects redirect origins before following and fails on page errors o
     page.evaluate = async () => ({ agents: failure === 'roster' ? [] : [
       { name: 'sample', harness: 'fixture', model: 'fixture', tier: 'mastermind' }
     ] });
-    await assert.rejects(smoke(context, 'http://localhost:7494', 'sample'),
-      failure === 'redirect' ? /redirect refused/ : failure === 'pageerror' ? /render exploded/ : /Registration absent/);
-    if (failure === 'redirect') { assert.equal(aborted, true); assert.equal(disposed, true); }
+    if (failure === 'success') {
+      assert.equal((await smoke(context, 'http://localhost:7494', 'sample')).smoke, 'passed');
+      assert.equal(fulfilled, true);
+      assert.equal(disposed, true);
+    } else await assert.rejects(smoke(context, 'http://localhost:7494', 'sample'),
+      redirect ? /redirect refused/ : failure === 'pageerror' ? /render exploded/ : /Registration absent/);
+    if (redirect) { assert.equal(aborted, true); assert.equal(disposed, true); assert.equal(fulfilled, false); }
   }
 });
 
 function powershell(args) {
-  const child = spawnSync('pwsh', ['-NoProfile', '-File', runner, ...args], { encoding: 'utf8', timeout: 15000 });
+  const child = spawnSync('pwsh', ['-NoProfile', '-File', runner, ...args], { encoding: 'utf8', timeout: 25000, windowsHide: true });
   assert.ifError(child.error);
   return { ...child, probe: JSON.parse(child.stdout.trim()) };
 }
 
-test('PowerShell reports missing Node and module without a browser', () => {
+test('PowerShell reports unsupported platforms', { skip: process.platform === 'win32' }, () => {
+  const outcome = powershell([]);
+  assert.equal(outcome.status, 2);
+  assert.match(outcome.probe.headless.reason, /^unsupported-platform:/);
+});
+
+test('PowerShell reports missing Node and module without a browser', { skip: process.platform !== 'win32' }, () => {
   const missingNode = powershell(['-NodePath', 'a-definitely-missing-node']);
   assert.equal(missingNode.status, 2);
   assert.match(missingNode.probe.headless.reason, /^node-absent:/);
@@ -186,8 +201,9 @@ test('PowerShell reports missing Node and module without a browser', () => {
   assert.match(missingModule.probe.headless.reason, /^module-missing:/);
 });
 
-test('PowerShell preserves spaces and kills its owned tree at the total deadline', () => {
+test('PowerShell preserves spaces and kills its owned tree at the total deadline', { skip: process.platform !== 'win32' }, () => {
   const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'browser capability '));
+  const pidFile = path.join(directory, 'child.pid');
   try {
     const modulePath = path.join(directory, 'fake module');
     fs.mkdirSync(modulePath);
@@ -203,19 +219,29 @@ test('PowerShell preserves spaces and kills its owned tree at the total deadline
     };`);
     const args = ['-NodePath', process.execPath, '-PlaywrightPath', modulePath, '-BrowserPath', browser];
     assert.equal(powershell(args).status, 0);
-    const pidFile = path.join(modulePath, 'child.pid');
-    fs.writeFileSync(path.join(modulePath, 'index.js'), `const fs = require('fs');
-      module.exports.chromium = { launch: async () => {
-        const child = require('child_process').spawn(process.execPath, ['-e', 'setInterval(() => {}, 1000)']);
-        fs.writeFileSync(${JSON.stringify(pidFile)}, String(child.pid));
-        await new Promise(() => {});
-      } };`);
-    const timeout = powershell([...args, '-TimeoutSeconds', '2']);
-    assert.equal(timeout.status, 2);
-    assert.match(timeout.probe.headless.reason, /^launch-timeout:/);
-    const pid = Number(fs.readFileSync(pidFile, 'utf8'));
-    assert.throws(() => process.kill(pid, 0), { code: 'ESRCH' });
+    for (const rootExits of [false, true]) {
+      fs.writeFileSync(path.join(modulePath, 'index.js'), `const fs = require('fs');
+        module.exports.chromium = { launch: async () => {
+          const child = require('child_process').spawn(process.execPath, ['-e', 'setInterval(() => {}, 1000)'],
+            { detached: true, windowsHide: true, stdio: ['ignore', 'inherit', 'inherit'] });
+          fs.writeFileSync(${JSON.stringify(pidFile)}, String(child.pid));
+          ${rootExits ? 'process.exit(0);' : ''}
+          await new Promise(() => {});
+        } };`);
+      const started = performance.now();
+      const timeout = powershell([...args, '-TimeoutSeconds', '8']);
+      assert.ok(performance.now() - started < 20000, 'Probe exceeded bounded outer watchdog');
+      assert.equal(timeout.status, 2);
+      assert.match(timeout.probe.headless.reason, /^launch-timeout:/);
+      const pid = Number(fs.readFileSync(pidFile, 'utf8'));
+      assert.throws(() => process.kill(pid, 0), { code: 'ESRCH' });
+      fs.unlinkSync(pidFile);
+      }
   } finally {
+    if (fs.existsSync(pidFile)) {
+      const pid = Number(fs.readFileSync(pidFile, 'utf8'));
+      try { process.kill(pid); } catch (error) { if (error.code !== 'ESRCH') throw error; }
+    }
     assert.equal(path.dirname(directory), fs.realpathSync(os.tmpdir()));
     fs.rmSync(directory, { recursive: true });
   }
