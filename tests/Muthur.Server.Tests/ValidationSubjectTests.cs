@@ -6,6 +6,7 @@ using Microsoft.EntityFrameworkCore.Infrastructure;
 using Microsoft.EntityFrameworkCore.Migrations;
 using Microsoft.Extensions.DependencyInjection;
 using Muthur.Contracts;
+using Muthur.Core;
 using Muthur.Data;
 using Muthur.Core.Entities;
 using Muthur.Launch;
@@ -271,17 +272,31 @@ public sealed class ValidationSubjectTests : IDisposable
     {
         var (owner, validator, task) = await RoundAsync();
         await PassAsync(validator, task);
+        var ownerId = await _hub.Services.GetRequiredService<Ledger>().ReadAsync(
+            async (db, _) => (await db.Agents.SingleAsync(a => a.Name == "owner")).Id);
+        var caller = new Caller(CallerKind.Agent, ownerId, "owner");
+        var lifecycle = _hub.Services.GetRequiredService<LifecycleService>();
         _barrier.Armed = true;
         var landing = owner.PostAsync(Routes.TaskAction(task.Id, "land"), null);
         await _barrier.Reached.Task.WaitAsync(TimeSpan.FromSeconds(15));
-        var recovery = owner.PostActionAsync(task.Id, "revalidate", new RevalidateRequest("Race the land."));
-        var policy = _hub.Founder().PutAsJsonAsync(Routes.Roles, new DefineRoleRequest("win-validator", "Policy changed after approval."));
+        // Direct calls reach the writer's WaitAsync before returning. HTTP scheduling alone cannot
+        // establish that the competing mutations have actually attempted to enter the critical section.
+        var recovery = lifecycle.RevalidateAsync(caller, task.Id, new RevalidateRequest("Race the land."));
+        var resubmission = lifecycle.ImplementedAsync(caller, task.Id, new ImplementedRequest(Branch));
+        var attachment = _hub.Services.GetRequiredService<TaskService>().SetSpecAsync(
+            caller, task.Id, new SetSpecRequest("specs/T-1.md", Branch));
+        var policy = _hub.Services.GetRequiredService<RoleService>().DefineAsync(
+            Caller.Founder, new DefineRoleRequest("win-validator", "Policy changed after approval."));
         Assert.False(recovery.IsCompleted);
+        Assert.False(resubmission.IsCompleted);
+        Assert.False(attachment.IsCompleted);
         Assert.False(policy.IsCompleted);
         _barrier.Continue.SetResult();
         Assert.Equal(TaskState.Done, (await (await landing).ReadTaskAsync()).State);
-        Assert.Equal("cannot_revalidate", (await (await recovery).ReadErrorAsync()).Code);
-        (await policy).EnsureSuccessStatusCode();
+        Assert.Equal("cannot_revalidate", (await Assert.ThrowsAsync<MuthurException>(() => recovery)).Code);
+        Assert.Equal("not_in_progress", (await Assert.ThrowsAsync<MuthurException>(() => resubmission)).Code);
+        Assert.Equal("not_in_progress", (await Assert.ThrowsAsync<MuthurException>(() => attachment)).Code);
+        await policy;
         var detail = await owner.GetTaskAsync(task.Id);
         Assert.Equal(TaskState.Done, detail.Task.State);
         Assert.Contains(detail.Events, e => e.Type == "task.landed" && e.Payload.GetProperty("subject").GetProperty("id").GetGuid() == task.CurrentSubject!.Id);
@@ -300,7 +315,7 @@ public sealed class ValidationSubjectTests : IDisposable
         foreach (var state in new[] { "Validated", "Done", "Cancelled" })
             await db.Database.ExecuteSqlInterpolatedAsync($"INSERT INTO tasks(project_id,title,body,state,priority,created_at,updated_at) VALUES({project.Id},{state},'',{state},0,0,0)");
         await db.Database.ExecuteSqlRawAsync("INSERT INTO task_validations(task_id,validator_key,verdict,evidence,waiting_since) VALUES(1,'win-validator','Yes','historical report',0)");
-        await db.Database.ExecuteSqlRawAsync("INSERT INTO events(at,actor,type,task_id,payload_json) VALUES(0,'legacy','validation.passed',1,'{}')");
+        await db.Database.ExecuteSqlInterpolatedAsync($"INSERT INTO events(at,actor,type,task_id,payload_json) VALUES(0,'legacy','validation.passed',1,{"{}"})");
         await migrator.MigrateAsync();
         var tasks = await db.Tasks.OrderBy(t => t.Id).ToListAsync();
         Assert.Equal([TaskState.Validated, TaskState.Done, TaskState.Cancelled], tasks.Select(t => t.State));

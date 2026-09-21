@@ -18,12 +18,15 @@ if (-not [IO.File]::Exists($cli) -or -not [IO.Directory]::Exists((Join-Path $ins
 $scratch = [IO.Path]::GetFullPath((Join-Path ([IO.Path]::GetTempPath()) ('muthur-T-99-' + [guid]::NewGuid().ToString('n'))))
 $scratchHome = Join-Path $scratch 'home'
 $repo = Join-Path $scratch 'repo'
-$envNames = @('MUTHUR_HOME', 'MUTHUR_URL', 'MUTHUR_AGENT', 'MUTHUR_TOKEN', 'MUTHUR_SERVER', 'Muthur__BackgroundServices', 'ASPNETCORE_URLS')
+$envNames = @('MUTHUR_HOME', 'MUTHUR_URL', 'MUTHUR_AGENT', 'MUTHUR_TOKEN', 'MUTHUR_SERVER',
+    'Muthur__BackgroundServices', 'Muthur__DataDir', 'Muthur__ConnectionString', 'Muthur__DbProvider',
+    'Muthur__Url', 'ASPNETCORE_URLS')
 $previous = @{}
 foreach ($name in $envNames) { $previous[$name] = [Environment]::GetEnvironmentVariable($name, 'Process') }
 $outcomes = [Collections.Generic.List[object]]::new()
 $cleanup = [Collections.Generic.List[string]]::new()
 $hubProcesses = [Collections.Generic.List[Diagnostics.Process]]::new()
+$hubStartAttempted = $false
 $evidence = [ordered]@{
     task = 'T-99'; cohort = 'installed-local-fixture'; startedAt = [DateTimeOffset]::UtcNow.ToString('O')
     installPath = $installation; status = 'running'; commands = $outcomes; cleanupFailures = $cleanup
@@ -44,7 +47,7 @@ function Run-Process([string]$Executable, [string[]]$Arguments, [string]$Directo
         $stderr = $process.StandardError.ReadToEndAsync()
         if (-not $process.WaitForExit($TimeoutSeconds * 1000)) {
             $process.Kill($true)
-            $process.WaitForExit()
+            if (-not $process.WaitForExit(5000)) { throw "Process did not stop after timeout: $Executable" }
             throw "Timed out: $Executable $($Arguments -join ' ')"
         }
         return @{ Exit = $process.ExitCode; Out = $stdout.GetAwaiter().GetResult(); Error = $stderr.GetAwaiter().GetResult() }
@@ -75,6 +78,7 @@ function Check([bool]$Condition, [string]$Name) {
 }
 
 function Start-ScratchHub {
+    $script:hubStartAttempted = $true
     $null = Cli @('up')
     $status = Cli @('status')
     Check ([IO.Path]::GetFullPath($status.dataDirectory) -eq [IO.Path]::GetFullPath($scratchHome)) 'hub uses unique scratch home'
@@ -92,6 +96,11 @@ try {
     $env:MUTHUR_HOME = $scratchHome
     $env:MUTHUR_URL = "http://127.0.0.1:$port"
     $env:ASPNETCORE_URLS = $env:MUTHUR_URL
+    # Configuration-section overrides take precedence over the MUTHUR_* defaults.
+    $env:Muthur__Url = $env:MUTHUR_URL
+    $env:Muthur__DataDir = $scratchHome
+    $env:Muthur__DbProvider = 'sqlite'
+    $env:Muthur__ConnectionString = 'Data Source="' + (Join-Path $scratchHome 'muthur.db').Replace('"', '""') + '";Pooling=False'
     $env:Muthur__BackgroundServices = 'false'
     $env:MUTHUR_AGENT = $null
     $env:MUTHUR_TOKEN = $null
@@ -118,6 +127,8 @@ try {
     $null = Cli @('role', 'take', 'local-validator', '--as-agent', 'subject-validator')
     $task = Cli @('task', 'add', 'Installed validation subject fixture', '--project', 'subject-fixture', '--as-agent', 'subject-owner')
     $id = $task.id
+    $html = (Invoke-WebRequest "$env:MUTHUR_URL/tasks/$id" -TimeoutSec 10).Content
+    Check ($html.Contains('unknown') -and $html.Contains('revalidate')) 'unknown provenance has explicit recovery help'
     $branch = "task/$id-subject"
     $null = Cli @('task', 'claim', $id, '--as-agent', 'subject-owner')
     $null = Git @('checkout', '-q', '-b', $branch)
@@ -150,6 +161,8 @@ try {
     $null = Git @('checkout', '-q', 'main')
     $null = Cli @('task', 'land', $id, '--as-agent', 'subject-owner') 2 'implementation_changed'
     $null = Cli @('task', 'revalidate', $id, '--reason', 'Review B and the amended spec.', '--as-agent', 'subject-owner')
+    $html = (Invoke-WebRequest "$env:MUTHUR_URL/tasks/$id" -TimeoutSec 10).Content
+    Check ($html.Contains('stale') -and $html.Contains('revalidate')) 'invalidated provenance and evidence are stale'
     $null = Git @('checkout', '-q', $branch)
     [IO.File]::AppendAllText((Join-Path $repo "specs/$id.md"), "Spec-only amendment requires explicit attachment.`n")
     $null = Git @('add', '.')
@@ -186,7 +199,7 @@ catch {
 }
 finally {
     try {
-        if ([IO.Directory]::Exists($scratchHome)) {
+        if ($hubStartAttempted -and [IO.Directory]::Exists($scratchHome)) {
             $pidPath = Join-Path $scratchHome 'muthur.pid'
             if ([IO.File]::Exists($pidPath)) {
                 $scratchPid = [int][IO.File]::ReadAllText($pidPath)
@@ -201,7 +214,10 @@ finally {
     foreach ($process in $hubProcesses) {
         try {
             if (-not $process.HasExited) {
-                if (-not $process.WaitForExit(5000)) { $process.Kill($true); $process.WaitForExit() }
+                if (-not $process.WaitForExit(5000)) {
+                    $process.Kill($true)
+                    if (-not $process.WaitForExit(5000)) { throw 'Scratch process did not stop after termination.' }
+                }
             }
         }
         catch { $cleanup.Add('Scratch process cleanup: ' + $_.Exception.Message) }
