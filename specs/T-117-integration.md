@@ -1,0 +1,9 @@
+# T-117 integration repair (frozen)
+
+Preserve specs/T-117.md unchanged (blob 00e029a9916094a73006de89ed9aecb7154d9435) and completed implementation f801ac9842bebcdd97e2135f947d8853cd6f6a7d. Independent validation already passed; conductor landing event 6332 conflicts with newly landed T-100. This unit only integrates that work, not reimplementation.
+
+Start from task/T-117-deterministic-admission; verify git log. Integrate local main at 7acf01d into your worker branch by merging it there (never checkout or merge into the real default branch). Resolve ProbeAdmissionTests.cs by retaining T-117 SetupGateAsync, both ordered and contended theories, all capacity assertions and cleanup. Preserve T-100 production and other test changes verbatim. Both sides repair the validator fixture: retain one normal-API fixture, using T-100 committed-spec-on-task-branch sequence if needed by the current API, and retain T-117 CurrentSubject and PlanAsync eligibility assertions. Do not fabricate validation rows. Preserve the probe task InProgress and owned, all three launch classes, both orderings, and no sleeps or retries. No unrelated changes; stop with evidence if current APIs require broader design changes.
+
+Only conflict-resolution code allowed: tests/Muthur.Server.Tests/ProbeAdmissionTests.cs. Commit the integration on your worker branch. No hub commands, push, outbound activity, or default-branch mutation. Read CLAUDE.md and original frozen spec.
+
+Run dotnet build --disable-build-servers; focused ProbeAdmissionTests; five fixed runs filtered FullyQualifiedName~Admission_and_each_launch_class; and full dotnet test --no-build --no-restore --disable-build-servers. Capture logs/TRX, fail immediately without retries. Original spec contains exact commands. Orchestrator independently repeats checks and installed verification, then resubmits and exits for conductor validation/landing. Report head, changed files, every check, and cleanup.
