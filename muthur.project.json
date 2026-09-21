@@ -2,6 +2,22 @@
   "key": "muthur",
   "build": "dotnet build",
   "test": "dotnet test",
+  "verification": {
+    "version": 1,
+    "name": "muthur",
+    "inputs": ["**"],
+    "buildConfiguration": "Debug",
+    "preparationConfiguration": "Release",
+    "timeoutMinutes": 60,
+    "preparation": { "file": "pwsh", "arguments": ["-NoProfile", "-File", "scripts/install.ps1", "-Destination", "{install}"] },
+    "build": { "file": "dotnet", "arguments": ["build"] },
+    "test": { "file": "dotnet", "arguments": ["test", "-v", "n"] },
+    "up": { "file": "{install}/muthur.exe", "arguments": ["up"] },
+    "readinessPath": "/",
+    "status": { "file": "{install}/muthur.exe", "arguments": ["status"] },
+    "down": { "file": "{install}/muthur.exe", "arguments": ["down"] },
+    "outputs": ["muthur.exe", "server/Muthur.Server.dll", "kit"]
+  },
   "run": "pwsh ./scripts/install.ps1 -Destination ./artifacts/muthur; then set MUTHUR_HOME to a scratch directory and run ./artifacts/muthur/muthur.exe up (dashboard at http://127.0.0.1:7420)",
   "notes": "Never point a development build at the real %LOCALAPPDATA%\\Muthur home: set MUTHUR_HOME to a scratch directory. Warnings are errors. Tests use HubFactory (isolated temp data dir + FakeTimeProvider)."
 }
