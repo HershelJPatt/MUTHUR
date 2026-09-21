@@ -49,9 +49,10 @@ public sealed class CapabilityProbeTests : IAsyncLifetime
 
     private void AssertRealCallsCompleted()
     {
-        Assert.True(_runner.UncertainRealCall is null, $"Real process ownership is uncertain: {_runner.UncertainRealCall}");
-        Assert.Equal(0, _runner.RealCallsInFlight);
-        Assert.Equal(_runner.RealCallsStarted, _runner.RealCallsCompleted);
+        Assert.True(_runner.UncertainRealCall is null, $"Real process ownership is uncertain: {_runner.UncertainRealCall}\n{_runner.CommandDiagnostics}");
+        Assert.True(_runner.RealCallsInFlight == 0, $"Expected 0 real calls in flight, actual {_runner.RealCallsInFlight}.\n{_runner.CommandDiagnostics}");
+        Assert.True(_runner.RealCallsStarted == _runner.RealCallsCompleted,
+            $"Expected {_runner.RealCallsStarted} completed real calls, actual {_runner.RealCallsCompleted}.\n{_runner.CommandDiagnostics}");
     }
 
     private (string, IReadOnlyList<string>)? Resolve(string name) => name == "fixture" ? (Path.Combine(_root, "fixture"), []) : ExecutableResolver.Resolve(name);
@@ -164,18 +165,46 @@ public sealed class CapabilityProbeTests : IAsyncLifetime
         AssertRealCallsCompleted();
     }
 
-    private async Task<(Admission Admission, string Worktree)> AssertRetainedReservationAsync(string mode)
+    [Theory]
+    [InlineData("init")]
+    [InlineData("commit")]
+    public async Task Uncertain_cleanup_setup_failure_reports_real_command(string step)
     {
         var request = await Request();
-        _runner.Mode = mode;
+        _runner.Mode = "cleanup";
+        _runner.SetupFailureStep = step;
+        _runner.SetupFailureExitCode = 124;
         var admission = new Admission();
+        var error = await Assert.ThrowsAsync<Xunit.Sdk.TrueException>(() => AssertRetainedReservationAsync("cleanup", request, admission));
+        Assert.Contains("Expected 1 model invocation, actual 0", error.Message);
+        Assert.Contains("Real command:", error.Message);
+        Assert.Contains($"Simulated setup failure: git {step}", error.Message);
+        Assert.Contains("exit code 124", error.Message);
+        Assert.DoesNotContain("private stdout", error.Message);
+        Assert.DoesNotContain("private stderr", error.Message);
+        AssertRealCallsCompleted();
+        var worktree = Assert.Single(_runner.AddedWorktrees);
+        Assert.True(Directory.Exists(worktree));
+        Assert.Equal(1, _runner.SimulatedRemoveAttempts);
+        Assert.Equal(0, _runner.RealRemoveAttempts);
+        await CleanupAsync();
+        Assert.False(Directory.Exists(worktree));
+        Assert.False(Directory.Exists(_root));
+        Assert.Equal(0, admission.Releases);
+    }
+
+    private async Task<(Admission Admission, string Worktree)> AssertRetainedReservationAsync(string mode, WorkerRequest? request = null, Admission? admission = null)
+    {
+        request ??= await Request();
+        _runner.Mode = mode;
+        admission ??= new Admission();
         var error = await Assert.ThrowsAsync<InvalidOperationException>(() => new CapabilityProbe(_runner, admission, resolve: Resolve, adapterFor: _ => _adapter)
             .RunAsync("T-100", new("fixture", "fixture", "fixture"), request, TimeSpan.FromSeconds(90)));
         Assert.IsType<ProbeCleanupUncertainException>(error.InnerException);
         Assert.Contains("retained", error.Message);
         Assert.Equal(0, admission.Releases);
         Assert.False(Directory.Exists(request.Capabilities!.CacheDirectory));
-        Assert.Equal(1, _runner.ModelInvocations);
+        Assert.True(_runner.ModelInvocations == 1, $"Expected 1 model invocation, actual {_runner.ModelInvocations}.\n{_runner.CommandDiagnostics}");
         Assert.True(_runner.RealCallsStarted > 0);
         AssertRealCallsCompleted();
         var worktree = Assert.Single(_runner.AddedWorktrees);
@@ -341,6 +370,8 @@ public sealed class CapabilityProbeTests : IAsyncLifetime
     {
         private readonly CapabilityProcessRunner _real = new();
         private readonly List<string> _addedWorktrees = [];
+        private readonly List<string> _commandObservations = [];
+        public string CommandDiagnostics => string.Join(Environment.NewLine, _commandObservations);
         public IReadOnlyList<string> AddedWorktrees => _addedWorktrees.AsReadOnly();
         public int RealCallsStarted { get; private set; }
         public int RealCallsCompleted { get; private set; }
@@ -378,21 +409,26 @@ public sealed class CapabilityProbeTests : IAsyncLifetime
             RealCallsInFlight++;
             if (fileName == "git" && arguments.Contains("worktree") && arguments.Contains("remove")) RealRemoveAttempts++;
             var uncertain = false;
+            int? exitCode = null;
+            string? exceptionType = null;
             try
             {
                 var result = await _real.RunAsync(fileName, arguments, workingDirectory, stdin, timeout, ct, scrubEnvironment, isolated);
+                exitCode = result.ExitCode;
                 if (result.Ok && fileName == "git" && arguments.Contains("worktree") && arguments.Contains("add"))
                     _addedWorktrees.Add(Path.GetFullPath(arguments[arguments.ToList().IndexOf("--detach") + 1], workingDirectory));
                 return result;
             }
-            catch (ProbeCleanupUncertainException)
+            catch (Exception error)
             {
-                uncertain = true;
-                UncertainRealCall = $"{fileName} {string.Join(' ', arguments)} in {workingDirectory}";
+                exceptionType = error.GetType().FullName;
+                uncertain = error is ProbeCleanupUncertainException;
+                if (uncertain) UncertainRealCall = $"{fileName} {string.Join(' ', arguments)} in {workingDirectory}";
                 throw;
             }
             finally
             {
+                _commandObservations.Add($"Real command: {fileName} {string.Join(' ', arguments)} in {workingDirectory}; exit code {exitCode?.ToString() ?? "none"}; requested timeout {timeout?.ToString() ?? "default"}; exception {exceptionType ?? "none"}.");
                 if (!uncertain) RealCallsCompleted++;
                 RealCallsInFlight--;
             }
@@ -405,7 +441,10 @@ public sealed class CapabilityProbeTests : IAsyncLifetime
             if (Mode == "cancel-setup" && arguments.Contains("--version")) throw new OperationCanceledException();
             if (SetupFailureStep is not null && arguments.Contains(SetupFailureStep) &&
                 workingDirectory.EndsWith(Path.Combine(".muthur-capability", "commit"), StringComparison.Ordinal))
+            {
+                _commandObservations.Add($"Simulated setup failure: {fileName} {SetupFailureStep}; arguments {string.Join(' ', arguments)} in {workingDirectory}; exit code {SetupFailureExitCode}; requested timeout {timeout?.ToString() ?? "default"}.");
                 return new(SetupFailureExitCode, "private stdout", "private stderr");
+            }
             if (Mode == "cleanup" && arguments.Contains("worktree") && arguments.Contains("remove"))
             {
                 SimulatedRemoveAttempts++;
