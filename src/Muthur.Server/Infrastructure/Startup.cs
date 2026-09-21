@@ -89,6 +89,7 @@ public static class Startup
         // Registered in the order DoctorService reports them, so the list reads like the report.
         builder.Services.AddSingleton<IDoctorCheck, DoctorAgentCheck>();
         builder.Services.AddSingleton<IDoctorCheck, DoctorHarnessCheck>();
+        builder.Services.AddSingleton<IDoctorCheck, DoctorCapabilityCheck>();
         builder.Services.AddSingleton<IDoctorCheck, DoctorIngestCheck>();
         builder.Services.AddSingleton<IDoctorCheck, DoctorLoggingCheck>();
         builder.Services.AddSingleton<IDoctorCheck, DoctorOutboundCheck>();

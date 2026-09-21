@@ -21,7 +21,7 @@ public sealed class OrchestratorSessionLauncher(
     AgentService agents,
     HarnessService harnesses,
     IProcessRunner processes,
-    ILogger<OrchestratorSessionLauncher> logger, TimeProvider? clock = null) : IOrchestratorSessionLauncher
+    ILogger<OrchestratorSessionLauncher> logger, TimeProvider? clock = null, ITaskLander? lander = null) : IOrchestratorSessionLauncher
 {
     private const string Tier = "mastermind";
 
@@ -34,6 +34,9 @@ public sealed class OrchestratorSessionLauncher(
         var candidates = await CandidatesAsync(ct);
         if (candidates.Count == 0)
             throw new ValidatorLaunchException($"No available {Tier} candidate to orchestrate {assignment.TaskKey}.");
+
+        var capabilities = await SessionCommands.CapabilitiesAsync(ledger, lander, assignment.TaskId,
+            "conductor-orchestrator", options.DataDir, optional: true, ct);
 
         var scratch = Path.Combine(options.DataDir, "conductor", $"{assignment.TaskKey}-orchestrator");
         Directory.CreateDirectory(scratch);
@@ -49,7 +52,8 @@ public sealed class OrchestratorSessionLauncher(
                 AllowedCommands: SessionCommands.Allowed,
                 DeniedCommands: SessionCommands.Denied,
                 ScratchDirectory: scratch,
-                ReasoningEffort: candidate.ReasoningEffort),
+                ReasoningEffort: candidate.ReasoningEffort,
+                Capabilities: capabilities),
             candidate => IdentityFor(assignment, candidate, ct),
             TimeSpan.FromMinutes(options.ConductorSessionMinutes),
             candidate => MarkLimitedAsync(candidate.Account, ct),

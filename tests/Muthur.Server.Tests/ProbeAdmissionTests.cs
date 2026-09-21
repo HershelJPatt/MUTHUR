@@ -25,9 +25,9 @@ public sealed class ProbeAdmissionTests : IDisposable
     public ProbeAdmissionTests() => _hub.Settings["Muthur:ConductorEnabled"] = "true";
     public void Dispose() { Environment.SetEnvironmentVariable("PATH", _path); _hub.Dispose(); _repo.Dispose(); }
 
-    private async Task<(HttpClient Client, ProbeAdmissionRequest Request)> Setup()
+    private async Task<(HttpClient Client, ProbeAdmissionRequest Request)> Setup(string[]? validators = null)
     {
-        await _hub.AddProjectAsync(repoPath: _repo.Path);
+        await _hub.AddProjectAsync(repoPath: _repo.Path, validators: validators);
         var client = await _hub.RegisterAgentAsync("owner", tier: "mastermind");
         var task = await client.AddTaskAsync("Probe fixture");
         (await client.ClaimAsync(task.Id)).EnsureSuccessStatusCode();
@@ -51,30 +51,23 @@ public sealed class ProbeAdmissionTests : IDisposable
 
     private sealed class HeldProcess : IProcessRunner
     {
+        private int _starts;
+        public int Starts => Volatile.Read(ref _starts);
         public TaskCompletionSource Started { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
         public async Task<ProcessResult> RunAsync(string fileName, IReadOnlyList<string> arguments, string workingDirectory,
             string? stdin = null, TimeSpan? timeout = null, CancellationToken ct = default,
             IReadOnlyCollection<string>? scrubEnvironment = null, IReadOnlyDictionary<string, string>? environment = null)
         {
+            Interlocked.Increment(ref _starts);
             Started.TrySetResult();
             await new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously).Task.WaitAsync(ct);
             return new(0, "", "");
         }
     }
 
-    [Theory]
-    [InlineData("validator", true)]
-    [InlineData("validator", false)]
-    [InlineData("orchestrator", true)]
-    [InlineData("orchestrator", false)]
-    [InlineData("overseer", true)]
-    [InlineData("overseer", false)]
-    public async Task Admission_and_each_launch_class_share_the_gate(string kind, bool admissionFirst)
+    private async Task<ProbeAdmissionRequest> SetupGateAsync(string kind, ConductorService conductor, OverseerService overseer)
     {
-        var (client, request) = await Setup();
-        var process = new HeldProcess();
-        var overseer = ActivatorUtilities.CreateInstance<OverseerService>(_hub.Services, process);
-        var conductor = ActivatorUtilities.CreateInstance<ConductorService>(_hub.Services, overseer);
+        var (client, request) = await Setup(kind == "validator" ? ["fixture-validator"] : null);
         await conductor.SetCeilingAsync(Caller.Founder, new(1, null, null, null, false));
         _hub.Validators.Block = true;
         _hub.Orchestrators.Block = true;
@@ -92,53 +85,135 @@ public sealed class ProbeAdmissionTests : IDisposable
             else
             {
                 (await _hub.Founder().PutAsJsonAsync(Routes.Roles, new DefineRoleRequest("fixture-validator", "Validate", true))).EnsureSuccessStatusCode();
-                await Ledger.MutateAsync(Caller.Founder, async m =>
-                {
-                    var row = await TaskService.LoadAsync(m.Db, task.Id, default);
-                    row.State = TaskState.Validating;
-                    m.Db.TaskValidations.Add(new TaskValidation { TaskId = row.Id, ValidatorKey = "fixture-validator", Verdict = Verdict.Pending, WaitingSince = m.Now });
-                    m.Record("task.implemented", row.Id, new { head = "fixture" });
-                });
+                (await client.ClaimAsync(task.Id)).EnsureSuccessStatusCode();
+                (await client.PostActionAsync(task.Id, "spec", new SetSpecRequest(_repo.WriteSpec(task.Id)))).EnsureSuccessStatusCode();
+                var branch = $"task/{task.Id}-work";
+                _repo.BranchWithFile(branch, $"{task.Id}.txt", $"{task.Id}\n");
+                (await client.PostActionAsync(task.Id, "implemented", new ImplementedRequest(branch))).EnsureSuccessStatusCode();
+                Assert.NotNull((await client.GetTaskAsync(task.Id)).Task.CurrentSubject);
+                Assert.Equal(task.Id, Assert.Single(await conductor.PlanAsync()).TaskKey);
             }
         }
-        var entered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        return request;
+    }
+
+    [Theory]
+    [InlineData("validator", true)]
+    [InlineData("validator", false)]
+    [InlineData("orchestrator", true)]
+    [InlineData("orchestrator", false)]
+    [InlineData("overseer", true)]
+    [InlineData("overseer", false)]
+    public Task Admission_and_each_launch_class_share_the_gate(string kind, bool admissionFirst) =>
+        SharedGateAsync(kind, admissionFirst, contention: false);
+
+    [Theory]
+    [InlineData("validator", true)]
+    [InlineData("validator", false)]
+    [InlineData("orchestrator", true)]
+    [InlineData("orchestrator", false)]
+    [InlineData("overseer", true)]
+    [InlineData("overseer", false)]
+    public Task Admission_and_each_launch_class_contend_for_the_gate(string kind, bool admissionFirst) =>
+        SharedGateAsync(kind, admissionFirst, contention: true);
+
+    private async Task SharedGateAsync(string kind, bool admissionFirst, bool contention)
+    {
+        using var cancel = new CancellationTokenSource();
+        var process = new HeldProcess();
+        var overseer = ActivatorUtilities.CreateInstance<OverseerService>(_hub.Services, process);
+        var conductor = ActivatorUtilities.CreateInstance<ConductorService>(_hub.Services, overseer);
         var unblock = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
-        var writer = Ledger.MutateAsync(Caller.Founder, async _ => { entered.SetResult(); await unblock.Task; });
-        await entered.Task;
-        Task<ProbeAdmissionDto> admission;
-        Task<int> pass;
-        if (admissionFirst)
-        {
-            admission = conductor.AdmitProbeAsync(Caller.Founder, request);
-            pass = conductor.RunPassAsync();
-        }
-        else
-        {
-            pass = conductor.RunPassAsync();
-            admission = conductor.AdmitProbeAsync(Caller.Founder, request);
-        }
-        unblock.SetResult();
-        await writer;
+        var operations = new List<Task>();
+        Task<ProbeAdmissionDto>? admission = null;
+        var timeout = TimeSpan.FromSeconds(30);
         try
         {
+            var request = await SetupGateAsync(kind, conductor, overseer);
+            Task? writer = null;
+            if (contention)
+            {
+                var entered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+                writer = Ledger.MutateAsync(Caller.Founder, async _ => { entered.SetResult(); await unblock.Task; }, cancel.Token);
+                operations.Add(writer);
+                await entered.Task.WaitAsync(timeout);
+            }
+
+            Task<int> pass;
+            // Invocation order is not gate acquisition order; only completion orders the non-racing case.
             if (admissionFirst)
             {
-                Assert.True((await admission).MayExecute);
-                Assert.Equal(0, await pass);
-                Assert.Equal(0, await conductor.RunPassAsync());
-                Assert.False(process.Started.Task.IsCompleted);
-                Assert.Empty(_hub.Validators.Started);
-                Assert.Empty(_hub.Orchestrators.Started);
+                admission = conductor.AdmitProbeAsync(Caller.Founder, request, cancel.Token);
+                operations.Add(admission);
+                if (!contention)
+                {
+                    Assert.True((await admission.WaitAsync(timeout)).MayExecute);
+                    await AssertOneSessionAsync();
+                }
+                pass = conductor.RunPassAsync(cancel.Token);
+                operations.Add(pass);
             }
             else
             {
-                Assert.Equal(1, await pass);
-                Assert.Equal("probe_capacity_exhausted", (await Assert.ThrowsAsync<MuthurException>(() => admission)).Code);
-                if (kind == "overseer") await process.Started.Task.WaitAsync(TimeSpan.FromSeconds(30));
+                pass = conductor.RunPassAsync(cancel.Token);
+                operations.Add(pass);
+                if (!contention)
+                {
+                    Assert.Equal(1, await pass.WaitAsync(timeout));
+                    await AssertOneSessionAsync();
+                }
+                admission = conductor.AdmitProbeAsync(Caller.Founder, request, cancel.Token);
+                operations.Add(admission);
             }
-            Assert.Equal(1, (await conductor.StatusAsync()).Running);
+
+            unblock.TrySetResult();
+            if (writer is not null) await writer.WaitAsync(timeout);
+            var admissionError = await Record.ExceptionAsync(async () => await admission.WaitAsync(timeout));
+            var launches = await pass.WaitAsync(timeout);
+            if (admissionError is null)
+            {
+                Assert.True((await admission).MayExecute);
+                Assert.Equal(0, launches);
+            }
+            else
+            {
+                Assert.Equal("probe_capacity_exhausted", Assert.IsType<MuthurException>(admissionError).Code);
+                Assert.Equal(1, launches);
+            }
+            if (!contention) Assert.Equal(admissionFirst ? 0 : 1, launches);
+            var secondPass = conductor.RunPassAsync(cancel.Token);
+            operations.Add(secondPass);
+            Assert.Equal(0, await secondPass.WaitAsync(timeout));
+            if (kind == "overseer" && launches == 1) await process.Started.Task.WaitAsync(timeout);
+            await AssertOneSessionAsync();
+            var validators = _hub.Validators.Started.Count;
+            var orchestrators = _hub.Orchestrators.Started.Count;
+            Assert.Equal(kind == "validator" ? launches : 0, validators);
+            Assert.Equal(kind == "orchestrator" ? launches : 0, orchestrators);
+            Assert.Equal(kind == "overseer" ? launches : 0, process.Starts);
+            var grants = await Count("worker.probe_admitted");
+            Assert.Equal(admissionError is null ? 1 : 0, grants);
+            Assert.Equal(1, grants + validators + orchestrators + process.Starts);
         }
-        finally { await conductor.StopSessionsAsync(); }
+        finally
+        {
+            unblock.TrySetResult();
+            cancel.Cancel();
+            try
+            {
+                await Task.WhenAll(operations.Select(operation => Record.ExceptionAsync(() => operation)));
+                if (admission is { IsCompletedSuccessfully: true })
+                    await conductor.ReleaseProbeAsync(Caller.Founder, new(admission.Result.ReservationId));
+            }
+            finally { await conductor.StopSessionsAsync(); }
+        }
+
+        async Task AssertOneSessionAsync()
+        {
+            var status = await conductor.StatusAsync(cancel.Token);
+            Assert.Equal(1, status.Running);
+            Assert.Single(status.Sessions);
+        }
     }
 
     [Fact]

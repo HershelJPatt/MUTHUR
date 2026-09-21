@@ -42,6 +42,14 @@ requests, budgets, attended flags, holds and terminal state remain independent.
 Workarounds are annotations with authorization references, never capability grants.
 Do not periodically retry unchanged suppression; inspect the recorded recovery condition.
 
+For frozen specs with standalone `capabilities:` requirements, inspect the exact committed spec/base,
+candidate and launch path before dispatch. Unknown, stale, unavailable and temporarily failing evidence
+refuses a full session; do not loop or widen permissions. Cache identity includes version, configuration
+and revision. Remove only a selected stale record and explicitly re-probe once shared admission permits
+it. Explicit worker-run probes require --task and shared catalog/account/budget/capacity admission; refusal starts no model. Existing specs without the
+line retain their routing. Browser work remains T-94; native Agent-tool evidence remains T-67/T-97.
+Fixture smoke results are simulated, never a real-use pilot. See `docs/capabilities.md` for limitations.
+
 Ordinary `muthur ask` defaults to overseer triage. Use `--kind technical` for known engineering
 judgment within established founder direction. Keeping documented compatibility, enforcing shared
 rules, duplicate-scope decisions and consistent internal identifiers are technical; words such as
