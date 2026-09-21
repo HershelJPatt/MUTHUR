@@ -53,15 +53,15 @@ public sealed class LifecycleTests : IDisposable
         Assert.Equal(HttpStatusCode.UnprocessableEntity, early.StatusCode);
         Assert.Equal("not_validated", (await early.ReadErrorAsync()).Code);
 
-        var noRole = await win.PostActionAsync(id, "pass", new VerdictRequest("win-validator"));
+        var noRole = await win.PostActionAsync(id, "pass", new VerdictRequest("win-validator", "Ran the application: expected output observed; reproduce with dotnet test.", SubjectId: (await win.GetTaskAsync(id)).Task.CurrentSubject!.Id));
         Assert.Equal("role_not_held", (await noRole.ReadErrorAsync()).Code);
 
         (await TakeAsync(win, "win-validator")).EnsureSuccessStatusCode();
         (await TakeAsync(web, "web-validator")).EnsureSuccessStatusCode();
-        var afterOne = await (await win.PostActionAsync(id, "pass", new VerdictRequest("win-validator", "ran the app, works"))).ReadTaskAsync();
+        var afterOne = await (await win.PostActionAsync(id, "pass", new VerdictRequest("win-validator", "ran the app, works; reproduce with dotnet test", SubjectId: (await win.GetTaskAsync(id)).Task.CurrentSubject!.Id))).ReadTaskAsync();
         Assert.Equal(TaskState.Validating, afterOne.State);
 
-        var afterTwo = await (await web.PostActionAsync(id, "pass", new VerdictRequest("web-validator"))).ReadTaskAsync();
+        var afterTwo = await (await web.PostActionAsync(id, "pass", new VerdictRequest("web-validator", "Ran the application: expected output observed; reproduce with dotnet test.", SubjectId: (await web.GetTaskAsync(id)).Task.CurrentSubject!.Id))).ReadTaskAsync();
         Assert.Equal(TaskState.Validated, afterTwo.State);
 
         var landed = await (await owner.PostAsync(Routes.TaskAction(id, "land"), null)).ReadTaskAsync();
@@ -81,7 +81,7 @@ public sealed class LifecycleTests : IDisposable
         (await owner.PostActionAsync(id, "implemented", new ImplementedRequest("task/T-1-feature"))).EnsureSuccessStatusCode();
         (await TakeAsync(owner, "win-validator")).EnsureSuccessStatusCode();
 
-        var self = await owner.PostActionAsync(id, "pass", new VerdictRequest("win-validator"));
+        var self = await owner.PostActionAsync(id, "pass", new VerdictRequest("win-validator", "Ran the application: expected output observed; reproduce with dotnet test.", SubjectId: (await owner.GetTaskAsync(id)).Task.CurrentSubject!.Id));
 
         Assert.Equal(HttpStatusCode.UnprocessableEntity, self.StatusCode);
         Assert.Equal("self_validation", (await self.ReadErrorAsync()).Code);
@@ -97,12 +97,12 @@ public sealed class LifecycleTests : IDisposable
         (await TakeAsync(validator, "win-validator")).EnsureSuccessStatusCode();
         (await TakeAsync(validator, "web-validator")).EnsureSuccessStatusCode();
         (await owner.PostActionAsync(id, "implemented", new ImplementedRequest("task/T-1-feature"))).EnsureSuccessStatusCode();
-        (await validator.PostActionAsync(id, "pass", new VerdictRequest("web-validator"))).EnsureSuccessStatusCode();
+        (await validator.PostActionAsync(id, "pass", new VerdictRequest("web-validator", "Ran the application: expected output observed; reproduce with dotnet test.", SubjectId: (await validator.GetTaskAsync(id)).Task.CurrentSubject!.Id))).EnsureSuccessStatusCode();
 
-        var silent = await validator.PostActionAsync(id, "fail", new VerdictRequest("win-validator"));
+        var silent = await validator.PostActionAsync(id, "fail", new VerdictRequest("win-validator", SubjectId: (await validator.GetTaskAsync(id)).Task.CurrentSubject!.Id));
         Assert.Equal("evidence_required", (await silent.ReadErrorAsync()).Code);
 
-        var failed = await (await validator.PostActionAsync(id, "fail", new VerdictRequest("win-validator", "crashes on launch: repro steps…"))).ReadTaskAsync();
+        var failed = await (await validator.PostActionAsync(id, "fail", new VerdictRequest("win-validator", "crashes on launch: repro steps…", SubjectId: (await validator.GetTaskAsync(id)).Task.CurrentSubject!.Id))).ReadTaskAsync();
         Assert.Equal(TaskState.InProgress, failed.State);
         Assert.Equal("owner", failed.Owner);
         Assert.NotNull(failed.ClaimExpires);
@@ -125,14 +125,14 @@ public sealed class LifecycleTests : IDisposable
         (await TakeAsync(validator, "win-validator")).EnsureSuccessStatusCode();
         (await owner.PostActionAsync(id, "implemented", new ImplementedRequest("task/T-1-feature"))).EnsureSuccessStatusCode();
 
-        var silent = await validator.PostActionAsync(id, "blocked", new VerdictRequest("win-validator"));
+        var silent = await validator.PostActionAsync(id, "blocked", new VerdictRequest("win-validator", SubjectId: (await validator.GetTaskAsync(id)).Task.CurrentSubject!.Id));
         Assert.Equal(HttpStatusCode.UnprocessableEntity, silent.StatusCode);
         var refusal = await silent.ReadErrorAsync();
         Assert.Equal("evidence_required", refusal.Code);
         Assert.Contains("what stopped you", refusal.Message);
 
         const string Reason = "No browser in this session, so the dashboard panel could not be opened.\nTried: the CLI, curl, the test suite.";
-        var blocked = await (await validator.PostActionAsync(id, "blocked", new VerdictRequest("win-validator", Reason))).ReadTaskAsync();
+        var blocked = await (await validator.PostActionAsync(id, "blocked", new VerdictRequest("win-validator", Reason, SubjectId: (await validator.GetTaskAsync(id)).Task.CurrentSubject!.Id))).ReadTaskAsync();
 
         Assert.Equal(TaskState.InProgress, blocked.State);
         Assert.Equal("owner", blocked.Owner);
@@ -172,13 +172,13 @@ public sealed class LifecycleTests : IDisposable
 
         // One block is the system working: a session found a missing prerequisite and the owner may well fix it.
         (await owner.PostActionAsync(id, "implemented", new ImplementedRequest("task/T-1-feature"))).EnsureSuccessStatusCode();
-        var once = await (await validator.PostActionAsync(id, "blocked", new VerdictRequest("win-validator", "No browser here."))).ReadTaskAsync();
+        var once = await (await validator.PostActionAsync(id, "blocked", new VerdictRequest("win-validator", "No browser here. Tried opening the dashboard URL.", SubjectId: (await validator.GetTaskAsync(id)).Task.CurrentSubject!.Id))).ReadTaskAsync();
         Assert.Null(once.AttendedReason);
 
         // Two is a class of thing. The owner re-implements, the next session hits the same wall.
         (await owner.PostActionAsync(id, "implemented", new ImplementedRequest("task/T-1-feature"))).EnsureSuccessStatusCode();
         var twice = await (await validator.PostActionAsync(id, "blocked",
-            new VerdictRequest("win-validator", "Still no browser.\nTried: the CLI, curl, the suite."))).ReadTaskAsync();
+            new VerdictRequest("win-validator", "Still no browser.\nTried: the CLI, curl, the suite.", SubjectId: (await validator.GetTaskAsync(id)).Task.CurrentSubject!.Id))).ReadTaskAsync();
 
         Assert.Equal("Blocked twice without reaching a verdict. Latest: Still no browser.", twice.AttendedReason);
         var detail = await owner.GetTaskAsync(id);
@@ -197,7 +197,7 @@ public sealed class LifecycleTests : IDisposable
 
         // A third block is the flag working, not news: nothing further reaches the founder.
         (await owner.PostActionAsync(id, "implemented", new ImplementedRequest("task/T-1-feature"))).EnsureSuccessStatusCode();
-        (await validator.PostActionAsync(id, "blocked", new VerdictRequest("win-validator", "Still no browser."))).EnsureSuccessStatusCode();
+        (await validator.PostActionAsync(id, "blocked", new VerdictRequest("win-validator", "Still no browser. Tried opening the dashboard URL.", SubjectId: (await validator.GetTaskAsync(id)).Task.CurrentSubject!.Id))).EnsureSuccessStatusCode();
         var after = (await _hub.Founder().GetFromJsonAsync(Routes.Messages + "?founder=true", MuthurJsonContext.Default.IReadOnlyListMessageDto))!;
         Assert.Equal(toFounder.Count, after.Count);
     }
@@ -218,9 +218,9 @@ public sealed class LifecycleTests : IDisposable
         (await owner.PostActionAsync(id, "attended", new AttendedRequest(Written))).EnsureSuccessStatusCode();
 
         (await owner.PostActionAsync(id, "implemented", new ImplementedRequest("task/T-1-feature"))).EnsureSuccessStatusCode();
-        (await validator.PostActionAsync(id, "blocked", new VerdictRequest("win-validator", "No browser here."))).EnsureSuccessStatusCode();
+        (await validator.PostActionAsync(id, "blocked", new VerdictRequest("win-validator", "No browser here. Tried opening the dashboard URL.", SubjectId: (await validator.GetTaskAsync(id)).Task.CurrentSubject!.Id))).EnsureSuccessStatusCode();
         (await owner.PostActionAsync(id, "implemented", new ImplementedRequest("task/T-1-feature"))).EnsureSuccessStatusCode();
-        var twice = await (await validator.PostActionAsync(id, "blocked", new VerdictRequest("win-validator", "Still no browser."))).ReadTaskAsync();
+        var twice = await (await validator.PostActionAsync(id, "blocked", new VerdictRequest("win-validator", "Still no browser. Tried opening the dashboard URL.", SubjectId: (await validator.GetTaskAsync(id)).Task.CurrentSubject!.Id))).ReadTaskAsync();
 
         Assert.Equal(Written, twice.AttendedReason);
 
@@ -243,16 +243,16 @@ public sealed class LifecycleTests : IDisposable
         (await TakeAsync(validator, "web-validator")).EnsureSuccessStatusCode();
         (await owner.PostActionAsync(id, "implemented", new ImplementedRequest("task/T-1-feature"))).EnsureSuccessStatusCode();
 
-        (await validator.PostActionAsync(id, "pass", new VerdictRequest("web-validator", "ran it, works"))).EnsureSuccessStatusCode();
-        var blocked = await (await validator.PostActionAsync(id, "blocked", new VerdictRequest("win-validator", "no Windows box in this session"))).ReadTaskAsync();
+        (await validator.PostActionAsync(id, "pass", new VerdictRequest("web-validator", "ran it, works; reproduce with dotnet test", SubjectId: (await validator.GetTaskAsync(id)).Task.CurrentSubject!.Id))).EnsureSuccessStatusCode();
+        var blocked = await (await validator.PostActionAsync(id, "blocked", new VerdictRequest("win-validator", "no Windows box in this session", SubjectId: (await validator.GetTaskAsync(id)).Task.CurrentSubject!.Id))).ReadTaskAsync();
 
         Assert.Equal(TaskState.InProgress, blocked.State);
         Assert.NotEqual(TaskState.Validated, blocked.State);
         Assert.Equal(["blocked", "yes"], blocked.Validations.Select(v => v.Verdict).Order());
 
         // And it cannot be nudged over the line afterwards: the task has left validation.
-        var late = await validator.PostActionAsync(id, "pass", new VerdictRequest("win-validator", "changed my mind"));
-        Assert.Equal("not_validating", (await late.ReadErrorAsync()).Code);
+        var late = await validator.PostActionAsync(id, "pass", new VerdictRequest("win-validator", "changed my mind", SubjectId: (await validator.GetTaskAsync(id)).Task.CurrentSubject!.Id));
+        Assert.Equal("stale_validation_subject", (await late.ReadErrorAsync()).Code);
         Assert.Equal(TaskState.InProgress, (await owner.GetTaskAsync(id)).Task.State);
 
         var land = await owner.PostAsync(Routes.TaskAction(id, "land"), null);
@@ -268,14 +268,14 @@ public sealed class LifecycleTests : IDisposable
         var stranger = await _hub.RegisterAgentAsync("stranger");
         (await owner.PostActionAsync(id, "implemented", new ImplementedRequest("task/T-1-feature"))).EnsureSuccessStatusCode();
 
-        var noRole = await stranger.PostActionAsync(id, "blocked", new VerdictRequest("win-validator", "cannot run it"));
+        var noRole = await stranger.PostActionAsync(id, "blocked", new VerdictRequest("win-validator", "cannot run it: dashboard URL is inaccessible", SubjectId: (await stranger.GetTaskAsync(id)).Task.CurrentSubject!.Id));
         Assert.Equal("role_not_held", (await noRole.ReadErrorAsync()).Code);
 
         (await TakeAsync(owner, "win-validator")).EnsureSuccessStatusCode();
-        var self = await owner.PostActionAsync(id, "blocked", new VerdictRequest("win-validator", "cannot run it"));
+        var self = await owner.PostActionAsync(id, "blocked", new VerdictRequest("win-validator", "cannot run it: dashboard URL is inaccessible", SubjectId: (await owner.GetTaskAsync(id)).Task.CurrentSubject!.Id));
         Assert.Equal("self_validation", (await self.ReadErrorAsync()).Code);
 
-        var unknown = await stranger.PostActionAsync(id, "blocked", new VerdictRequest("nobody-validator", "cannot run it"));
+        var unknown = await stranger.PostActionAsync(id, "blocked", new VerdictRequest("nobody-validator", "cannot run it: dashboard URL is inaccessible", SubjectId: (await stranger.GetTaskAsync(id)).Task.CurrentSubject!.Id));
         Assert.Equal("validator_not_required", (await unknown.ReadErrorAsync()).Code);
 
         Assert.Equal(TaskState.Validating, (await owner.GetTaskAsync(id)).Task.State);
@@ -300,6 +300,9 @@ public sealed class LifecycleTests : IDisposable
         Assert.Equal("spec_required", (await noSpec.ReadErrorAsync()).Code);
 
         (await owner.PostActionAsync(task.Id, "spec", new SetSpecRequest(_repo.WriteSpec()))).EnsureSuccessStatusCode();
+        _repo.Git("checkout", "-q", "task/T-1-x");
+        _repo.Commit("commit the attached frozen spec");
+        _repo.Git("checkout", "-q", "main");
         var ok = await (await owner.PostActionAsync(task.Id, "implemented", new ImplementedRequest("task/T-1-x"))).ReadTaskAsync();
         Assert.Equal(TaskState.Validated, ok.State); // the project requires no validators
     }
@@ -373,8 +376,11 @@ public sealed class LifecycleTests : IDisposable
         Assert.Equal(TaskState.Done, landed.State);
         Assert.Equal("https://github.com/example/repo/pull/1", landed.PrUrl);
         Assert.Equal(mainBefore, _repo.Git("rev-parse", "main"));
-        Assert.Equal(_repo.Git("rev-parse", "task/T-1-feature"), remote.Git("rev-parse", "task/T-1-feature"));
-        Assert.Equal(("main", "task/T-1-feature", "T-1: Build the feature"), Assert.Single(_hub.PullRequests.Opened));
+        var pinned = $"muthur-approved/{id}/{landed.CurrentSubject!.Id:D}";
+        Assert.Equal(landed.CurrentSubject.ImplementationSha, remote.Git("rev-parse", pinned));
+        Assert.Equal(("main", pinned, "T-1: Build the feature"), Assert.Single(_hub.PullRequests.Opened));
+        Assert.Contains(landed.CurrentSubject.Id.ToString("D"), Assert.Single(_hub.PullRequests.Bodies));
+        Assert.Contains(landed.CurrentSubject.ImplementationSha, Assert.Single(_hub.PullRequests.Bodies));
     }
 
     [Fact]

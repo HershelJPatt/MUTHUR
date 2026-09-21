@@ -5,6 +5,7 @@ using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.DependencyInjection.Extensions;
 using Microsoft.Extensions.Time.Testing;
 using Muthur.Contracts;
+using Muthur.Launch;
 using Muthur.Server.Services;
 
 namespace Muthur.Server.Tests;
@@ -30,6 +31,7 @@ public sealed class HubFactory : WebApplicationFactory<Program>
     public FakeInboundSource Source { get; } = new();
     public FakeValidatorSessions Validators { get; } = new();
     public FakeOrchestratorSessions Orchestrators { get; } = new();
+    public IProcessRunner? Processes { get; init; }
 
     protected override void ConfigureWebHost(IWebHostBuilder builder)
     {
@@ -42,6 +44,11 @@ public sealed class HubFactory : WebApplicationFactory<Program>
         foreach (var (key, value) in Settings) builder.UseSetting(key, value);
         builder.ConfigureServices(services =>
         {
+            if (Processes is not null)
+            {
+                services.RemoveAll<IProcessRunner>();
+                services.AddSingleton(Processes);
+            }
             services.RemoveAll<TimeProvider>();
             services.AddSingleton<TimeProvider>(Clock);
             services.RemoveAll<IPullRequestOpener>();
@@ -100,12 +107,14 @@ public sealed class ObservingClock(DateTimeOffset start) : FakeTimeProvider(star
 public sealed class FakePullRequestOpener : IPullRequestOpener
 {
     public List<(string Base, string Head, string Title)> Opened { get; } = [];
+    public List<string> Bodies { get; } = [];
     public string? FailWith { get; set; }
 
     public Task<string> OpenAsync(string repoPath, string baseBranch, string headBranch, string title, string body, CancellationToken ct = default)
     {
         if (FailWith is not null) throw new InvalidOperationException(FailWith);
         Opened.Add((baseBranch, headBranch, title));
+        Bodies.Add(body);
         return Task.FromResult($"https://github.com/example/repo/pull/{Opened.Count}");
     }
 }

@@ -106,9 +106,10 @@ public static class RoleCommands
     {
         var id = new Argument<string>("id") { Description = "Task id, e.g. T-12." };
         var asRole = new Option<string>("--as") { Description = "The validator role you are acting as.", Required = true };
-        var command = new Command(name, description) { id, asRole };
+        var subject = new Option<Guid?>("--subject") { Description = "Expected validation round; omitted to claim the current round." };
+        var command = new Command(name, description) { id, asRole, subject };
         command.SetAction(async (parse, ct) => Output.Emit(parse, await HubClient.For(parse).PostAsync(
-            Routes.TaskAction(parse.GetValue(id)!, action), new ClaimValidationRequest(parse.GetValue(asRole)!), MuthurJsonContext.Default.ClaimValidationRequest, ct)));
+            Routes.TaskAction(parse.GetValue(id)!, action), new ClaimValidationRequest(parse.GetValue(asRole)!, parse.GetValue(subject)), MuthurJsonContext.Default.ClaimValidationRequest, ct)));
         return command;
     }
 
@@ -116,14 +117,30 @@ public static class RoleCommands
     {
         var id = new Argument<string>("id") { Description = "Task id, e.g. T-12." };
         var asRole = new Option<string>("--as") { Description = "The validator role you are acting as.", Required = true };
-        var evidence = new Option<string?>("--evidence") { Description = "File with what you ran and saw (required for fail and blocked)." };
-        var note = new Option<string?>("--note") { Description = "Inline evidence instead of a file." };
-        var command = new Command(name, description) { id, asRole, evidence, note };
+        var evidence = new Option<string?>("--evidence") { Description = "Report describing check, observation and artifact/reference or reproduction command." };
+        var evidenceFile = new Option<string?>("--evidence-file") { Description = "Read the report from a local UTF-8 file." };
+        var note = new Option<string?>("--note") { Description = "Alias for an inline evidence report." };
+        var subject = new Option<Guid?>("--subject") { Description = "Round ID retained from the claim; required for every verdict." };
+        var command = new Command(name, description) { id, asRole, evidence, evidenceFile, note, subject };
+        if (name == "pass") command.Aliases.Add("yes");
+        if (name == "fail") command.Aliases.Add("no");
         command.SetAction(async (parse, ct) =>
         {
-            var text = parse.GetValue(evidence) is { } file ? await File.ReadAllTextAsync(file, ct) : parse.GetValue(note);
+            if (new[] { parse.GetResult(evidence), parse.GetResult(evidenceFile), parse.GetResult(note) }.Count(x => x is not null) > 1)
+                return Output.Error("evidence_conflict", "Use only one of --evidence, --evidence-file or --note.", ExitCodes.RuleViolation);
+            string? text;
+            try
+            {
+                text = parse.GetValue(evidenceFile) is { } file
+                    ? await File.ReadAllTextAsync(file, new System.Text.UTF8Encoding(false, true), ct)
+                    : parse.GetValue(evidence) ?? parse.GetValue(note);
+            }
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or System.Text.DecoderFallbackException)
+            {
+                return Output.Error("evidence_file_unreadable", "Read a local UTF-8 report with --evidence-file: " + ex.Message, ExitCodes.RuleViolation);
+            }
             return Output.Emit(parse, await HubClient.For(parse).PostAsync(
-                Routes.TaskAction(parse.GetValue(id)!, name), new VerdictRequest(parse.GetValue(asRole)!, text), MuthurJsonContext.Default.VerdictRequest, ct));
+                Routes.TaskAction(parse.GetValue(id)!, name), new VerdictRequest(parse.GetValue(asRole)!, text, parse.GetValue(subject)), MuthurJsonContext.Default.VerdictRequest, ct));
         });
         return command;
     }

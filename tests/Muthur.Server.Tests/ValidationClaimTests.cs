@@ -89,11 +89,11 @@ public sealed class ValidationClaimTests : IDisposable
         Assert.Contains("by 'one'", error.Message);
 
         // A verdict is a session already spent, so it is refused the same way rather than overwriting the claim.
-        var verdict = await two.PostActionAsync(id, "pass", new VerdictRequest("win-validator", "I did not run this"));
+        var verdict = await two.PostActionAsync(id, "pass", new VerdictRequest("win-validator", "I did not run this: another validator holds the claim", SubjectId: (await two.GetTaskAsync(id)).Task.CurrentSubject!.Id));
         Assert.Equal(HttpStatusCode.Conflict, verdict.StatusCode);
         Assert.Equal("validation_claimed", (await verdict.ReadErrorAsync()).Code);
 
-        var passed = await (await one.PostActionAsync(id, "pass", new VerdictRequest("win-validator", "ran the app, works"))).ReadTaskAsync();
+        var passed = await (await one.PostActionAsync(id, "pass", new VerdictRequest("win-validator", "ran the app, works; reproduce with dotnet test", SubjectId: (await one.GetTaskAsync(id)).Task.CurrentSubject!.Id))).ReadTaskAsync();
         Assert.Equal(TaskState.Validated, passed.State);
         Assert.Null(passed.Validations.Single().ClaimedBy);     // decided: nobody is working it
         Assert.Null(passed.Validations.Single().ClaimExpires);
@@ -110,7 +110,7 @@ public sealed class ValidationClaimTests : IDisposable
         var one = await ValidatorAsync("one", "win-validator");
         var id = await ValidatingTaskAsync(owner, "Build the feature", "feature.txt");
 
-        var passed = await (await one.PostActionAsync(id, "pass", new VerdictRequest("win-validator", "ran the app, works"))).ReadTaskAsync();
+        var passed = await (await one.PostActionAsync(id, "pass", new VerdictRequest("win-validator", "ran the app, works; reproduce with dotnet test", SubjectId: (await one.GetTaskAsync(id)).Task.CurrentSubject!.Id))).ReadTaskAsync();
 
         Assert.Equal(TaskState.Validated, passed.State);
         var row = passed.Validations.Single();
@@ -201,7 +201,7 @@ public sealed class ValidationClaimTests : IDisposable
         (await ClaimAsync(one, id)).EnsureSuccessStatusCode();
         (await ClaimAsync(two, id, "web-validator")).EnsureSuccessStatusCode();
 
-        var failed = await (await one.PostActionAsync(id, "fail", new VerdictRequest("win-validator", "crashes on launch: repro steps…"))).ReadTaskAsync();
+        var failed = await (await one.PostActionAsync(id, "fail", new VerdictRequest("win-validator", "crashes on launch: repro steps…", SubjectId: (await one.GetTaskAsync(id)).Task.CurrentSubject!.Id))).ReadTaskAsync();
 
         Assert.Equal(TaskState.InProgress, failed.State);
         Assert.Equal(2, failed.Validations.Count);
@@ -238,7 +238,7 @@ public sealed class ValidationClaimTests : IDisposable
         var one = await ValidatorAsync("one", "win-validator");
         var two = await ValidatorAsync("two", "win-validator", "web-validator");
         var id = await ValidatingTaskAsync(owner, "Build the feature", "feature.txt");
-        (await one.PostActionAsync(id, "pass", new VerdictRequest("win-validator", "ran the app, works"))).EnsureSuccessStatusCode();
+        (await one.PostActionAsync(id, "pass", new VerdictRequest("win-validator", "ran the app, works; reproduce with dotnet test", SubjectId: (await one.GetTaskAsync(id)).Task.CurrentSubject!.Id))).EnsureSuccessStatusCode();
 
         var late = await ClaimAsync(two, id);
         Assert.Equal(HttpStatusCode.UnprocessableEntity, late.StatusCode);

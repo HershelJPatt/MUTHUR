@@ -108,7 +108,7 @@ public sealed class DashboardAttendedTests : IDisposable
         // A blocked verdict sends it back to its owner, so the round that was waiting is over.
         var validator = await _hub.RegisterAgentAsync("validator");
         (await validator.PostAsync(Routes.RoleAction("win-validator", "take"), null)).EnsureSuccessStatusCode();
-        (await validator.PostActionAsync(id, "blocked", new VerdictRequest("win-validator", "No browser here."))).EnsureSuccessStatusCode();
+        (await validator.PostActionAsync(id, "blocked", new VerdictRequest("win-validator", "No browser here. Tried opening the dashboard URL.", SubjectId: (await validator.GetTaskAsync(id)).Task.CurrentSubject!.Id))).EnsureSuccessStatusCode();
         (await validator.PostAsync(Routes.RoleAction("win-validator", "release"), null)).EnsureSuccessStatusCode();
 
         _hub.Clock.Advance(TimeSpan.FromHours(1));
