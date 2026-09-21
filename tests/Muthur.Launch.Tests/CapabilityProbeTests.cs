@@ -56,14 +56,15 @@ public sealed class CapabilityProbeTests : IAsyncLifetime
     }
 
     private (string, IReadOnlyList<string>)? Resolve(string name) => name == "fixture" ? (Path.Combine(_root, "fixture"), []) : ExecutableResolver.Resolve(name);
+    private async Task<ProcessResult> Git(params string[] arguments)
+    {
+        var result = await _runner.RunAsync("git", arguments, _root);
+        Assert.True(result.Ok, $"Fixture git {string.Join(' ', arguments)} in {_root} failed with exit code {result.ExitCode}.\n{_runner.CommandDiagnostics}");
+        return result;
+    }
+
     private async Task<WorkerRequest> Request()
     {
-        async Task<ProcessResult> Git(params string[] args)
-        {
-            var result = await _runner.RunAsync("git", args, _root);
-            Assert.True(result.Ok, result.Message);
-            return result;
-        }
         await Git("init", "--quiet");
         _repositoryInitialized = true;
         await Git("-c", "user.name=Fixture", "-c", "user.email=fixture@example.invalid", "-c", "commit.gpgsign=false", "commit", "--allow-empty", "-m", "fixture baseline");
@@ -255,12 +256,11 @@ public sealed class CapabilityProbeTests : IAsyncLifetime
         var helper = Path.Combine(hooks, "post-checkout");
         File.WriteAllText(helper, "#!/bin/sh\nprintf started > '" + marker.Replace('\\', '/') + "'\n");
         if (!OperatingSystem.IsWindows()) File.SetUnixFileMode(helper, UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute);
-        async Task Git(params string[] args) => Assert.True((await _runner.RunAsync("git", args, _root)).Ok);
         File.WriteAllText(Path.Combine(_root, ".gitattributes"), "*.txt filter=marker\n");
         File.WriteAllText(Path.Combine(_root, "filtered.txt"), "fixture\n");
         await Git("add", ".gitattributes", "filtered.txt");
         await Git("-c", "user.name=Fixture", "-c", "user.email=fixture@example.invalid", "-c", "commit.gpgsign=false", "commit", "-m", "filter fixture");
-        var head = (await _runner.RunAsync("git", ["rev-parse", "HEAD"], _root)).StdOut.Trim();
+        var head = (await Git("rev-parse", "HEAD")).StdOut.Trim();
         request = request with { Capabilities = request.Capabilities! with { BaseCommit = head } };
         await Git("config", "core.hooksPath", hooks);
         await Git("config", "core.fsmonitor", helper);
@@ -287,13 +287,12 @@ public sealed class CapabilityProbeTests : IAsyncLifetime
     public async Task Evaluator_refuses_filters_before_identity_diff_or_full_start(string mode)
     {
         var request = await Request();
-        async Task Git(params string[] args) => Assert.True((await _runner.RunAsync("git", args, _root)).Ok);
         File.WriteAllText(Path.Combine(_root, ".gitattributes"), "Directory.Build.props filter=marker\n");
         var project = Path.Combine(_root, "Directory.Build.props");
         File.WriteAllText(project, "<Project />\n");
         await Git("add", ".gitattributes", "Directory.Build.props");
         await Git("-c", "user.name=Fixture", "-c", "user.email=fixture@example.invalid", "-c", "commit.gpgsign=false", "commit", "-m", "tracked identity fixture");
-        var head = (await _runner.RunAsync("git", ["rev-parse", "HEAD"], _root)).StdOut.Trim();
+        var head = (await Git("rev-parse", "HEAD")).StdOut.Trim();
         request = request with { Capabilities = request.Capabilities! with { BaseCommit = head } };
         var marker = Path.Combine(_root, "filter-started");
         await Git("config", "filter.marker." + mode, "echo started > '" + marker.Replace('\\', '/') + "'; cat");
