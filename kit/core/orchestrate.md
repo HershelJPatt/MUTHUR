@@ -55,7 +55,9 @@ muthur ask "Approve attended application of the recorded protected agent-definit
 ```
 
 If approval already exists for that exact change, do not ask again. Keep the attended routing and
-checkpoint/exit for the attended session.
+in an unattended session checkpoint/exit for a founder-started attended session. An attended session
+may proceed after confirming that the approval still covers the reviewed landed change; a changed diff
+requires fresh explicit founder approval.
 
 Where source preparation can land independently, keep that task source-only and create a separate
 application task. Replace the body ellipsis with real target paths, reviewed source commit/diff and
@@ -68,10 +70,23 @@ muthur task attended T-application --reason "Protected agent definitions require
 muthur task dependencies T-application --after T-n --reason "Apply only the landed reviewed source"
 ```
 
-These task IDs and the body ellipsis are example placeholders, not literal values to execute. Apply the
-approval and checkpoint/exit routing above to the application task. A task genuinely blocked by that
-application records a dependency on the application task and exits. Never release a blocked task into
-runnable backlog or ask the founder to poll it.
+These task IDs and the body ellipsis are example placeholders, not literal values to execute. This leaves
+an attended backlog application task waiting for the source to land, with no approval request yet. The
+source owner records the application task ID in source evidence, completes only the source task and exits
+after marking it implemented. Do not claim a second task or ask against the backlog application task.
+Attended routing intentionally requires a founder-started attended session, not automatic unattended
+conductor staffing.
+
+After the source prerequisite lands, a separate founder-started attended session reads the application
+task and source evidence, then claims it with `muthur task claim T-application` (exit 3 means stop). Verify
+the exact landed source commit/diff and target paths, then follow the approval routing above on the
+now-in-progress application task. If exact-change approval is missing, ask with `--kind human` and
+checkpoint/exit before any application. Do not request existing exact-change approval again; perform
+application only in the attended session after confirming that approval still covers the reviewed landed
+change. A changed diff requires fresh explicit founder approval.
+
+A task genuinely blocked by that application records a dependency on the application task and exits.
+Never release a blocked task into runnable backlog or ask the founder to poll it.
 
 Clearing attended requires evidence that the attended application was completed or that installed
 application is no longer in scope; it does not authorize later unattended protected writes. Source-only
