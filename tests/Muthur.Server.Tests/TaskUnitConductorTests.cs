@@ -44,6 +44,19 @@ public sealed class TaskUnitConductorTests
     }
 
     [Fact]
+    public void Quoting_multiline_task_data_cannot_exceed_the_rendered_context_limit()
+    {
+        var prompt = OrchestratorSessionLauncher.Prompt(new(1, "T-1", "resume", "demo",
+            WorkUnitContext: new string('\n', 8000)), new("test", "fixture", null));
+        var start = prompt.IndexOf("Work-unit checkpoint context", StringComparison.Ordinal);
+        var end = prompt.IndexOf("Recent recorded decisions", start, StringComparison.Ordinal);
+        Assert.True(end - start <= 8000);
+        Assert.Contains("Context truncated", prompt);
+        Assert.Contains("muthur task units T-1", prompt);
+        Assert.Contains("muthur task show T-1", prompt);
+    }
+
+    [Fact]
     public async Task Resume_has_current_request_kinds_decisions_and_task_dependencies()
     {
         using var hub = new HubFactory();
@@ -71,11 +84,16 @@ public sealed class TaskUnitConductorTests
         Assert.Contains("current scope decision", packet.LatestDecisions);
         Assert.Contains(packet.Blockers, x => x.Contains("technical"));
         Assert.Contains(packet.Blockers, x => x.Contains(dependency.Id));
+        for (var i = 0; i < 22; i++)
+            (await owner.PostAsJsonAsync(Routes.Requests, new AskRequest("open " + i, task.Id, Kind: "technical"))).EnsureSuccessStatusCode();
+        packet = (await owner.GetFromJsonAsync(Routes.TaskResume(task.Id), MuthurJsonContext.Default.TaskResumePacket))!;
+        Assert.Equal(21, packet.Blockers.Count);
+        Assert.Equal("Omitted blockers: 4", packet.Blockers[^1]);
         (await hub.Founder().PostActionAsync(task.Id, "dependencies", new DependenciesRequest([]))).EnsureSuccessStatusCode();
         (await hub.Founder().PostActionAsync(task.Id, "release", new ReleaseTaskRequest())).EnsureSuccessStatusCode();
         var conductor = hub.Services.GetRequiredService<ConductorService>();
         await conductor.SetEnabledAsync(Caller.Founder, true);
-        await conductor.SetOrchestratorsEnabledAsync(Caller.Founder, true);
+        await conductor.SetOrchestratorsAsync(Caller.Founder, true);
         var assignment = (await conductor.PlanOrchestratorsAsync()).Single(x => x.TaskId == 1);
         Assert.NotNull(assignment.WorkUnitContext);
         Assert.Contains("current scope decision", assignment.LatestDecisions);

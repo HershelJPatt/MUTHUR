@@ -4,7 +4,6 @@ using Muthur.Server.Infrastructure;
 
 var builder = WebApplication.CreateBuilder(args);
 builder.AddMuthur();
-builder.Services.AddSingleton<Muthur.Server.Services.TaskUnitService>();
 
 var app = builder.Build();
 await app.InitializeMuthurAsync();

@@ -15,6 +15,9 @@ internal static class TaskUnitContext
         var kindKeys = requests.Select(x => $"request.kind.{x.Id}").ToList();
         var kinds = await db.Meta.Where(x => kindKeys.Contains(x.Key)).ToDictionaryAsync(x => x.Key, x => x.Value, ct);
         var blockers = requests.Select(x => $"request #{x.Id} ({RequestService.KindFor(kinds, x.Id)})").Concat(task.DependsOn.Select(x => $"task dependency {x}")).ToList();
+        var omittedBlockers = Math.Max(0, blockers.Count - 20);
+        blockers = blockers.Take(20).ToList();
+        if (omittedBlockers > 0) blockers.Add($"Omitted blockers: {omittedBlockers}");
         var rows = graph?.Units.Take(20).Select(x => new TaskUnitResumeRow(x.Id, x.Attempt?.AttemptId,
             x.Attempt?.ReportedState, x.Attempt?.ReviewState, x.Attempt?.IntegrationCommit is null ? "not recorded" : "recorded (advisory)",
             Clip(x.Attempt?.OutputBranch, 250), x.Attempt?.OutputCommit,

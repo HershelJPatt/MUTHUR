@@ -1,5 +1,6 @@
 using System.Net;
 using System.Net.Http.Json;
+using System.Text.Json;
 using Muthur.Contracts;
 
 namespace Muthur.Server.Tests;
@@ -120,7 +121,7 @@ public sealed class TaskUnitTests
     }
 
     [Fact]
-    public async Task Recovery_finds_commits_and_merges_without_auto_review_and_survives_restart()
+    public async Task Recovery_finds_commits_and_merges_without_auto_review_and_reads_persisted_state()
     {
         using var f = new Fixture();
         await f.Initialize();
@@ -159,7 +160,8 @@ public sealed class TaskUnitTests
         var old = f.Request("a", "report");
         await Error(await f.Post(old with { ExpectedRevision = 0 }), "checkpoint_conflict", HttpStatusCode.Conflict);
         await f.Apply(f.Request("a", "start") with { AttemptId = Guid.NewGuid(), BaseCommit = f.Base, OutputBranch = "worker/a2", Reason = "replacement" });
-        Assert.Equal(b, f.Unit("b"));
+        Assert.Equal(JsonSerializer.Serialize(b, MuthurJsonContext.Default.TaskUnit),
+            JsonSerializer.Serialize(f.Unit("b"), MuthurJsonContext.Default.TaskUnit));
         Assert.Equal("rejected", f.Unit("c").Attempt!.ReviewState);
         Assert.Null(f.Unit("c").Attempt!.IntegrationCommit);
         Assert.NotNull(f.Unit("c").Attempt!.OutputCommit);
@@ -256,10 +258,39 @@ public sealed class TaskUnitTests
         var other = await f.Hub.RegisterAgentAsync("other");
         await Error(await other.PostAsJsonAsync(Routes.TaskUnits(f.Id) + "/checkpoint", request), "not_owner");
         f.Hub.Clock.Advance(TimeSpan.FromHours(1));
-        await Error(await f.Post(request), "unit_owner_inactive");
-        await Read(await f.Hub.Founder().PostAsJsonAsync(Routes.TaskUnits(f.Id) + "/checkpoint", request));
+        await f.Apply(request); // Normal HTTP authentication renews the unchanged owner's lease.
+        f.Hub.Clock.Advance(TimeSpan.FromHours(1));
+        (await other.ClaimAsync(f.Id)).EnsureSuccessStatusCode();
+        await Error(await f.Post(f.Request("a", "reconcile")), "not_owner");
+        await Read(await f.Hub.Founder().PostAsJsonAsync(Routes.TaskUnits(f.Id) + "/checkpoint", f.Request("a", "invalidate") with { Reason = "founder recovery" }));
         (await f.Hub.Founder().PostActionAsync(f.Id, "release", new ReleaseTaskRequest())).EnsureSuccessStatusCode();
         await Error(await f.Hub.Founder().PostAsJsonAsync(Routes.TaskUnits(f.Id) + "/define", f.Definition(2)), "unit_owner_inactive");
+    }
+
+    [Fact]
+    public async Task Concurrent_same_revision_accepts_exactly_one_durable_transition()
+    {
+        using var f = new Fixture();
+        await f.Initialize();
+        var request = f.Request("a", "start") with { BaseCommit = f.Base, OutputBranch = "worker/a" };
+        var responses = await Task.WhenAll(f.Post(request), f.Post(request with { AttemptId = Guid.NewGuid() }));
+        Assert.Single(responses, x => x.IsSuccessStatusCode);
+        await Error(Assert.Single(responses, x => !x.IsSuccessStatusCode), "checkpoint_conflict", HttpStatusCode.Conflict);
+        var graph = await Read(await f.Owner.GetAsync(Routes.TaskUnits(f.Id)));
+        Assert.Equal(f.Graph.Revision + 1, graph.Revision);
+        Assert.Single((await f.Owner.GetTaskAsync(f.Id)).Events, x => x.Type == "task.unit_started");
+    }
+
+    [Fact]
+    public async Task Reasons_are_bounded_before_any_mutation()
+    {
+        using var f = new Fixture();
+        await f.Initialize();
+        await f.Start("a");
+        await Error(await f.Post(f.Request("a", "invalidate") with { Reason = new string('r', 2001) }), "unit_reason_length");
+        Assert.Equal(f.Graph.Revision, (await Read(await f.Owner.GetAsync(Routes.TaskUnits(f.Id)))).Revision);
+        await f.Apply(f.Request("a", "invalidate") with { Reason = new string('r', 2000) });
+        Assert.Equal(2000, f.Unit("a").InvalidationReason!.Length);
     }
 
     [Fact]

@@ -69,6 +69,7 @@ public sealed partial class TaskUnitService(Ledger ledger, IProcessRunner runner
             var unit = graph.Units.SingleOrDefault(x => x.Id == request.UnitId) ?? throw Fail.Rule("unit_unknown", "Unknown unit ID.");
             if (request.AttemptId == Guid.Empty) throw Fail.Rule("unit_attempt_required", "Provide a new nonempty attempt UUID.");
             if (request.NextAction?.Length > 500) throw Fail.Rule("unit_next_action", "Next action is limited to 500 characters.");
+            if (request.Reason?.Length > 2000) throw Fail.Rule("unit_reason_length", "Reason is limited to 2000 characters.");
             var git = new TaskUnitGit(runner, task.Project!.RepoPath, ct);
             if (request.Action != "start" && unit.Attempt?.AttemptId != request.AttemptId)
                 throw Fail.Conflict("stale_attempt", "This is not the current attempt.");
