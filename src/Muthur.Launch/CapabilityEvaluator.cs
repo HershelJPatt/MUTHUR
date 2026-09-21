@@ -77,6 +77,10 @@ public sealed class CapabilityEvaluator(IProcessRunner processes, TimeProvider? 
             var (observations, diagnostic) = store.Read(identity);
             return new(identity, context.Requirements, observations, store.Match(identity, context.Requirements, observations, diagnostic), diagnostic);
         }
+        catch (CapabilityFilterException ex)
+        {
+            return Unknown(ex.Code + ": " + ex.Message);
+        }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or ArgumentException or InvalidOperationException or System.ComponentModel.Win32Exception or System.Security.SecurityException)
         {
             return Unknown("Capability identity input is missing or unreadable.");

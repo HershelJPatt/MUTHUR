@@ -52,12 +52,8 @@ public sealed class CapabilityProbe(IProcessRunner processes, IProbeAdmissionCli
         try
         {
             // Check before identity's working-tree diff as well as checkout: clean/process filters can run during diff.
-            var filters = await processes.RunAsync("git", ["config", "--null", "--get-regexp", "^filter\\..*\\.(clean|smudge|process)$"],
-                context.RepositoryRoot, timeout: TimeSpan.FromSeconds(5), ct: lifetime.Token, environment: request.GitEnvironment);
-            if (filters.ExitCode != 1 && !filters.Ok)
-                throw new ProbeRefusal("capability_probe_setup_failed", "Checkout filter configuration could not be read completely.");
-            if (filters.Ok && filters.StdOut.Split('\0').Any(entry => entry.IndexOf('\n') is var index && index >= 0 && entry[(index + 1)..].Length > 0))
-                throw new ProbeRefusal("capability_probe_checkout_filter", "Configured external checkout filters are unsupported; no checkout or model started.");
+            if (await CapabilityHostGit.CheckFiltersAsync(processes, context.RepositoryRoot, request.GitEnvironment, lifetime.Token) is { } refusal)
+                throw new ProbeRefusal(refusal.Code, refusal.Detail);
             var adapter = (adapterFor ?? Harnesses.Find)(candidate.Harness);
             var inspection = await new CapabilityEvaluator(processes, _clock, resolve).InspectAsync(adapter, request, lifetime.Token);
             identity = inspection.Identity;
@@ -250,8 +246,27 @@ public sealed class CapabilityProbe(IProcessRunner processes, IProbeAdmissionCli
     }
 }
 
+internal sealed class CapabilityFilterException(string code, string message) : IOException(message)
+{
+    internal string Code { get; } = code;
+}
+
 internal static class CapabilityHostGit
 {
+    internal static async Task<(string Code, string Detail)?> CheckFiltersAsync(IProcessRunner runner,
+        string directory, IReadOnlyDictionary<string, string>? environment, CancellationToken ct)
+    {
+        var filters = await runner.RunAsync("git", ["config", "--null", "--get-regexp", "^filter\\..*\\.(clean|smudge|process)$"],
+            directory, timeout: TimeSpan.FromSeconds(5), ct: ct,
+            scrubEnvironment: ["MUTHUR_AGENT", "MUTHUR_TOKEN"], environment: environment);
+        if (filters.StdOut.Length > 1_048_576 || (!filters.Ok && filters.ExitCode != 1) ||
+            (filters.ExitCode == 1 && filters.StdOut.Length != 0))
+            return ("capability_probe_setup_failed", "Checkout filter configuration could not be read completely.");
+        if (filters.Ok && filters.StdOut.Split('\0').Any(entry => entry.IndexOf('\n') is var index && index >= 0 && entry[(index + 1)..].Length > 0))
+            return ("capability_probe_checkout_filter", "Configured external checkout filters are unsupported; no diff, checkout or model started.");
+        return null;
+    }
+
     // Host metadata/setup only. Never apply these overrides to the measured harness or its config identity.
     internal static string[] Arguments(IReadOnlyList<string> arguments) =>
         ["-c", "core.hooksPath=" + (OperatingSystem.IsWindows() ? "NUL" : "/dev/null"),

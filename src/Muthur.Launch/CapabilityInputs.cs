@@ -35,6 +35,8 @@ internal static class CapabilityInputs
         }
         var head = await Run("git", ["rev-parse", "HEAD"]);
         if (head != request.Capabilities!.BaseCommit) return null;
+        if (await CapabilityHostGit.CheckFiltersAsync(runner, request.WorkingDirectory, request.GitEnvironment, ct) is { } refusal)
+            throw new CapabilityFilterException(refusal.Code, refusal.Detail);
         // Inspect never checks out another revision. A checkout whose effective inputs differ from the
         // pinned tree cannot predict the newly allocated worker and is deliberately unknown.
         if ((await Run("git", CapabilityHostGit.Arguments(["diff", "--no-ext-diff", "--no-textconv", "--name-only", head, "--", .. ProjectFiles]))).Length != 0) return null;

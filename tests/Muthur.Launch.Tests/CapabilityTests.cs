@@ -206,6 +206,21 @@ public sealed class CapabilityTests : IDisposable
         Assert.Equal(0, _runner.FullStarts);
     }
 
+    [Theory]
+    [InlineData(2, 0)]
+    [InlineData(0, 1_048_577)]
+    [InlineData(1, 1_048_577)]
+    public async Task Unreadable_filter_configuration_refuses_identity(int exitCode, int length)
+    {
+        _runner.FilterConfig = new(exitCode, new string('x', length), "");
+        var result = await new CapabilityEvaluator(_runner, _clock, Resolve).InspectAsync(_adapter, Request("build"));
+        Assert.Null(result.Identity);
+        Assert.False(result.Match.Allowed);
+        Assert.Equal("unknown", Assert.Single(result.Match.Missing).State);
+        Assert.Contains("capability_probe_setup_failed", result.Diagnostic);
+        Assert.Equal(0, _runner.FullStarts);
+    }
+
     [Fact]
     public async Task Malformed_cached_identity_is_diagnostic_and_does_not_match()
     {
@@ -263,12 +278,14 @@ public sealed class CapabilityTests : IDisposable
         public int VersionReads { get; private set; }
         public int FullStarts { get; private set; }
         public string Config { get; set; } = "";
+        public ProcessResult FilterConfig { get; set; } = new(1, "", "");
         public Task<ProcessResult> RunAsync(string fileName, IReadOnlyList<string> arguments, string workingDirectory,
             string? stdin = null, TimeSpan? timeout = null, CancellationToken ct = default, IReadOnlyCollection<string>? scrubEnvironment = null,
             IReadOnlyDictionary<string, string>? environment = null)
         {
             if (arguments.Contains("--version")) { VersionReads++; return Task.FromResult(new ProcessResult(0, Version, "")); }
             if (fileName == "id") return Task.FromResult(new ProcessResult(0, "1000", ""));
+            if (arguments.Contains("--get-regexp")) return Task.FromResult(FilterConfig);
             if (fileName == "git")
             {
                 var output = arguments[0] switch

@@ -166,6 +166,36 @@ public sealed class CapabilityProbeTests : IDisposable
     }
 
     [Theory]
+    [InlineData("clean")]
+    [InlineData("smudge")]
+    [InlineData("process")]
+    public async Task Evaluator_refuses_filters_before_identity_diff_or_full_start(string mode)
+    {
+        var request = await Request();
+        async Task Git(params string[] args) => Assert.True((await _runner.RunAsync("git", args, _root)).Ok);
+        File.WriteAllText(Path.Combine(_root, ".gitattributes"), "Directory.Build.props filter=marker\n");
+        var project = Path.Combine(_root, "Directory.Build.props");
+        File.WriteAllText(project, "<Project />\n");
+        await Git("add", ".gitattributes", "Directory.Build.props");
+        await Git("-c", "user.name=Fixture", "-c", "user.email=fixture@example.invalid", "-c", "commit.gpgsign=false", "commit", "-m", "tracked identity fixture");
+        var head = (await _runner.RunAsync("git", ["rev-parse", "HEAD"], _root)).StdOut.Trim();
+        request = request with { Capabilities = request.Capabilities! with { BaseCommit = head } };
+        var marker = Path.Combine(_root, "filter-started");
+        await Git("config", "filter.marker." + mode, "echo started > '" + marker.Replace('\\', '/') + "'; cat");
+        // Force diff to inspect the tracked bytes instead of trusting the index stat cache.
+        File.AppendAllText(project, "<!-- changed -->\n");
+
+        var inspection = await new CapabilityEvaluator(_runner, resolve: Resolve).InspectAsync(_adapter, request);
+        Assert.Null(inspection.Identity);
+        Assert.False(inspection.Match.Allowed);
+        Assert.All(inspection.Match.Missing, missing => Assert.Equal("unknown", missing.State));
+        Assert.Contains("capability_probe_checkout_filter", inspection.Diagnostic);
+        Assert.False(File.Exists(marker));
+        Assert.Equal(0, _runner.ModelInvocations);
+        Assert.False(Directory.Exists(request.Capabilities.CacheDirectory));
+    }
+
+    [Theory]
     [InlineData("file")]
     [InlineData("directory")]
     [InlineData("link")]
