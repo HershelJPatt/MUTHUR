@@ -186,11 +186,11 @@ public sealed partial class TaskService(Ledger ledger, LeasePolicy leases, ITask
 
             // A spec that says out loud what it needs is flagged the moment it is frozen, rather than
             // discovered by a validator session that spends a role lease, an account's quota and 45 minutes
-            // of the founder's budget to find out. Nothing the conductor can staff has a browser, so any
-            // declared need is a human's — and the conductor already leaves an attended task alone.
+            // of the founder's budget to find out. Installed headless interaction can be preflighted by
+            // unattended sessions; other declared needs still require attendance.
             if (SpecNeeds(spec) is { } need && string.IsNullOrWhiteSpace(task.AttendedReason))
             {
-                task.AttendedReason = $"The spec declares 'needs: {need}'. No unattended session has one, so this waits for a human validator.";
+                task.AttendedReason = $"The spec declares 'needs: {need}'. This need requires attendance, so this waits for a human validator.";
                 m.Record("task.attended", task.Id, new { reason = task.AttendedReason, source = "spec_needs", need });
             }
             return await Validations.MapAsync(m.Db, task, null, ct);
@@ -422,19 +422,19 @@ public sealed partial class TaskService(Ledger ledger, LeasePolicy leases, ITask
             "and a 'needs:' line past the cut would be silently missed. Shorten it, or split what belongs elsewhere out of it.");
 
     /// <summary>
-    /// What a spec says it needs that an unattended session does not have, or null when it declares nothing.
+    /// The first declared need requiring attendance, or null when none does.
     /// <para>
     /// One line, anywhere in the document: <c>needs: browser</c>, with any leading list marker, quote marker
-    /// or emphasis. The value is not interpreted — nothing the conductor can staff has a browser, a GUI or
-    /// hands, so declaring any of them means the same thing today. Matching a capability against a harness is
-    /// the upgrade this deliberately does not build.
+    /// or emphasis. Only headless-browser is unattended-capable, subject to the caller's prerequisite probe.
+    /// Continue past that marker so a later attended need is not hidden. This is not capability scheduling.
     /// </para>
     /// </summary>
     private static string? SpecNeeds(string content)
     {
         foreach (var line in content.Split('\n'))
             if (SpecNeedsPattern().Match(line) is { Success: true } match
-                && match.Groups[1].Value.Trim().TrimEnd('.', '*', '`') is { Length: > 0 } need)
+                && match.Groups[1].Value.Trim().TrimEnd('.', '*', '`') is { Length: > 0 } need
+                && !need.Equals("headless-browser", StringComparison.OrdinalIgnoreCase))
                 return need;
         return null;
     }

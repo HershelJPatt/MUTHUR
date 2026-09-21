@@ -49,14 +49,19 @@ dotnet test
 
 Plus anything a validator should exercise end to end (the user-visible behavior, not the unit tests).
 
-Every command here runs with no browser, no GUI and no human — the sessions that validate this are started by
-a conductor. If the change can only be seen by eye, say so here on a line of its own:
+Choose HTTP-only assertions for response data and prerendered HTML, connector-driven UI for an available
+browser connector, or installed headless interaction for clicks and live behavior. HTTP is render-only,
+never interaction evidence. If the connector is unavailable, try the explicit headless probe under existing
+permissions before expensive validation builds and before implementation submission. Probe success is not
+proof of product behavior: run the spec's exact interaction commands and record their assertions.
 
-    needs: browser
-
-The hub reads that when the spec is frozen, flags the task for a human validator, and the conductor never
-staffs it — so nobody spends a session finding out. `muthur task attended <id> --clear` lifts it if the
-reason stops being true.
+Headless specs declare `needs: headless-browser` and exact probe/tool paths and interaction commands.
+Legacy `needs: browser` retains attended semantics for compatibility and human visual needs; other needs
+remain attended too. Replacing a spec does not clear existing or manual attended reasons.
+This repository's supported runner is `scripts/browser-capability.ps1`; generic kit consumers supply their
+own equivalent bounded runner. If neither permitted interaction path works, record exact missing tool or
+permission evidence and a blocked verdict. Never silently substitute HTML, install tooling, expand permissions,
+or start more harness sessions; preserve the shared two-session ceiling.
 
 ## Out of scope / follow-ups
 
