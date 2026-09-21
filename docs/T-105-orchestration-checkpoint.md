@@ -1,0 +1,11 @@
+# T-105 orchestration checkpoint — 2026-09-21
+
+Branch task/T-105-integrated-candidate; original main df3f929ddc0dac080e30e8a651630685f83bcc66. T-99 is done, landed cb52ed186e3486cf7f02bf55001694fbc1422219 and is in main. T-105 had no recorded founder decisions; approved scope retained. T-67/T-88/T-97 remain unwaived.
+
+Frozen spec revisions resolved verification ownership, checked-out target CAS race, and pre-candidate failure reporting. Three implementer-tier Codex starts returned spec-problem, zero product edits/commits and no worker tests. Durations 160, 162, 177 seconds; these are worker elapsed times, not successful implementation or speedup. All returned clean trees, committedByLauncher false. Final v4 addresses the third report; do not redispatch until prerequisites reconciled.
+
+Baseline build on post-T-99 main: PASS, 0 warnings/errors, 18.97 seconds. Full suite did not complete in ten-minute process budget and was terminated by its scoped watchdog (test exit -1), not marked passing. Window 2026-09-21 06:55:59Z–07:06:24Z, one uncontrolled baseline run, live pilot unavailable. Logs and worker reports retained under C:/WorkSrc/MUTHUR/.work/T-105-*. Baseline test log does not establish the hang's root cause.
+
+T-117 is in_progress and already owns the independently reproduced mandatory full-suite regression on identical main df3f929: ProbeAdmissionTests.Admission_and_each_launch_class_share_the_gate(kind: validator, admissionFirst: False), expected one start/actual zero. Its body records isolated reproduction and required deterministic shared-gate repair. T-105 must consume the landed T-117 fix and rerun full suite; do not waive this gate or duplicate its product/test changes. Record T-117 as dependency and exit rather than holding a session for its landing.
+
+Resume: inspect complete task decisions and current main; integrate landed prerequisite into task branch; reconcile frozen spec against actual runner/admission contracts; dispatch implementer Unit A from the committed spec; review every diff; independently build/full-test/install/smoke and clean processes; submit implemented and exit for conductor validation/landing. No implementation, installed checks, integration pilot or landing is claimed by this checkpoint.
