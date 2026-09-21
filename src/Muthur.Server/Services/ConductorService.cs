@@ -411,7 +411,8 @@ public sealed partial class ConductorService(
             ceiling.Reason,
             await OrchestratorsEnabledAsync(ct),
             sessions,
-            Stalls(), await StaffingWaitAsync(ct), await LandingWaitsAsync(ct));
+            Stalls(), await StaffingWaitAsync(ct), await LandingWaitsAsync(ct),
+            await ledger.ReadAsync((db, _) => IncidentService.EffectiveAsync(db, ct), ct));
     }
 
     private async Task<string?> StaffingWaitAsync(CancellationToken ct)
@@ -715,6 +716,7 @@ public sealed partial class ConductorService(
             // calls go to the founder.
             var cap = await CapStateAsync(db, ids, ct);
             var budgetBlocked = await BudgetBlockedAsync(db, now, ct);
+            var incidentSuppressions = await IncidentService.EffectiveAsync(db, ct);
 
             // "harness/model" of whoever declared the task implemented.
             var built = await db.Events
@@ -732,6 +734,7 @@ public sealed partial class ConductorService(
                 if (task.AttendedReason is not null) continue;
                 foreach (var validation in pending.Where(v => v.TaskId == task.Id))
                 {
+                    if (incidentSuppressions.Any(s => s.TaskId == Wire.TaskId(task.Id) && s.Assignment == validation.ValidatorKey)) continue;
                     if (claimed.Contains((task.Id, validation.ValidatorKey))) continue;   // someone is already on it
                     if (!capacities.TryGetValue(validation.ValidatorKey, out var capacity)) continue;   // a role that no longer exists
                     // A session that cannot take the role is a session that does nothing.
@@ -837,12 +840,14 @@ public sealed partial class ConductorService(
                 .ToList();
             var owners = await PreviousOwnersAsync(db, [.. tasks.Where(CarriesWork).Select(t => t.Id)], ct);
             var budgetBlocked = await BudgetBlockedAsync(db, now, ct);
+            var incidentSuppressions = await IncidentService.EffectiveAsync(db, ct);
             var completed = await TaskDependencies.CompletedAsync(db, ct);
 
             var plan = new List<OrchestratorAssignment>();
             foreach (var task in tasks)
             {
                 var key = OrchestratorKey(Wire.TaskId(task.Id));
+                if (incidentSuppressions.Any(s => s.TaskId == Wire.TaskId(task.Id) && s.Assignment == OrchestratorRole)) continue;
                 if (task.DependsOn.Any(d => !completed.Contains(d))) continue;
                 if (budgetBlocked.Contains(key)) continue;
                 lock (_running)
@@ -1137,12 +1142,18 @@ public sealed partial class ConductorService(
                     if (!_running.Add(key)) continue;
                 }
 
-                await ledger.MutateAsync(Caller.Founder, m =>
+                var staffed = await ledger.MutateAsync(Caller.Founder, async m =>
                 {
+                    if ((await IncidentService.EffectiveAsync(m.Db, ct)).Any(s => s.TaskId == assignment.TaskKey && s.Assignment == assignment.RoleKey)) return false;
                     m.Record("conductor.staffing", assignment.TaskId,
                         new { role = assignment.RoleKey, avoidHarness = assignment.AvoidHarness });
-                    return Task.CompletedTask;
+                    return true;
                 }, ct);
+                if (!staffed)
+                {
+                    lock (_running) _running.Remove(key);
+                    continue;
+                }
 
                 _lastAction = $"staffed {assignment.TaskKey} for {assignment.RoleKey}";
                 Track(RunSessionAsync(assignment, key));
@@ -1161,11 +1172,17 @@ public sealed partial class ConductorService(
                     if (!_running.Add(key)) continue;
                 }
 
-                await ledger.MutateAsync(Caller.Founder, m =>
+                var staffed = await ledger.MutateAsync(Caller.Founder, async m =>
                 {
+                    if ((await IncidentService.EffectiveAsync(m.Db, ct)).Any(s => s.TaskId == assignment.TaskKey && s.Assignment == OrchestratorRole)) return false;
                     m.Record("conductor.staffing", assignment.TaskId, new { role = OrchestratorRole });
-                    return Task.CompletedTask;
+                    return true;
                 }, ct);
+                if (!staffed)
+                {
+                    lock (_running) _running.Remove(key);
+                    continue;
+                }
 
                 _lastAction = $"staffed an orchestrator for {assignment.TaskKey}";
                 Track(RunOrchestratorSessionAsync(assignment, key));

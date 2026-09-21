@@ -20,6 +20,28 @@ agent that talks to it. Implementers never do.
 
 ## Decision routing
 
+At intake or after a failed run, explicitly check `muthur incident match --project <key>
+--signature <text> --path <text> --configuration <text>` with the observed identifiers.
+Matching is read-only, exact after trimming and advisory. Inspect each candidate using
+`incident show I-n`; matching never proves a common root cause. Separate incident IDs
+can share a tuple. If the facts support grouping, append independent evidence using
+`incident observe I-n --task T-n --evidence <text> --signature <text> --path <text>
+--configuration <text> [--run <id>]`. Differing observations are also retained.
+
+Observation does not suppress work. Explicit `incident suppress` requires active exact
+evidence for the current condition of a confirmed/mitigated incident and gates only
+the named task/assignment (`#orchestrator` or one validator role). Only the founder or
+task owner may change links/suppression; identified agents may link unowned tasks.
+Correct grouping with `incident unlink` and a reason; history remains available.
+
+Probe recovery attests a successful bounded probe for this exact condition; configuration
+recovery records a different measured value. The hub runs neither probes nor workaround
+commands. Recovery advances the condition version, releases only this incident gate and
+requires fresh observations before suppression can be rearmed. Dependencies, human
+requests, budgets, attended flags, holds and terminal state remain independent.
+Workarounds are annotations with authorization references, never capability grants.
+Do not periodically retry unchanged suppression; inspect the recorded recovery condition.
+
 Ordinary `muthur ask` defaults to overseer triage. Use `--kind technical` for known engineering
 judgment within established founder direction. Keeping documented compatibility, enforcing shared
 rules, duplicate-scope decisions and consistent internal identifiers are technical; words such as

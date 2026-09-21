@@ -3,6 +3,10 @@ namespace Muthur.Contracts;
 public static class Routes
 {
     public const string Api = "/api/v1";
+    public const string Incidents = Api + "/incidents";
+    public const string IncidentMatches = Incidents + "/matches";
+    public static string Incident(string id) => $"{Incidents}/{Uri.EscapeDataString(id)}";
+    public static string IncidentAction(string id, string action) => $"{Incident(id)}/{action}";
 
     public const string Status = Api + "/status";
     public const string Doctor = Api + "/doctor";

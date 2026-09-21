@@ -11,6 +11,7 @@ SystemCommands.AddTo(root);
 AgentCommands.AddTo(root);
 ProjectCommands.AddTo(root);
 TaskCommands.AddTo(root);
+IncidentCommands.AddTo(root);
 RoleCommands.AddTo(root);
 MessageCommands.AddTo(root);
 WorkerCommands.AddTo(root);

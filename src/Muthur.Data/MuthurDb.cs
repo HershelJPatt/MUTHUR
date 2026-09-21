@@ -10,6 +10,9 @@ namespace Muthur.Data;
 public sealed class MuthurDb(DbContextOptions<MuthurDb> options) : DbContext(options)
 {
     public DbSet<MetaEntry> Meta => Set<MetaEntry>();
+    public DbSet<Incident> Incidents => Set<Incident>();
+    public DbSet<IncidentObservation> IncidentObservations => Set<IncidentObservation>();
+    public DbSet<IncidentSuppression> IncidentSuppressions => Set<IncidentSuppression>();
     public DbSet<Project> Projects => Set<Project>();
     public DbSet<Agent> Agents => Set<Agent>();
     public DbSet<WorkTask> Tasks => Set<WorkTask>();
@@ -36,6 +39,26 @@ public sealed class MuthurDb(DbContextOptions<MuthurDb> options) : DbContext(opt
 
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {
+        modelBuilder.Entity<Incident>(e =>
+        {
+            e.ToTable("incidents");
+            e.HasOne(x => x.Project).WithMany().HasForeignKey(x => x.ProjectId).OnDelete(DeleteBehavior.Restrict);
+        });
+        modelBuilder.Entity<IncidentObservation>(e =>
+        {
+            e.ToTable("incident_observations");
+            e.HasOne<Incident>().WithMany().HasForeignKey(x => x.IncidentId).OnDelete(DeleteBehavior.Restrict);
+            e.HasOne<WorkTask>().WithMany().HasForeignKey(x => x.TaskId).OnDelete(DeleteBehavior.Restrict);
+        });
+        modelBuilder.Entity<IncidentSuppression>(e =>
+        {
+            e.ToTable("incident_suppressions");
+            e.HasOne(x => x.Incident).WithMany().HasForeignKey(x => x.IncidentId).OnDelete(DeleteBehavior.Restrict);
+            e.HasOne(x => x.Task).WithMany().HasForeignKey(x => x.TaskId).OnDelete(DeleteBehavior.Restrict);
+            e.HasOne(x => x.EvidenceObservation).WithMany().HasForeignKey(x => x.EvidenceObservationId).OnDelete(DeleteBehavior.Restrict);
+            e.HasIndex(x => new { x.IncidentId, x.TaskId, x.Assignment, x.ConditionVersion }).IsUnique().HasFilter("active = 1");
+        });
+
         modelBuilder.Entity<MetaEntry>(e =>
         {
             e.ToTable("meta");

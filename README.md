@@ -297,3 +297,43 @@ A build under test must never share the live hub's port or data: prefix **every*
 
 `dotnet build` · `dotnet test` · see [CLAUDE.md](CLAUDE.md) for the rules of the codebase. MUTHUR is built by the process
 it implements: every change is a ledger task with a spec, validated by an independent agent, landed by the hub.
+
+## Shared incidents
+
+Incidents retain a shared diagnosis and independent task observations. CLI output and
+`/api/v1/incidents` responses are JSON. Using your registered identity:
+
+```text
+muthur incident add "Repeated local failure" --project demo --signature failure-17 --path worker/start --configuration measured-v1 --recovery "A successful bounded probe"
+muthur incident match --project demo --signature failure-17 --path worker/start --configuration measured-v1
+muthur incident show I-1
+muthur incident observe I-1 --task T-1 --evidence "Independent measured failure" --signature failure-17 --path worker/start --configuration measured-v1
+muthur incident update I-1 --diagnosis "Shared diagnosis from retained evidence"
+muthur incident transition I-1 --state confirmed --evidence "Compared the independent measurements"
+muthur incident suppress I-1 --task T-1 --assignment "#orchestrator" --observation 1 --reason "Exact current condition prevents this assignment"
+muthur incident recover I-1 --kind probe --evidence "Successful bounded probe for this exact condition"
+muthur incident metrics I-1 --hours 24
+```
+
+Use returned incident and observation IDs. Matching is exact after trimming, case
+sensitive and advisory. Distinct incidents can share a tuple. Observe differing
+facts without suppressing, and correct a link with `incident unlink I-1 --observation
+1 --reason "Grouping correction"`; all historical evidence remains available.
+`incident list [--project demo]` includes every state.
+
+A suppression gates only the specified task/assignment. A validator role key gates
+only that validator. Task detail and conductor status explain effective gates;
+new orchestrator claims return `incident_wait`, while same-owner renewal continues.
+Recovery releases this gate without changing other gates or in-flight work. Probe
+recovery is the caller's attestation and marks the incident mitigated. Configuration
+recovery requires a different measured value and preserves the incident state.
+Both advance the condition version; rearming needs a fresh observation. Reopening
+resolved/disproven incidents also advances the version.
+
+Workarounds require an authorization reference and remain annotations. The hub makes
+no model calls, runs no probes and grants no capabilities. Metrics identify their
+window and linked-task cohort, count recorded diagnosis updates and grouping
+corrections, and distinguish staffing attempts from worker reports and outcomes.
+Unavailable process/session attribution is null with an explanation; scratch counts
+do not demonstrate a live speedup. `scripts/verify-T-103.ps1` exercises an installed
+build in an isolated scratch home; the real pilot remains a separate follow-up.
