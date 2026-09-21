@@ -40,8 +40,14 @@ public enum PushOutcome
 
 public sealed record PushResult(PushOutcome Outcome, string? Commit = null, string? Message = null);
 
+public sealed record GitCommitInspection(string Sha, string TreeSha, IReadOnlyList<string> Parents);
+
 public interface ITaskLander
 {
+    Task<GitCommitInspection?> InspectCommitAsync(Project project, string sha, CancellationToken ct = default) =>
+        Task.FromResult<GitCommitInspection?>(null);
+    Task<bool> IsAncestorAsync(Project project, string ancestor, string descendant, CancellationToken ct = default) =>
+        Task.FromResult(false);
     /// <summary>The commit at the tip of <paramref name="branch"/>, or null when the branch does not exist.</summary>
     Task<string?> BranchHeadAsync(Project project, string branch, CancellationToken ct = default);
 
@@ -69,6 +75,22 @@ public interface IPullRequestOpener
 public sealed partial class GitLander(IProcessRunner processes, IPullRequestOpener pullRequests) : ITaskLander
 {
     private static readonly TimeSpan GitTimeout = TimeSpan.FromMinutes(2);
+
+    private static bool IsObjectId(string sha) => sha is { Length: 40 or 64 } && sha.All(Uri.IsHexDigit);
+
+    public async Task<GitCommitInspection?> InspectCommitAsync(Project project, string sha, CancellationToken ct = default)
+    {
+        if (!IsObjectId(sha)) return null;
+        var result = await GitAsync(project.RepoPath, ct, "show", "--no-patch", "--format=%H%n%T%n%P", sha, "--");
+        var lines = result.StdOut.TrimEnd('\r', '\n').Split('\n');
+        if (!result.Ok || lines.Length != 3 || lines[0].Trim() != sha) return null;
+        return new GitCommitInspection(lines[0].Trim(), lines[1].Trim(),
+            lines[2].Split(' ', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries));
+    }
+
+    public async Task<bool> IsAncestorAsync(Project project, string ancestor, string descendant, CancellationToken ct = default) =>
+        IsObjectId(ancestor) && IsObjectId(descendant)
+        && (await GitAsync(project.RepoPath, ct, "merge-base", "--is-ancestor", ancestor, descendant)).Ok;
 
     /// <summary>The merge subject <see cref="MergeAsync"/> writes, which is how a land is recognised in the target's history.</summary>
     [GeneratedRegex(@"^Land (T-\d+):")]

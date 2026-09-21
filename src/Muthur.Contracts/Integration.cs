@@ -8,7 +8,9 @@ public sealed record IntegrationCandidateDto(
     DateTimeOffset? StartedAt, DateTimeOffset? CompletedAt, bool AlreadyIncluded,
     DateTimeOffset? PromotionIntentAt, DateTimeOffset? PromotedAt,
     IntegrationEvidenceDto? Evidence, string? EvidenceSha256, string? FailureCode,
-    string? FailureMessage, IntegrationFailureRequest? Failure = null);
+    string? FailureMessage, IntegrationFailureRequest? Failure = null,
+    int? RunnerProcessId = null, DateTimeOffset? RunnerStartedAt = null,
+    string? OwnedWorktreePath = null, string? ArtifactsDirectory = null);
 
 public sealed record IntegrationHistoryDto(IntegrationCandidateDto? Current, IReadOnlyList<IntegrationCandidateDto> History);
 public sealed record IntegrationClaimRequest;
@@ -33,3 +35,6 @@ public sealed record IntegrationFailureRequest(
     IReadOnlyList<string>? Files = null, IReadOnlyList<string>? LandedSince = null);
 
 public sealed record IntegrationRenewRequest(Guid AssignmentId, Guid SubjectId);
+
+public sealed record IntegrationStartRequest(Guid AssignmentId, Guid SubjectId, int ProcessId,
+    DateTimeOffset ProcessStartedAt, string OwnedWorktreePath, string ArtifactsDirectory);

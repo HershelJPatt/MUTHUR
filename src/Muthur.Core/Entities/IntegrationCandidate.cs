@@ -33,4 +33,8 @@ public sealed class IntegrationCandidate
     public string? FailureCode { get; set; }
     public string? FailureMessage { get; set; }
     public string? FailureJson { get; set; }
+    public int? RunnerProcessId { get; set; }
+    public DateTimeOffset? RunnerStartedAt { get; set; }
+    public string? OwnedWorktreePath { get; set; }
+    public string? ArtifactsDirectory { get; set; }
 }
