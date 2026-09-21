@@ -9,6 +9,8 @@ public static class TaskEndpoints
 {
     public static void MapTaskEndpoints(this IEndpointRouteBuilder app)
     {
+        app.MapPost(Routes.Tasks + "/{id}/revalidate", (HttpContext http, string id, RevalidateRequest request, LifecycleService lifecycle, CancellationToken ct) =>
+            lifecycle.RevalidateAsync(http.GetCaller(), id, request, ct));
         app.MapGet(Routes.Tasks + "/{id}/units", async (string id, TaskUnitService units, CancellationToken ct) =>
         {
             var graph = await units.GetAsync(id, ct);
