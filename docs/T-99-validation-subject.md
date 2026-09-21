@@ -75,6 +75,11 @@ the first slice favors a single repository invariant over writer throughput. Hel
 context and do not reenter the ledger. Git and SQLite are not a distributed transaction: operational crashes
 still require inspecting the recorded state and exact git ancestry before recovery.
 
+Race tests pause the injected git runner after the branch-head comparison, then move the branch before
+allowing checkout and plumbing integration to proceed. The writer test calls competing owner recovery,
+resubmission, spec attachment and policy services directly while that barrier is held, so each has reached
+the ledger wait before integration resumes; incomplete HTTP requests alone do not establish that ordering.
+
 ## Reproducible observation
 
 Count ledger events in a fixed sequence window, not overlapping throughput counters. On a read-only copy of
@@ -102,6 +107,8 @@ One round can have multiple refused attempts; counts are attempts, not a claim o
 - Install the reviewed full SHA with `scripts/install.ps1 -Destination <absolute scratch install> -Ref <sha>`.
 - Run `scripts/verify-T-99.ps1 -InstallPath <absolute scratch install>`. It uses installed CLI/HTTP only,
   a unique home, loopback port, local git fixture and distinct owner/validator; no real remote or model calls.
+  It also pins configuration-section URL, data directory and SQLite connection overrides to that scratch
+  fixture, restores the previous environment, and bounds process termination waits.
 - Review the JSON evidence for missing outcomes, revision, round IDs, sequence window and event counts.
 - Upgrade validator clients and kit source instructions together; do not silently assign IDs for old verdicts.
 - After installation, observe the next eligible real task. Until then the live pilot is **missing**, not complete.
