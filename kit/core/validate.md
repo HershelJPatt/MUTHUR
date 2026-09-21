@@ -16,18 +16,22 @@ have exercised it end to end on your platform and said yes. You are the last lin
 
 1. `muthur task show T-n`: read the task and its spec (`specPath`). The spec's *Verification* section is the
    minimum, not the limit.
-2. Check out the task's branch in a clean worktree. Build it the way the brief says.
+2. Run `muthur validate claim T-n --as <validator-role>` and retain `currentSubject.id`. Check out the exact
+   `currentSubject.implementationSha` in a clean detached worktree. Inspect its spec digest, checks and policy.
+   Build it the way the brief says. Never fetch a replacement subject ID at verdict time.
 3. Exercise the change as a user would, end to end, on the real product. Then try to break it: edge cases,
    the neighbors of the change, the unhappy paths.
 4. Watch what the builders could not: errors and warnings in logs that were not there before, performance
    regressions, leftover debug output, anything platform-specific.
-5. Write the evidence to a file: what you ran, what you saw, logs/screens that matter. Be concrete.
+5. Write a local UTF-8 evidence file: what you ran, what you saw, logs/screens that matter. Every outcome
+   requires at least 20 trimmed characters describing check, observation and artifact/reference or reproduction
+   command. This minimum is a quality prompt, not machine proof of correctness.
    The verdict command uploads the file's text into the hub, so the file can be deleted afterwards.
 6. Verdict:
-   - `muthur validate pass T-n --as <validator-role> --evidence <file>`
-   - `muthur validate fail T-n --as <validator-role> --evidence <file>` — the task returns to its owner
+   - `muthur validate pass T-n --as <validator-role> --subject <retained-guid> --evidence-file <file>`
+   - `muthur validate fail T-n --as <validator-role> --subject <retained-guid> --evidence-file <file>` — the task returns to its owner
      with your evidence. Say exactly how to reproduce.
-   - `muthur validate blocked T-n --as <validator-role> --evidence <file>` — you could not validate it at
+   - `muthur validate blocked T-n --as <validator-role> --subject <retained-guid> --evidence-file <file>` — you could not validate it at
      all. The task returns to its owner, and this is not a verdict on the work. It is the right answer when
      the product cannot be driven from the session you are in.
 
@@ -41,15 +45,15 @@ have exercised it end to end on your platform and said yes. You are the last lin
 
 ## Several tasks, one build
 
-When the queue holds a stack of tasks whose branches contain each other, build the top branch once
-(in a worktree named `validate-stack-<top task>`) and give each task its own verdict, judged on its own spec. A defect belongs to the task whose code it is in.
+Validate each claimed subject at its exact implementation SHA. A build of a newer stacked branch is not
+evidence for an older subject. Each verdict must retain the ID of the round actually reviewed.
 
 ## Rules
 
 - You do not fix what you find. You report it. Fixing is the owner's job; mixing the roles destroys the independence that makes validation worth anything.
 - "I couldn't get it to run" is a **fail** with evidence, never a pass and never silence.
 - If you lack a tool the spec's verification needs (e.g. a browser for live UI behavior), that is neither pass nor fail:
-  record `muthur validate blocked T-n --as <validator-role> --evidence <file>`, then release the role and stop.
+  record `muthur validate blocked T-n --as <validator-role> --subject <retained-guid> --evidence-file <file>`, then release the role and stop.
   The verdict is the mechanism — it puts the reason on the task, where the founder and the next agent both
   meet it, and it stops the task being handed to another session that will hit the same wall. Messaging the
   owner as well is welcome; messaging *instead* leaves the organization unable to see what happened.

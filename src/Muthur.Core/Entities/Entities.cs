@@ -65,6 +65,10 @@ public sealed class WorkTask
     public Agent? Owner { get; set; }
     public DateTimeOffset? ClaimExpires { get; set; }
     public string? SpecPath { get; set; }
+    public string? SpecSha256 { get; set; }
+    public Guid? CurrentSubjectId { get; set; }
+    public ValidationSubject? CurrentSubject { get; set; }
+    public string? ValidationInvalidationReason { get; set; }
     public string? Branch { get; set; }
     public string? PrUrl { get; set; }
     public int? ParentId { get; set; }
@@ -124,6 +128,7 @@ public sealed class RoleHold
 public sealed class TaskValidation
 {
     public int Id { get; set; }
+    public Guid? SubjectId { get; set; }
     public int TaskId { get; set; }
     public required string ValidatorKey { get; set; }
     public Verdict Verdict { get; set; }
@@ -137,6 +142,23 @@ public sealed class TaskValidation
     public Guid? ClaimedByAgentId { get; set; }
     public Agent? ClaimedBy { get; set; }
     public DateTimeOffset? ClaimExpires { get; set; }
+}
+
+/// <summary>An append-only snapshot. Its ID identifies a round, even when the content repeats.</summary>
+public sealed class ValidationSubject
+{
+    public Guid Id { get; init; }
+    public int TaskId { get; init; }
+    public Guid ProjectId { get; init; }
+    public required string RepositoryPath { get; init; }
+    public required string ImplementationSha { get; init; }
+    public required string SpecPath { get; init; }
+    public required string SpecSha256 { get; init; }
+    public required string RequiredValidatorsJson { get; init; }
+    public required string RequiredChecksJson { get; init; }
+    public required string InvalidatingEnvironmentJson { get; init; }
+    public required string DescriptiveMetadataJson { get; init; }
+    public DateTimeOffset CreatedAt { get; init; }
 }
 
 public enum Recipient { Agent, Role, Founder }

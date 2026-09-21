@@ -78,7 +78,7 @@ public sealed class DashboardReceiptsTests : IDisposable
         (await owner.PostActionAsync(taskId, "implemented", new ImplementedRequest(Branch(taskId)))).EnsureSuccessStatusCode();
 
     private static async Task FailAsync(HttpClient validator, string taskId) =>
-        (await validator.PostActionAsync(taskId, "fail", new VerdictRequest("win-validator", "the export still 500s"))).EnsureSuccessStatusCode();
+        (await validator.PostActionAsync(taskId, "fail", new VerdictRequest("win-validator", "the export still 500s", SubjectId: (await validator.GetTaskAsync(taskId)).Task.CurrentSubject!.Id))).EnsureSuccessStatusCode();
 
     /// <summary>
     /// Two tasks, one of which cost far more than the other, and twenty minutes spent waiting on a verdict. The

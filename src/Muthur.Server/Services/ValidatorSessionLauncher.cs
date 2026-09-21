@@ -192,6 +192,10 @@ public sealed class ValidatorSessionLauncher(
 
         Rules that are not yours to bend:
         - Claim the task before you start. If the claim is refused, another validator has it: release the role and stop.
+        - Retain currentSubject.id from that claim. Inspect currentSubject.implementationSha in your own worktree,
+          and the recorded spec digest, checks and policy. Never replace the retained ID by fetching at verdict time.
+        - Every verdict needs --subject <retained-guid> and --evidence <report> or --evidence-file <UTF-8 file>.
+          Describe the check, observation and artifact/reference or reproduction command in at least 20 characters.
         - You did not write this task and must not fix what you find. Report it.
         - A pass says you ran the product and it worked; it never says the diff looked right.
         - If the product cannot be driven unattended, the verdict is not pass: message the task's owner, say what
