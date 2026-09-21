@@ -73,7 +73,9 @@ public sealed partial class TaskService(Ledger ledger, LeasePolicy leases, ITask
                 .Take(Math.Clamp(query.Limit, 1, 2000))
                 .ToListAsync(ct);
             var validations = await Validations.ForTasksAsync(db, rows.Select(t => t.Id).ToList(), ct);
-            return rows.Select(t => t.ToDto(validations.GetValueOrDefault(t.Id))).ToList();
+            var result = new List<TaskDto>();
+            foreach (var task in rows) result.Add(await Validations.MapAsync(db, task, validations.GetValueOrDefault(task.Id), ct));
+            return result;
         }, ct);
 
     public Task<TaskDetailDto> GetAsync(string id, CancellationToken ct = default) =>
@@ -82,7 +84,7 @@ public sealed partial class TaskService(Ledger ledger, LeasePolicy leases, ITask
             var task = await LoadAsync(db, id, ct);
             var events = await db.Events.Where(e => e.TaskId == task.Id).OrderBy(e => e.Seq).ToListAsync(ct);
             var validations = await Validations.ForTasksAsync(db, [task.Id], ct);
-            return new TaskDetailDto(task.ToDto(validations.GetValueOrDefault(task.Id)), events.Select(e => e.ToDto()).ToList());
+            return new TaskDetailDto(await Validations.MapAsync(db, task, validations.GetValueOrDefault(task.Id), ct), events.Select(e => e.ToDto()).ToList());
         }, ct);
 
     /// <summary>Atomic: mutations are serialized, so of two racing claims exactly one sees a claimable task.</summary>
@@ -178,8 +180,9 @@ public sealed partial class TaskService(Ledger ledger, LeasePolicy leases, ITask
             if (task.State is not (TaskState.InProgress or TaskState.Blocked))
                 throw Fail.Rule("not_in_progress", $"A spec can only be attached while the task is in progress; {Wire.TaskId(task.Id)} is '{task.State.ToWire()}'.");
             task.SpecPath = relative;
+            task.SpecSha256 = Validations.Hash(spec);
             task.UpdatedAt = m.Now;
-            m.Record("task.spec_set", task.Id, new { path = task.SpecPath });
+            m.Record("task.spec_set", task.Id, new { path = task.SpecPath, sha256 = task.SpecSha256 });
 
             // A spec that says out loud what it needs is flagged the moment it is frozen, rather than
             // discovered by a validator session that spends a role lease, an account's quota and 45 minutes
@@ -357,8 +360,7 @@ public sealed partial class TaskService(Ledger ledger, LeasePolicy leases, ITask
 
         // The heading check keeps its own small window: its question is about the first non-blank line, and a
         // mistaken path to something enormous stays cheap to reject.
-        if (FirstHeadingTaskId(content[..Math.Min(content.Length, Head)]) is { } found && found != Wire.TaskId(task.Id))
-            throw Fail.Rule("spec_id_mismatch", $"'{relative}' is the spec for {found}, not {Wire.TaskId(task.Id)}. Attaching it here would point implementers at the wrong work — and writing over it would destroy that record.");
+        RequireSpecHeading(task, relative, content);
         return content;
 
         async Task<string?> FromBranchAsync(string? candidate)
@@ -400,6 +402,12 @@ public sealed partial class TaskService(Ledger ledger, LeasePolicy leases, ITask
 
     /// <summary>How much of a spec the heading check reads: a mistaken path to something enormous stays cheap.</summary>
     private const int Head = 8 * 1024;
+
+    internal static void RequireSpecHeading(WorkTask task, string relative, string content)
+    {
+        if (FirstHeadingTaskId(content[..Math.Min(content.Length, Head)]) is { } found && found != Wire.TaskId(task.Id))
+            throw Fail.Rule("spec_id_mismatch", $"'{relative}' is the spec for {found}, not {Wire.TaskId(task.Id)}.");
+    }
 
     /// <summary>
     /// The largest spec that is read at all. A declared need can be anywhere in the document, so the read

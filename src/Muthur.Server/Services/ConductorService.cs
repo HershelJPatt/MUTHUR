@@ -651,9 +651,13 @@ public sealed class ConductorService(
             // Only 'validating'. A blocked task is waiting on the founder, and staffing it would waste a session
             // on work that cannot move.
             var tasks = await db.Tasks.Include(t => t.Project)
-                .Where(t => t.State == TaskState.Validating)
+                .Where(t => t.State == TaskState.Validating && t.CurrentSubjectId != null && t.ValidationInvalidationReason == null)
                 .OrderByDescending(t => t.Priority).ThenBy(t => t.Id)
                 .ToListAsync(ct);
+            var compatible = new List<WorkTask>();
+            foreach (var task in tasks)
+                if (await Validations.CompatibleAsync(db, task, ct)) compatible.Add(task);
+            tasks = compatible;
             if (tasks.Count == 0) return [];
 
             var ids = tasks.Select(t => t.Id).ToList();

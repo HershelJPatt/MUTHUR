@@ -97,10 +97,15 @@ public sealed partial class GitLander(IProcessRunner processes, IPullRequestOpen
     {
         var repo = project.RepoPath;
         var branch = task.Branch!;
+        if (task.CurrentSubject is not { } subject)
+            return LandResult.Refuse("validation_provenance_unknown", Validations.Recovery);
         if (!Directory.Exists(repo))
             return LandResult.Refuse("repo_missing", $"Repository '{repo}' does not exist.");
-        if (await BranchHeadAsync(project, branch, ct) is null)
+        var head = await BranchHeadAsync(project, branch, ct);
+        if (head is null)
             return LandResult.Refuse("branch_missing", $"Branch '{branch}' does not exist in {repo}.");
+        if (head != subject.ImplementationSha)
+            return LandResult.Refuse("implementation_changed", "The task branch no longer names the approved implementation. " + Validations.Recovery);
 
         return project.LandMode == LandMode.Pr
             ? await OpenPullRequestAsync(project, task, ownerName, ct)
@@ -138,13 +143,13 @@ public sealed partial class GitLander(IProcessRunner processes, IPullRequestOpen
     {
         var repo = project.RepoPath;
         var target = project.DefaultBranch;
-        var branch = task.Branch!;
+        var branch = task.CurrentSubject!.ImplementationSha;
 
         var targetSha = await GitAsync(repo, ct, "rev-parse", "--verify", "--quiet", $"refs/heads/{target}");
         if (!targetSha.Ok)
             return LandResult.Refuse("default_branch_missing", $"Default branch '{target}' does not exist in {repo}.");
 
-        if ((await GitAsync(repo, ct, "merge-base", "--is-ancestor", branch, target)).Ok)
+        if ((await GitAsync(repo, ct, "merge-base", "--is-ancestor", branch, targetSha.StdOut.Trim())).Ok)
             return new LandResult(LandOutcome.Landed, Commit: targetSha.StdOut.Trim()); // already merged
 
         var message = $"Land {Wire.TaskId(task.Id)}: {task.Title}\n\nLanded by MUTHUR for {ownerName}.";
@@ -177,18 +182,17 @@ public sealed partial class GitLander(IProcessRunner processes, IPullRequestOpen
     /// <summary>Nobody has the default branch checked out: build the merge commit with plumbing and move the ref.</summary>
     private async Task<LandResult> MergeWithoutCheckoutAsync(string repo, string target, string branch, string targetSha, string message, CancellationToken ct)
     {
-        var tree = await GitAsync(repo, ct, "merge-tree", "--write-tree", "--name-only", target, branch);
+        var tree = await GitAsync(repo, ct, "merge-tree", "--write-tree", "--name-only", targetSha, branch);
         var lines = tree.StdOut.Split('\n', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
         if (tree.ExitCode == 1)
         {
             var files = SplitFiles(string.Join('\n', lines.Skip(1).TakeWhile(l => !l.Contains(' '))));
             return new LandResult(LandOutcome.Conflict, Code: "merge_conflict", Message: ConflictMessage(branch, target, files),
-                Files: files, LandedSince: await LandedSinceAsync(repo, branch, target, ct));
+                Files: files, LandedSince: await LandedSinceAsync(repo, branch, targetSha, ct));
         }
         if (!tree.Ok || lines.Length == 0) return LandResult.Refuse("git_failed", tree.Message);
 
-        var branchSha = (await GitAsync(repo, ct, "rev-parse", branch)).StdOut.Trim();
-        var commit = await GitAsync(repo, ct, "commit-tree", lines[0], "-p", targetSha, "-p", branchSha, "-m", message);
+        var commit = await GitAsync(repo, ct, "commit-tree", lines[0], "-p", targetSha, "-p", branch, "-m", message);
         if (!commit.Ok) return LandResult.Refuse("git_failed", commit.Message);
 
         var sha = commit.StdOut.Trim();
@@ -199,12 +203,23 @@ public sealed partial class GitLander(IProcessRunner processes, IPullRequestOpen
 
     private async Task<LandResult> OpenPullRequestAsync(Project project, WorkTask task, string ownerName, CancellationToken ct)
     {
-        var branch = task.Branch!;
-        var push = await GitAsync(project.RepoPath, ct, "push", "--set-upstream", "origin", branch);
+        var subject = task.CurrentSubject!;
+        var branch = $"muthur-approved/{Wire.TaskId(task.Id)}/{subject.Id:D}";
+        var reference = $"refs/heads/{branch}";
+        var existing = await BranchHeadAsync(project, branch, ct);
+        if (existing is not null && existing != subject.ImplementationSha)
+            return LandResult.Refuse("approved_ref_changed", "The round-specific approved ref changed. " + Validations.Recovery);
+        if (existing is null)
+        {
+            var pin = await GitAsync(project.RepoPath, ct, "update-ref", reference, subject.ImplementationSha, new string('0', subject.ImplementationSha.Length));
+            if (!pin.Ok) return LandResult.Refuse("git_failed", pin.Message);
+        }
+        var push = await GitAsync(project.RepoPath, ct, "push", "origin", $"{subject.ImplementationSha}:{reference}");
         if (!push.Ok) return LandResult.Refuse("push_failed", push.Message);
 
         var body = $"{task.Body}\n\n---\nTask {Wire.TaskId(task.Id)} · owner `{ownerName}`" +
                    (task.SpecPath is null ? "" : $" · spec `{task.SpecPath}`") +
+                   $"\nValidation subject `{subject.Id:D}` · implementation `{subject.ImplementationSha}` · spec SHA-256 `{subject.SpecSha256}`." +
                    "\nValidated in MUTHUR; opened by the hub. A human merges.";
         try
         {

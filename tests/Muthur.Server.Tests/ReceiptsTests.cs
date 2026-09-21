@@ -85,7 +85,7 @@ public sealed class ReceiptsTests : IDisposable
     private async Task FailOnceAsync(HttpClient owner, HttpClient validator, string taskId)
     {
         (await owner.PostActionAsync(taskId, "implemented", new ImplementedRequest(Branch(taskId)))).EnsureSuccessStatusCode();
-        (await validator.PostActionAsync(taskId, "fail", new VerdictRequest("win-validator", "the export still 500s"))).EnsureSuccessStatusCode();
+        (await validator.PostActionAsync(taskId, "fail", new VerdictRequest("win-validator", "the export still 500s", SubjectId: (await validator.GetTaskAsync(taskId)).Task.CurrentSubject!.Id))).EnsureSuccessStatusCode();
     }
 
     /// <summary>
@@ -146,13 +146,13 @@ public sealed class ReceiptsTests : IDisposable
         await ImplementedAsync(owner, task.Id);
         await AssertReplayMatchesAsync(task.Id, "implemented");
 
-        (await validator.PostActionAsync(task.Id, "fail", new VerdictRequest("win-validator", "crashes on launch"))).EnsureSuccessStatusCode();
+        (await validator.PostActionAsync(task.Id, "fail", new VerdictRequest("win-validator", "crashes on launch: reproduce by launching the application", SubjectId: (await validator.GetTaskAsync(task.Id)).Task.CurrentSubject!.Id))).EnsureSuccessStatusCode();
         await AssertReplayMatchesAsync(task.Id, "failed validation");
 
         await ImplementedAsync(owner, task.Id);
         await AssertReplayMatchesAsync(task.Id, "implemented again");
 
-        (await validator.PostActionAsync(task.Id, "pass", new VerdictRequest("win-validator"))).EnsureSuccessStatusCode();
+        (await validator.PostActionAsync(task.Id, "pass", new VerdictRequest("win-validator", "Ran the application: expected output observed; reproduce with dotnet test.", SubjectId: (await validator.GetTaskAsync(task.Id)).Task.CurrentSubject!.Id))).EnsureSuccessStatusCode();
         await AssertReplayMatchesAsync(task.Id, "passed validation");
 
         (await owner.PostAsync(Routes.TaskAction(task.Id, "land"), null)).EnsureSuccessStatusCode();
@@ -241,7 +241,7 @@ public sealed class ReceiptsTests : IDisposable
         {
             var validator = await test.RegisterAsync("staffed", "codex", "gpt", "cheap", "work@example.com");
             (await validator.PostAsync(Routes.RoleAction(assignment.RoleKey, "take"), null, ct)).EnsureSuccessStatusCode();
-            (await validator.PostActionAsync(assignment.TaskKey, "pass", new VerdictRequest(assignment.RoleKey))).EnsureSuccessStatusCode();
+            (await validator.PostActionAsync(assignment.TaskKey, "pass", new VerdictRequest(assignment.RoleKey, "Ran the application: expected output observed; reproduce with dotnet test.", SubjectId: (await validator.GetTaskAsync(assignment.TaskKey)).Task.CurrentSubject!.Id))).EnsureSuccessStatusCode();
         }
     }
 
@@ -287,7 +287,7 @@ public sealed class ReceiptsTests : IDisposable
         _hub.Clock.Advance(TimeSpan.FromHours(1));
         // An hour is longer than a role lease, which is the point: the validator turns up after the wait.
         (await validator.PostAsync(Routes.RoleAction("win-validator", "take"), null)).EnsureSuccessStatusCode();
-        (await validator.PostActionAsync(task, "fail", new VerdictRequest("win-validator", "the export still 500s"))).EnsureSuccessStatusCode();
+        (await validator.PostActionAsync(task, "fail", new VerdictRequest("win-validator", "the export still 500s", SubjectId: (await validator.GetTaskAsync(task)).Task.CurrentSubject!.Id))).EnsureSuccessStatusCode();
         _hub.Clock.Advance(TimeSpan.FromMinutes(10));
 
         var receipts = await ReceiptsAsync();
@@ -318,7 +318,7 @@ public sealed class ReceiptsTests : IDisposable
         var (owner, validator) = await CastAsync();
         var task = await ImplementableAsync(owner);
         await ImplementedAsync(owner, task);
-        (await validator.PostActionAsync(task, "fail", new VerdictRequest("win-validator", "the export still 500s"))).EnsureSuccessStatusCode();
+        (await validator.PostActionAsync(task, "fail", new VerdictRequest("win-validator", "the export still 500s", SubjectId: (await validator.GetTaskAsync(task)).Task.CurrentSubject!.Id))).EnsureSuccessStatusCode();
 
         _hub.Clock.Advance(TimeSpan.FromHours(2));
         var receipts = await ReceiptsAsync(hours: 1);

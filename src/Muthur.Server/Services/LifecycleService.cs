@@ -18,38 +18,35 @@ public sealed class LifecycleService(Ledger ledger, LeasePolicy leases, ITaskLan
         if (branch.Length == 0)
             throw Fail.Rule("branch_required", "Pass the task branch: --branch task/T-n-<slug>.");
 
-        var (project, specPath) = await ledger.ReadAsync(async (db, _) =>
-        {
-            var task = await TaskService.LoadAsync(db, id, ct);
-            return (task.Project!, task.SpecPath);
-        }, ct);
-        if (branch == project.DefaultBranch)
-            throw Fail.Rule("branch_is_default", $"'{branch}' is the default branch. Work happens on a task branch; MUTHUR lands it.");
-        // The head goes into the event: the conductor's cap asks whether a resubmission actually changed anything.
-        var head = await lander.BranchHeadAsync(project, branch, ct);
-        if (head is null)
-            throw Fail.Rule("branch_missing", $"Branch '{branch}' does not exist in {project.RepoPath}.");
-
         return await ledger.MutateAsync(caller, async m =>
         {
             var task = await TaskService.LoadAsync(m.Db, id, ct);
             TaskService.RequireOwnerOrFounder(task, caller);
             if (task.State != TaskState.InProgress)
                 throw Fail.Rule("not_in_progress", $"{Wire.TaskId(task.Id)} is '{task.State.ToWire()}'; only an in-progress task can be marked implemented.");
+            var project = task.Project!;
+            if (branch == project.DefaultBranch)
+                throw Fail.Rule("branch_is_default", $"'{branch}' is the default branch. Work happens on a task branch; MUTHUR lands it.");
+            var head = await lander.BranchHeadAsync(project, branch, ct)
+                ?? throw Fail.Rule("branch_missing", $"Branch '{branch}' does not exist in {project.RepoPath}.");
             if (string.IsNullOrWhiteSpace(task.SpecPath))
                 throw Fail.Rule("spec_required", $"{Wire.TaskId(task.Id)} has no spec. Attach the frozen spec first: muthur task spec {Wire.TaskId(task.Id)} specs/{Wire.TaskId(task.Id)}.md");
-
-            var required = task.Project!.RequiredValidators;
+            var subject = await Validations.CreateAsync(m, task, head, lander, ct);
+            m.Db.ValidationSubjects.Add(subject);
+            task.CurrentSubject = subject;
+            task.CurrentSubjectId = subject.Id;
+            task.ValidationInvalidationReason = null;
+            var required = subject.ToDto().RequiredValidators;
             var existing = await m.Db.TaskValidations.Where(v => v.TaskId == task.Id).ToListAsync(ct);
             m.Db.TaskValidations.RemoveRange(existing); // a new round starts from scratch; earlier verdicts stay in the ledger
             foreach (var validator in required)
-                m.Db.TaskValidations.Add(new TaskValidation { TaskId = task.Id, ValidatorKey = validator, Verdict = Verdict.Pending, WaitingSince = m.Now });
+                m.Db.TaskValidations.Add(new TaskValidation { TaskId = task.Id, SubjectId = subject.Id, ValidatorKey = validator, Verdict = Verdict.Pending, WaitingSince = m.Now });
 
             task.Branch = branch;
             task.State = required.Count == 0 ? TaskState.Validated : TaskState.Validating;
             task.ClaimExpires = null;
             task.UpdatedAt = m.Now;
-            m.Record("task.implemented", task.Id, new { branch, head, spec = specPath, validators = required });
+            m.Record("task.implemented", task.Id, new { branch, head, spec = task.SpecPath, validators = required, subject = subject.ToDto() });
             foreach (var validator in required)
                 MessageService.PostFromHub(m, Recipient.Role, validator,
                     $"{Wire.TaskId(task.Id)} \"{task.Title}\" is ready for validation on branch {branch}.", task.Id);
@@ -58,7 +55,7 @@ public sealed class LifecycleService(Ledger ledger, LeasePolicy leases, ITaskLan
 
             await m.Db.SaveChangesAsync(ct);
             var validations = await Validations.ForTasksAsync(m.Db, [task.Id], ct);
-            return task.ToDto(validations.GetValueOrDefault(task.Id));
+            return await Validations.MapAsync(m.Db, task, validations.GetValueOrDefault(task.Id), ct);
         }, ct);
     }
 
@@ -79,10 +76,14 @@ public sealed class LifecycleService(Ledger ledger, LeasePolicy leases, ITaskLan
                 pending = pending.Where(v => v.ClaimedByAgentId == caller.AgentId || !LeasePolicy.IsClaimLive(v, now)).ToList();
             var pendingIds = pending.Select(v => v.TaskId).Distinct().ToList();
             var tasks = await db.Tasks.Include(t => t.Project).Include(t => t.Owner)
-                .Where(t => t.State == TaskState.Validating && pendingIds.Contains(t.Id))
+                .Where(t => t.State == TaskState.Validating && t.CurrentSubjectId != null && pendingIds.Contains(t.Id))
                 .OrderByDescending(t => t.Priority).ThenBy(t => t.Id).ToListAsync(ct);
             var validations = await Validations.ForTasksAsync(db, tasks.Select(t => t.Id).ToList(), ct);
-            return tasks.Select(t => t.ToDto(validations.GetValueOrDefault(t.Id))).ToList();
+            var result = new List<TaskDto>();
+            foreach (var task in tasks)
+                if (await Validations.CompatibleAsync(db, task, ct))
+                    result.Add(await Validations.MapAsync(db, task, validations.GetValueOrDefault(task.Id), ct));
+            return result;
         }, ct);
 
     /// <summary>How deep the queue is per validator role. Idle roles appear with zeros: an empty queue is a fact too.</summary>
@@ -92,7 +93,11 @@ public sealed class LifecycleService(Ledger ledger, LeasePolicy leases, ITaskLan
             var roles = await db.Roles.Where(r => r.IsValidator).ToListAsync(ct);
             if (roles.Count == 0) return [];
 
-            var validating = await db.Tasks.Where(t => t.State == TaskState.Validating).Select(t => t.Id).ToListAsync(ct);
+            var candidates = await db.Tasks.Include(t => t.Project)
+                .Where(t => t.State == TaskState.Validating && t.CurrentSubjectId != null).ToListAsync(ct);
+            var validating = new List<int>();
+            foreach (var task in candidates)
+                if (await Validations.CompatibleAsync(db, task, ct)) validating.Add(task.Id);
             var waiting = await db.TaskValidations
                 .Where(v => v.Verdict == Verdict.Pending && validating.Contains(v.TaskId))
                 .ToListAsync(ct);
@@ -132,7 +137,9 @@ public sealed class LifecycleService(Ledger ledger, LeasePolicy leases, ITaskLan
             var validations = await Validations.ForTasksAsync(db, tasks.Select(t => t.Id).ToList(), ct);
             // Priority first, as every other queue someone picks work off does; the numeric id breaks the last
             // tie by being the order the rows arrived in, which a stable sort keeps without parsing "T-n" back.
-            return tasks.Select(t => t.ToDto(validations.GetValueOrDefault(t.Id)))
+            var result = new List<TaskDto>();
+            foreach (var task in tasks) result.Add(await Validations.MapAsync(db, task, validations.GetValueOrDefault(task.Id), ct));
+            return result
                 .OrderByDescending(t => t.Priority)
                 .ThenBy(WaitingSince)
                 .ToList();
@@ -163,18 +170,24 @@ public sealed class LifecycleService(Ledger ledger, LeasePolicy leases, ITaskLan
     /// Takes one (task, role) pair so no second validator spends a session on it. The claim is a lease: it lapses
     /// if the validator stops showing signs of life, and the sweep hands the pair back.
     /// </summary>
-    public Task<TaskDto> ClaimValidationAsync(Caller caller, string id, ClaimValidationRequest request, CancellationToken ct = default)
+    public async Task<TaskDto> ClaimValidationAsync(Caller caller, string id, ClaimValidationRequest request, CancellationToken ct = default)
     {
         // A claim is an agent taking work. The founder holds no roles and so has nothing to claim with.
         var agentId = caller.RequireAgent();
         var validator = (request.Validator ?? "").Trim().ToLowerInvariant();
-
-        return ledger.MutateAsync(caller, async m =>
+        MuthurException? refusal = null;
+        var result = await ledger.MutateAsync<TaskDto?>(caller, async m =>
         {
             var task = await TaskService.LoadAsync(m.Db, id, ct);
+            if (request.SubjectId is { } requested && requested != task.CurrentSubjectId)
+                throw Fail.Conflict("stale_validation_subject", "This validation round is closed or superseded. Claim the current round and inspect its exact implementation SHA.");
             if (task.State != TaskState.Validating)
                 throw Fail.Rule("not_validating", $"{Wire.TaskId(task.Id)} is '{task.State.ToWire()}', not awaiting validation.");
             var row = await LoadRowAsync(m, task, validator, ct);
+            refusal = await CheckSubjectAsync(m, task, ct);
+            if (refusal is not null) return null;
+            if (row.SubjectId != task.CurrentSubjectId)
+                throw Fail.Conflict("stale_validation_subject", "This claim belongs to a superseded validation round.");
             if (row.Verdict != Verdict.Pending)
                 throw Fail.Rule("already_decided", $"'{validator}' has already given a verdict on {Wire.TaskId(task.Id)}.");
             if (!await RoleLeases.HoldsAsync(m.Db, agentId, validator, m.Now, ct))
@@ -193,12 +206,14 @@ public sealed class LifecycleService(Ledger ledger, LeasePolicy leases, ITaskLan
             row.ClaimedBy = await m.Db.Agents.SingleAsync(a => a.Id == agentId, ct);
             row.ClaimExpires = m.Now + leases.ClaimLease;
             if (!renewal)
-                m.Record("validation.claimed", task.Id, new { validator, by = caller.Name });
+                m.Record("validation.claimed", task.Id, new { validator, by = caller.Name, subject = task.CurrentSubject!.ToDto() });
 
             await m.Db.SaveChangesAsync(ct);
             var validations = await Validations.ForTasksAsync(m.Db, [task.Id], ct);
-            return task.ToDto(validations.GetValueOrDefault(task.Id));
+            return await Validations.MapAsync(m.Db, task, validations.GetValueOrDefault(task.Id), ct);
         }, ct);
+        if (refusal is not null) throw refusal;
+        return result!;
     }
 
     /// <summary>Gives a claimed pair back without a verdict. The claimer or the founder.</summary>
@@ -224,7 +239,7 @@ public sealed class LifecycleService(Ledger ledger, LeasePolicy leases, ITaskLan
 
             await m.Db.SaveChangesAsync(ct);
             var validations = await Validations.ForTasksAsync(m.Db, [task.Id], ct);
-            return task.ToDto(validations.GetValueOrDefault(task.Id));
+            return await Validations.MapAsync(m.Db, task, validations.GetValueOrDefault(task.Id), ct);
         }, ct);
     }
 
@@ -244,7 +259,7 @@ public sealed class LifecycleService(Ledger ledger, LeasePolicy leases, ITaskLan
         }, ct);
 
     /// <summary><paramref name="outcome"/> is the verdict being recorded: yes, no, or blocked — the validator could not run at all.</summary>
-    public Task<TaskDto> VerdictAsync(Caller caller, string id, VerdictRequest request, Verdict outcome, CancellationToken ct = default)
+    public async Task<TaskDto> VerdictAsync(Caller caller, string id, VerdictRequest request, Verdict outcome, CancellationToken ct = default)
     {
         caller.RequireIdentified();
         var recorded = outcome switch
@@ -255,17 +270,29 @@ public sealed class LifecycleService(Ledger ledger, LeasePolicy leases, ITaskLan
             _ => throw new ArgumentOutOfRangeException(nameof(outcome), outcome, "A recorded verdict is yes, no or blocked."),
         };
         var validator = (request.Validator ?? "").Trim().ToLowerInvariant();
-        if (outcome != Verdict.Yes && string.IsNullOrWhiteSpace(request.Evidence))
-            throw Fail.Rule("evidence_required", outcome == Verdict.Blocked
-                ? "A blocked validation needs evidence: what you tried, what stopped you, and what would let the next validator get further."
-                : "A failed validation needs evidence: what you ran, what you saw, how to reproduce.");
-
-        return ledger.MutateAsync(caller, async m =>
+        MuthurException? refusal = null;
+        var result = await ledger.MutateAsync<TaskDto?>(caller, async m =>
         {
             var task = await TaskService.LoadAsync(m.Db, id, ct);
-            if (task.State != TaskState.Validating)
-                throw Fail.Rule("not_validating", $"{Wire.TaskId(task.Id)} is '{task.State.ToWire()}', not awaiting validation.");
+            refusal = request.SubjectId is null
+                ? Fail.Rule("validation_subject_required", "Retain the subject ID returned by validate claim and pass --subject <guid> with every verdict. Upgrade older clients; never fetch a replacement subject at verdict time.")
+                : request.SubjectId != task.CurrentSubjectId || task.State != TaskState.Validating
+                    ? Fail.Conflict("stale_validation_subject", "This validation round is closed or superseded. Claim and review the current round before submitting a new verdict.")
+                    : !Validations.UsefulEvidence(request.Evidence) ? Fail.Rule("evidence_required", Validations.EvidenceHelp) : null;
+            if (refusal is not null)
+            {
+                m.Record("validation.verdict_refused", task.Id, new { subjectId = request.SubjectId, validator, code = refusal.Code });
+                return null;
+            }
+            refusal = await CheckSubjectAsync(m, task, ct);
+            if (refusal is not null) return null;
             var row = await LoadRowAsync(m, task, validator, ct);
+            if (row.SubjectId != request.SubjectId)
+            {
+                refusal = Fail.Conflict("stale_validation_subject", "The claim belongs to a superseded round.");
+                m.Record("validation.verdict_refused", task.Id, new { subjectId = request.SubjectId, validator, code = refusal.Code });
+                return null;
+            }
 
             if (caller.AgentId is { } agentId)
             {
@@ -282,17 +309,19 @@ public sealed class LifecycleService(Ledger ledger, LeasePolicy leases, ITaskLan
                     $"{Wire.TaskId(task.Id)} is being validated for '{validator}' by '{row.ClaimedBy?.Name}'.");
 
             row.Verdict = outcome;
-            row.Evidence = request.Evidence;
+            row.Evidence = request.Evidence!.Trim();
             row.AgentId = caller.AgentId;
             row.At = m.Now;
             ClearClaim(row);   // decided: nobody is working this pair any more
             task.UpdatedAt = m.Now;
-            m.Record(recorded, task.Id, new { validator, by = caller.Name, evidence = request.Evidence });
+            m.Record(recorded, task.Id, new { validator, by = caller.Name, evidence = row.Evidence, subject = task.CurrentSubject!.ToDto() });
 
             await m.Db.SaveChangesAsync(ct);
             var rows = await m.Db.TaskValidations.Where(v => v.TaskId == task.Id).ToListAsync(ct);
             if (outcome == Verdict.No)
             {
+                task.ValidationInvalidationReason = "Validation failed.";
+                m.Record("validation.subject_invalidated", task.Id, new { subjectId = task.CurrentSubjectId, reason = task.ValidationInvalidationReason });
                 // The round is over, so no claim on this task survives it.
                 foreach (var other in rows) ClearClaim(other);
                 // Back to the owner, with a fresh lease so the task is not instantly up for grabs.
@@ -305,6 +334,9 @@ public sealed class LifecycleService(Ledger ledger, LeasePolicy leases, ITaskLan
             }
             else if (outcome == Verdict.Blocked)
             {
+                foreach (var other in rows) ClearClaim(other);
+                task.ValidationInvalidationReason = "Validation blocked.";
+                m.Record("validation.subject_invalidated", task.Id, new { subjectId = task.CurrentSubjectId, reason = task.ValidationInvalidationReason });
                 // The same return to the owner a failure does, and the reason a blocked task is heard once rather
                 // than restaffed forever: the conductor staffs only Validating, so nothing picks this up again.
                 task.State = TaskState.InProgress;
@@ -346,7 +378,8 @@ public sealed class LifecycleService(Ledger ledger, LeasePolicy leases, ITaskLan
                         $"(muthur task attended {Wire.TaskId(task.Id)} --clear). " +
                         $"Full evidence: muthur task show {Wire.TaskId(task.Id)}", task.Id);
             }
-            else if (rows.All(v => v.Verdict == Verdict.Yes))
+            else if (task.CurrentSubject!.ToDto().RequiredValidators.All(key => rows.Any(v => v.ValidatorKey == key
+                && v.SubjectId == task.CurrentSubjectId && v.Verdict == Verdict.Yes && Validations.UsefulEvidence(v.Evidence))))
             {
                 task.State = TaskState.Validated;
                 m.Record("task.validated", task.Id, new { validators = rows.Select(v => v.ValidatorKey).Order().ToList() });
@@ -359,13 +392,15 @@ public sealed class LifecycleService(Ledger ledger, LeasePolicy leases, ITaskLan
             // claiming agent in, and a claim still standing in the database would be fixed up onto them again.
             await m.Db.SaveChangesAsync(ct);
             var validations = await Validations.ForTasksAsync(m.Db, [task.Id], ct);
-            return task.ToDto(validations.GetValueOrDefault(task.Id));
+            return await Validations.MapAsync(m.Db, task, validations.GetValueOrDefault(task.Id), ct);
         }, ct);
+        if (refusal is not null) throw refusal;
+        return result!;
     }
 
     /// <summary>
-    /// Merge authority lives here. The git work happens outside the ledger's write lock (it can take seconds),
-    /// serialized by its own lock; the outcome is then recorded in one mutation.
+    /// Approval, bounded git integration and recording hold the ledger writer together. Other mutations wait
+    /// so an owner or policy update cannot change the approved subject during integration.
     /// </summary>
     public async Task<TaskDto> LandAsync(Caller caller, string id, CancellationToken ct = default)
     {
@@ -373,20 +408,24 @@ public sealed class LifecycleService(Ledger ledger, LeasePolicy leases, ITaskLan
         await _landing.WaitAsync(ct);
         try
         {
-            var task = await ledger.ReadAsync((db, _) => TaskService.LoadAsync(db, id, ct), ct);
-            TaskService.RequireOwnerOrFounder(task, caller);
-            if (task.State != TaskState.Validated)
-                throw Fail.Rule("not_validated", task.State == TaskState.Validating
-                    ? $"{Wire.TaskId(task.Id)} is still validating. It lands only after every required validator says yes."
-                    : $"{Wire.TaskId(task.Id)} is '{task.State.ToWire()}'. Only a validated task can land.");
-            if (string.IsNullOrWhiteSpace(task.Branch))
-                throw Fail.Rule("branch_required", $"{Wire.TaskId(task.Id)} has no branch recorded.");
-
-            var result = await lander.LandAsync(task.Project!, task, task.Owner?.Name ?? caller.Name, ct);
-
-            var dto = await ledger.MutateAsync(caller, async m =>
+            LandResult result = null!;
+            MuthurException? refusal = null;
+            var dto = await ledger.MutateAsync<TaskDto?>(caller, async m =>
             {
                 var current = await TaskService.LoadAsync(m.Db, id, ct);
+                TaskService.RequireOwnerOrFounder(current, caller);
+                if (current.CurrentSubject is null) throw Fail.Rule("validation_provenance_unknown", Validations.Recovery);
+                if (current.State != TaskState.Validated)
+                    throw Fail.Rule("not_validated", $"{Wire.TaskId(current.Id)} is '{current.State.ToWire()}'. Only a validated task can land.");
+                refusal = await CheckSubjectAsync(m, current, ct);
+                if (refusal is not null) return null;
+                if (string.IsNullOrWhiteSpace(current.Branch))
+                    throw Fail.Rule("branch_required", $"{Wire.TaskId(current.Id)} has no branch recorded.");
+                var rows = await m.Db.TaskValidations.Where(v => v.TaskId == current.Id).ToListAsync(ct);
+                if (!current.CurrentSubject!.ToDto().RequiredValidators.All(key => rows.Any(v => v.ValidatorKey == key
+                    && v.SubjectId == current.CurrentSubjectId && v.Verdict == Verdict.Yes && Validations.UsefulEvidence(v.Evidence))))
+                    throw Fail.Rule("not_validated", "Every required validator must pass this exact subject with useful evidence. " + Validations.Recovery);
+                result = await lander.LandAsync(current.Project!, current, current.Owner?.Name ?? caller.Name, ct);
                 switch (result.Outcome)
                 {
                     case LandOutcome.Landed:
@@ -401,6 +440,7 @@ public sealed class LifecycleService(Ledger ledger, LeasePolicy leases, ITaskLan
                             new
                             {
                                 mode = current.Project!.LandMode.ToWire(), current.Branch, commit = result.Commit, prUrl = result.PrUrl,
+                                subject = current.CurrentSubject!.ToDto(),
                                 overrodeHold = held is { } h ? new { by = h.By, reason = h.Reason, placedAt = h.PlacedAt } : null,
                             });
                         if (held is { } hold)
@@ -419,6 +459,8 @@ public sealed class LifecycleService(Ledger ledger, LeasePolicy leases, ITaskLan
                         }
                         break;
                     case LandOutcome.Conflict:
+                        current.ValidationInvalidationReason = result.Message;
+                        m.Record("validation.subject_invalidated", current.Id, new { subjectId = current.CurrentSubjectId, reason = result.Message });
                         current.State = TaskState.InProgress;
                         current.ClaimExpires = m.Now + leases.ClaimLease;
                         m.Record("task.land_failed", current.Id, new
@@ -432,17 +474,23 @@ public sealed class LifecycleService(Ledger ledger, LeasePolicy leases, ITaskLan
                         });
                         break;
                     default:
+                        if (result.Code == "implementation_changed")
+                        {
+                            current.ValidationInvalidationReason = result.Message;
+                            m.Record("validation.subject_invalidated", current.Id, new { subjectId = current.CurrentSubjectId, reason = result.Message });
+                        }
                         m.Record("task.land_refused", current.Id, new { code = result.Code, result.Message });
                         break;
                 }
                 current.UpdatedAt = m.Now;
                 var validations = await Validations.ForTasksAsync(m.Db, [current.Id], ct);
-                return current.ToDto(validations.GetValueOrDefault(current.Id));
+                return await Validations.MapAsync(m.Db, current, validations.GetValueOrDefault(current.Id), ct);
             }, ct);
 
+            if (refusal is not null) throw refusal;
             return result.Outcome switch
             {
-                LandOutcome.Landed => dto,
+                LandOutcome.Landed => dto!,
                 LandOutcome.Conflict => throw Fail.Conflict(result.Code!, result.Message!),
                 _ => throw Fail.Rule(result.Code!, result.Message!),
             };
@@ -453,10 +501,51 @@ public sealed class LifecycleService(Ledger ledger, LeasePolicy leases, ITaskLan
         }
     }
 
+    public Task<TaskDto> RevalidateAsync(Caller caller, string id, RevalidateRequest request, CancellationToken ct = default) =>
+        ledger.MutateAsync(caller, async m =>
+        {
+            var task = await TaskService.LoadAsync(m.Db, id, ct);
+            TaskService.RequireOwnerOrFounder(task, caller);
+            if (task.State is not (TaskState.Validating or TaskState.Validated or TaskState.InProgress))
+                throw Fail.Rule("cannot_revalidate", "Only validating, validated or in-progress tasks can be revalidated.");
+            if (string.IsNullOrWhiteSpace(request.Reason)) throw Fail.Rule("reason_required", "Pass --reason <text> explaining the fresh validation round.");
+            var subjectId = task.CurrentSubjectId;
+            foreach (var row in await m.Db.TaskValidations.Where(v => v.TaskId == task.Id).ToListAsync(ct)) ClearClaim(row);
+            task.CurrentSubject = null;
+            task.CurrentSubjectId = null;
+            task.ValidationInvalidationReason = request.Reason.Trim();
+            task.State = TaskState.InProgress;
+            task.ClaimExpires = m.Now + leases.ClaimLease;
+            task.UpdatedAt = m.Now;
+            m.Record("validation.subject_invalidated", task.Id, new { subjectId, reason = task.ValidationInvalidationReason });
+            m.Record("task.revalidation_requested", task.Id, new { subjectId, reason = task.ValidationInvalidationReason });
+            await m.Db.SaveChangesAsync(ct);
+            var validations = await Validations.ForTasksAsync(m.Db, [task.Id], ct);
+            return await Validations.MapAsync(m.Db, task, validations.GetValueOrDefault(task.Id), ct);
+        }, ct);
+
     private static async Task<TaskValidation> LoadRowAsync(Mutation m, WorkTask task, string validator, CancellationToken ct) =>
         await m.Db.TaskValidations.Include(v => v.ClaimedBy)
             .SingleOrDefaultAsync(v => v.TaskId == task.Id && v.ValidatorKey == validator, ct)
         ?? throw Fail.Rule("validator_not_required", $"'{validator}' is not a required validator of {Wire.TaskId(task.Id)}.");
+
+    private async Task<MuthurException?> CheckSubjectAsync(Mutation m, WorkTask task, CancellationToken ct)
+    {
+        try
+        {
+            await Validations.RequireCurrentAsync(m.Db, task, lander, ct);
+            return null;
+        }
+        catch (MuthurException ex) when (ex.Code == "validation_subject_changed")
+        {
+            if (task.ValidationInvalidationReason is null)
+            {
+                task.ValidationInvalidationReason = ex.Message;
+                m.Record("validation.subject_invalidated", task.Id, new { subjectId = task.CurrentSubjectId, reason = ex.Message });
+            }
+            return ex;
+        }
+    }
 
     private static void ClearClaim(TaskValidation row)
     {
