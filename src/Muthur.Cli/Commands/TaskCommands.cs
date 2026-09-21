@@ -20,6 +20,7 @@ public static class TaskCommands
     {
         var task = new Command("task", "The task ledger: add, claim, and move work through its lifecycle.");
         root.Subcommands.Add(task);
+        TaskUnitCommands.AddTo(task);
 
         var project = new Option<string?>("--project") { Description = $"Project key (default: nearest {ProjectContext.FileName}, else the only project)." };
 

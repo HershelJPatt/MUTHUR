@@ -11,6 +11,17 @@ public static class TaskEndpoints
     {
         app.MapPost(Routes.Tasks + "/{id}/revalidate", (HttpContext http, string id, RevalidateRequest request, LifecycleService lifecycle, CancellationToken ct) =>
             lifecycle.RevalidateAsync(http.GetCaller(), id, request, ct));
+        app.MapGet(Routes.Tasks + "/{id}/units", async (string id, TaskUnitService units, CancellationToken ct) =>
+        {
+            var graph = await units.GetAsync(id, ct);
+            return graph is null ? Results.Content("null", "application/json") :
+                Results.Json(graph, MuthurJsonContext.Default.TaskUnitGraph);
+        });
+        app.MapGet(Routes.Tasks + "/{id}/resume", (string id, TaskUnitService units, CancellationToken ct) => units.ResumeAsync(id, ct));
+        app.MapPost(Routes.Tasks + "/{id}/units/define", (HttpContext http, string id, DefineTaskUnitsRequest request, TaskUnitService units, CancellationToken ct) =>
+            units.DefineAsync(http.GetCaller(), id, request, ct));
+        app.MapPost(Routes.Tasks + "/{id}/units/checkpoint", (HttpContext http, string id, TaskUnitCheckpointRequest request, TaskUnitService units, CancellationToken ct) =>
+            units.CheckpointAsync(http.GetCaller(), id, request, ct));
         app.MapPost(Routes.Tasks + "/{id}/dependencies", (HttpContext http, string id, DependenciesRequest request, TaskService tasks, CancellationToken ct) =>
             tasks.SetDependenciesAsync(http.GetCaller(), id, request, ct));
         app.MapPost(Routes.Tasks, (HttpContext http, AddTaskRequest request, TaskService tasks, CancellationToken ct) =>
