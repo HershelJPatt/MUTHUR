@@ -316,6 +316,59 @@ public sealed class SpecGuardTests : IDisposable
         Assert.Equal("spec_needs", recorded.Payload.GetProperty("source").GetString());
     }
 
+    [Theory]
+    [InlineData("needs: headless-browser")]
+    [InlineData("- **NEEDS:** `Headless-Browser`.")]
+    [InlineData("> needs: HEADLESS-BROWSER")]
+    public async Task Headless_alone_does_not_require_attendance(string declaration)
+    {
+        var (owner, id) = await ClaimedTaskAsync();
+        _repo.Write("specs/T-1-headless.md", $"# T-1 — Build it\n{declaration}\n");
+
+        var task = await (await owner.PostActionAsync(id, "spec", new SetSpecRequest("specs/T-1-headless.md"))).ReadTaskAsync();
+
+        Assert.Null(task.AttendedReason);
+        Assert.DoesNotContain((await owner.GetTaskAsync(id)).Events, e => e.Type == "task.attended");
+    }
+
+    [Theory]
+    [InlineData("needs: headless-browser\nneeds: browser", "browser")]
+    [InlineData("needs: browser\nneeds: headless-browser", "browser")]
+    [InlineData("needs: headless-browser\nneeds: device", "device")]
+    [InlineData("needs: device\nneeds: headless-browser", "device")]
+    [InlineData("needs: headless-browser-extra", "headless-browser-extra")]
+    [InlineData("needs: headless-browser, browser", "headless-browser, browser")]
+    public async Task Other_needs_still_require_attendance(string declarations, string need)
+    {
+        var (owner, id) = await ClaimedTaskAsync();
+        _repo.Write("specs/T-1-mixed.md", $"# T-1 — Build it\n{declarations}\n");
+
+        var task = await (await owner.PostActionAsync(id, "spec", new SetSpecRequest("specs/T-1-mixed.md"))).ReadTaskAsync();
+
+        Assert.Contains($"needs: {need}'", task.AttendedReason);
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task Replacing_a_spec_with_headless_preserves_existing_attendance(bool manual)
+    {
+        var (owner, id) = await ClaimedTaskAsync();
+        _repo.Write("specs/T-1-before.md", "# T-1 — Build it\nneeds: browser\n");
+        var before = await (await owner.PostActionAsync(id, "spec", new SetSpecRequest("specs/T-1-before.md"))).ReadTaskAsync();
+        var reason = before.AttendedReason;
+        if (manual)
+        {
+            reason = "Needs human visual review";
+            (await owner.PostActionAsync(id, "attended", new AttendedRequest(reason))).EnsureSuccessStatusCode();
+        }
+        _repo.Write("specs/T-1-after.md", "# T-1 — Build it\nneeds: headless-browser\n");
+
+        var after = await (await owner.PostActionAsync(id, "spec", new SetSpecRequest("specs/T-1-after.md"))).ReadTaskAsync();
+
+        Assert.Equal(reason, after.AttendedReason);
+    }
+
     [Fact]
     public async Task A_spec_that_declares_nothing_leaves_the_task_alone()
     {

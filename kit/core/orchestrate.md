@@ -152,33 +152,31 @@ and exit. This preserves the spec and branch, prevents restaffing and wakes when
 Use `--clear` only when the dependency no longer applies. Cancelled prerequisites do not count as landed.
 Keep genuine founder questions in Needs You; dependencies do not answer or withdraw them.
 
-Validation here is done by sessions a conductor starts: no browser, no GUI, no hands. **A spec whose
-*Verification* asks for a click, on a task not marked attended, is a defect in the spec** — and an
-orchestrator who writes one has not finished the task. Six validator sessions were spent in a single day
-discovering this on T-14, T-13, T-17, T-5, T-26 and T-36. Every one of those refusals was right; every one of
-those specs was wrong.
+Choose the verification path explicitly:
 
-- **Write what a fetch can check.** A Blazor Server dashboard prerenders, so a page fetched with `curl` or
-  `Invoke-WebRequest` already contains the panel, the row, the badge and the text. Assert against that HTML:
+- **HTTP-only assertions** check response data or prerendered HTML. A fetch cannot prove clicks, live updates,
+  or virtualized rows; never substitute HTML for interaction evidence.
+- **Connector-driven UI** uses the session's browser connector. Inspect its availability separately; an
+  unavailable connector does not establish that installed headless tooling is unavailable.
+- **Installed headless interaction** declares `needs: headless-browser` and exact probe/tool paths and
+  interaction commands in the spec. Run the bounded prerequisite probe before expensive validation builds
+  and again before implementation submission. Probe success is not proof of product behavior.
 
-  ```
-  (Invoke-WebRequest "$env:MUTHUR_URL/operations" -UseBasicParsing).Content |
-      Select-String -Pattern 'Doctor', 'Re-check', 'check-warn'
-  ```
+If the connector is unavailable, try the explicit headless probe under existing permissions. This repository's
+supported runner is `pwsh -NoProfile -File scripts/browser-capability.ps1 -PlaywrightPath <absolute installed module directory> -BrowserPath <absolute installed executable>`.
+Generic kit consumers supply their own equivalent bounded runner. Record exact missing tools or denied
+permissions and a blocked verdict when neither permitted interaction path works. Do not install tooling,
+expand permissions or start more harness sessions; preserve the shared two-session ceiling.
 
-- **Know what no fetch can check.** `<Virtualize>` renders nothing during prerender, so virtualized rows — and
-  anything that depends on them — are not assertable from fetched HTML at all. That is settled; do not
-  re-derive it, and do not redesign a component to make a two-word badge testable.
-- **A task that genuinely needs eyes says so in its spec, on a line of its own:** `needs: browser`. The hub
-  reads that when you freeze the spec, flags the task for a human validator and the conductor never staffs
-  it — so nobody spends a session finding out. `muthur task attended T-n --reason "…"` still works for a need
-  you discover after freezing, and `--clear` lifts either when the reason stops being true.
+Legacy `needs: browser` retains attended semantics for compatibility and human visual needs. Other needs
+still require attendance, even alongside `needs: headless-browser`. Replacing a spec never clears an existing
+or manual attended reason; `muthur task attended T-n --clear` is the explicit operation when it no longer applies.
 
 ## Rules
 
 - Never edit product code directly. Never merge or push. Never mark `implemented` on work you have not built and tested yourself.
-- A spec's *Verification* must be runnable with no browser, no GUI and no human. One that is not, on a task
-  not marked `attended`, is a defect in the spec — you have not finished the task.
+- Interactive verification without a permitted connector or preflighted installed headless runner, on a task
+  not marked `attended`, is a defect in the spec. Preflight before builds and before implementation submission.
 - Every delegation prompt names the base branch, the commit sha of the spec on it, and the default branch.
   A worktree spawned by the harness does not arrive where you told it to.
 - One owner per task. If you cannot continue, `muthur task release T-n --reason "..."` so someone else can.

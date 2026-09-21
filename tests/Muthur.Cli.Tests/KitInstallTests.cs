@@ -64,24 +64,16 @@ public sealed class KitInstallTests : IDisposable
         var installed = Path.Combine(repo, procedure);
         Assert.True(File.Exists(installed), $"The {harness} kit installed no {procedure}.");
 
-        // The rule is written twice on purpose - the section teaches and the ## Rules bullet enforces - so
-        // each half is pinned by a phrase only it uses. The defect-class wording is common to both and is
-        // pinned as well: it is the phrasing the founder asked for.
         var procedureText = File.ReadAllText(installed);
-        Assert.True(
-            procedureText.Contains("no browser, no GUI, no hands", StringComparison.Ordinal),
-            $"{procedure} has lost the 'Verification a conductor-started session can run' section.");
-        Assert.True(
-            procedureText.Contains("no browser, no GUI and no human", StringComparison.Ordinal),
-            $"{procedure} has lost the ## Rules bullet that restates the section.");
-        Assert.True(
-            procedureText.Contains("is a defect in the spec", StringComparison.Ordinal),
-            $"{procedure} no longer calls such a spec a defect in the spec.");
+        foreach (var phrase in new[] { "HTTP-only assertions", "Connector-driven UI", "Installed headless interaction",
+            "needs: headless-browser", "needs: browser", "before implementation submission",
+            "shared two-session ceiling", "is a defect in the spec" })
+            Assert.Contains(phrase, procedureText, StringComparison.Ordinal);
 
-        Assert.Contains(
-            "no browser, no GUI and no human",
-            File.ReadAllText(Path.Combine(repo, "specs", "_TEMPLATE.md")),
-            StringComparison.Ordinal);
+        var template = File.ReadAllText(Path.Combine(repo, "specs", "_TEMPLATE.md"));
+        Assert.Contains("needs: headless-browser", template, StringComparison.Ordinal);
+        Assert.Contains("needs: browser", template, StringComparison.Ordinal);
+        Assert.Contains("equivalent bounded runner", template, StringComparison.Ordinal);
     }
 
     /// <summary>

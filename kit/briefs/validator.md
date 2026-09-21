@@ -23,6 +23,22 @@ env $T <path to the build under test> …
 
 Give each scratch instance its own port and its own directory. Delete both when you are done.
 
+## Interaction prerequisites
+
+Choose HTTP-only assertions for response data and prerendered HTML, connector-driven UI for an available
+browser connector, or installed headless interaction for clicks and live behavior. HTTP is render-only,
+never interaction evidence. If the connector is unavailable, try the explicit headless probe under existing
+permissions before expensive validation builds and before implementation submission. Probe success is not
+proof of product behavior: run the spec's exact interaction commands and record their assertions.
+
+Headless specs declare `needs: headless-browser` and exact probe/tool paths and interaction commands.
+Legacy `needs: browser` retains attended semantics for compatibility and human visual needs; other needs
+remain attended too. Replacing a spec does not clear existing or manual attended reasons.
+This repository's supported runner is `scripts/browser-capability.ps1`; generic kit consumers supply their
+own equivalent bounded runner. If neither permitted interaction path works, record exact missing tool or
+permission evidence and a blocked verdict. Never silently substitute HTML, install tooling, expand permissions,
+or start more harness sessions; preserve the shared two-session ceiling.
+
 ## Build the branch
 
 Never check the task's branch out in the main checkout — the agent that built it usually still has it. Work in

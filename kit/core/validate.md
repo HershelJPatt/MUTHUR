@@ -16,7 +16,8 @@ have exercised it end to end on your platform and said yes. You are the last lin
 
 1. `muthur task show T-n`: read the task and its spec (`specPath`). The spec's *Verification* section is the
    minimum, not the limit.
-2. Check out the task's branch in a clean worktree. Build it the way the brief says.
+2. Check out the task's branch in a clean worktree. Preflight interaction prerequisites as below before
+   expensive validation builds, then build it the way the brief says.
 3. Exercise the change as a user would, end to end, on the real product. Then try to break it: edge cases,
    the neighbors of the change, the unhappy paths.
 4. Watch what the builders could not: errors and warnings in logs that were not there before, performance
@@ -30,6 +31,22 @@ have exercised it end to end on your platform and said yes. You are the last lin
    - `muthur validate blocked T-n --as <validator-role> --evidence <file>` — you could not validate it at
      all. The task returns to its owner, and this is not a verdict on the work. It is the right answer when
      the product cannot be driven from the session you are in.
+
+## Interaction prerequisites
+
+Choose HTTP-only assertions for response data and prerendered HTML, connector-driven UI for an available
+browser connector, or installed headless interaction for clicks and live behavior. HTTP is render-only,
+never interaction evidence. If the connector is unavailable, try the explicit headless probe under existing
+permissions before expensive validation builds and before implementation submission. Probe success is not
+proof of product behavior: run the spec's exact interaction commands and record their assertions.
+
+Headless specs declare `needs: headless-browser` and exact probe/tool paths and interaction commands.
+Legacy `needs: browser` retains attended semantics for compatibility and human visual needs; other needs
+remain attended too. Replacing a spec does not clear existing or manual attended reasons.
+This repository's supported runner is `scripts/browser-capability.ps1`; generic kit consumers supply their
+own equivalent bounded runner. If neither permitted interaction path works, record exact missing tool or
+permission evidence and a blocked verdict. Never silently substitute HTML, install tooling, expand permissions,
+or start more harness sessions; preserve the shared two-session ceiling.
 
 ## What builders' tests usually miss
 
@@ -56,4 +73,4 @@ When the queue holds a stack of tasks whose branches contain each other, build t
 - Keep the build under test away from the organization's hub: separate port, separate data directory, and never
   `export` the variables that select them — prefix them per command.
 - No partial credit: if the spec's verification doesn't fully pass, it fails.
-- Use a fleet of implementer-tier workers for broad test matrices if you need to, but the verdict is yours.
+- Keep broad test matrices within the shared two-session ceiling; the verdict is yours.

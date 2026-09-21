@@ -33,6 +33,31 @@ use a different one per instance.
 Before anything else, record the live hub's identity so you can prove you never touched it: `status` → note
 `processId` and `startedAt`. Compare when you finish.
 
+## Interaction prerequisites
+
+Choose HTTP-only assertions for response data and prerendered HTML, connector-driven UI for an available
+browser connector, or installed headless interaction for clicks and live behavior. HTTP is render-only,
+never interaction evidence. If the connector is unavailable, try the explicit headless probe under existing
+permissions before expensive validation builds and before implementation submission. Probe success is not
+proof of product behavior: run the spec's exact interaction commands and record their assertions.
+
+Headless specs declare `needs: headless-browser` and exact probe/tool paths and interaction commands.
+Legacy `needs: browser` retains attended semantics for compatibility and human visual needs; other needs
+remain attended too. Replacing a spec does not clear existing or manual attended reasons.
+This repository's supported runner is `scripts/browser-capability.ps1`; generic kit consumers supply their
+own equivalent bounded runner. If neither permitted interaction path works, record exact missing tool or
+permission evidence and a blocked verdict. Never silently substitute HTML, install tooling, expand permissions,
+or start more harness sessions; preserve the shared two-session ceiling.
+
+Run the probe with explicit installed paths before the build:
+
+`pwsh -NoProfile -File scripts/browser-capability.ps1 -PlaywrightPath <absolute installed module directory> -BrowserPath <absolute installed executable>`
+
+For console registration against an already running isolated installed scratch hub, add
+`-Url http://127.0.0.1:7494 -AgentName t94-browser-fixture`. The runner never starts a hub. The caller owns
+startup and shutdown with per-child MUTHUR_HOME/MUTHUR_URL and cleared MUTHUR_TOKEN/MUTHUR_AGENT.
+Keep the non-default loopback port and scratch data isolated; record both probe JSON and separate interaction evidence.
+
 ## Build the branch
 
 From the repository root, never in the main checkout — the agent that built it usually still has the branch out:
@@ -84,7 +109,7 @@ Races are how the leases are proven:
 
 **The dashboard**: `curl -s http://127.0.0.1:<port>/<path>` gives server-rendered HTML. Virtualized lists and
 anything live render only in a real browser. If the spec requires live behaviour, a browser check is mandatory —
-use a browser tool. If you have none, the verdict is **not** pass — and it is not silence either. Record it:
+use an available connector or the preflighted installed headless runner above. If neither permitted path works, record the missing tool/permission evidence:
 
 ```
 muthur validate blocked T-n --as <role> --evidence <file>
