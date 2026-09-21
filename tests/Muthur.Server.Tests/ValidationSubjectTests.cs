@@ -195,6 +195,47 @@ public sealed class ValidationSubjectTests : IDisposable
     }
 
     [Fact]
+    public async Task Priority_response_preserves_stale_provenance_after_a_failed_round()
+    {
+        var (owner, validator, task) = await RoundAsync();
+        (await validator.PostActionAsync(task.Id, "fail", new VerdictRequest("win-validator",
+            "Ran the committed test command; observed a failure. Reproduce: dotnet test.", task.CurrentSubject!.Id))).EnsureSuccessStatusCode();
+
+        var updated = await (await owner.PostActionAsync(task.Id, "priority", new SetPriorityRequest(7))).ReadTaskAsync();
+        Assert.Equal(7, updated.Priority);
+        Assert.Equal(TaskState.InProgress, updated.State);
+        Assert.Equal(task.CurrentSubject.Id, updated.CurrentSubject!.Id);
+        Assert.Equal("stale", updated.ProvenanceStatus);
+        Assert.Empty(updated.Validations);
+        var detail = await owner.GetTaskAsync(task.Id);
+        Assert.Equal(detail.Task.ProvenanceStatus, updated.ProvenanceStatus);
+        Assert.Equal("stale", Assert.Single(detail.Task.Validations).EvidenceStatus);
+        var mapped = await _hub.Services.GetRequiredService<Ledger>().ReadAsync(async (db, _) =>
+            (await TaskService.LoadAsync(db, task.Id, default)).ToDto());
+        Assert.NotNull(mapped.CurrentSubject);
+        Assert.Equal("stale", mapped.ProvenanceStatus);
+    }
+
+    [Fact]
+    public async Task Priority_response_reflects_live_brief_drift()
+    {
+        var (owner, validator, task) = await RoundAsync();
+        await PassAsync(validator, task);
+        (await _hub.Founder().PutAsJsonAsync(Routes.Roles,
+            new DefineRoleRequest("win-validator", "New checks are required."))).EnsureSuccessStatusCode();
+
+        var updated = await (await owner.PostActionAsync(task.Id, "priority", new SetPriorityRequest(7))).ReadTaskAsync();
+        Assert.Equal(7, updated.Priority);
+        Assert.Equal(TaskState.Validated, updated.State);
+        Assert.Equal(task.CurrentSubject!.Id, updated.CurrentSubject!.Id);
+        Assert.Equal("stale", updated.ProvenanceStatus);
+        Assert.Empty(updated.Validations);
+        var detail = await owner.GetTaskAsync(task.Id);
+        Assert.Equal(detail.Task.ProvenanceStatus, updated.ProvenanceStatus);
+        Assert.Equal("stale", Assert.Single(detail.Task.Validations).EvidenceStatus);
+    }
+
+    [Fact]
     public async Task Unrelated_default_branch_config_does_not_change_the_reviewed_commands()
     {
         var (owner, validator, task) = await RoundAsync();

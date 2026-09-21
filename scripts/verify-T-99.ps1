@@ -55,7 +55,7 @@ function Run-Process([string]$Executable, [string[]]$Arguments, [string]$Directo
     finally { $process.Dispose() }
 }
 
-function Cli([string[]]$Arguments, [int]$ExpectedExit = 0, [string]$ExpectedCode = '') {
+function Invoke-T99Cli([string[]]$Arguments, [int]$ExpectedExit = 0, [string]$ExpectedCode = '') {
     $result = Run-Process $cli $Arguments $repo
     $body = if ($result.Exit -eq 0) { $result.Out } else { $result.Error }
     $value = if ([string]::IsNullOrWhiteSpace($body)) { @{} } else { $body | ConvertFrom-Json -AsHashtable }
@@ -79,8 +79,8 @@ function Check([bool]$Condition, [string]$Name) {
 
 function Start-ScratchHub {
     $script:hubStartAttempted = $true
-    $null = Cli @('up')
-    $status = Cli @('status')
+    $null = Invoke-T99Cli @('up')
+    $status = Invoke-T99Cli @('status')
     Check ([IO.Path]::GetFullPath($status.dataDirectory) -eq [IO.Path]::GetFullPath($scratchHome)) 'hub uses unique scratch home'
     $process = [Diagnostics.Process]::GetProcessById([int]$status.processId)
     $hubProcesses.Add($process)
@@ -118,19 +118,19 @@ try {
     $null = Git @('commit', '-q', '-m', 'local fixture initial')
     $status = Start-ScratchHub
     $evidence.serverRevision = $status.version
-    $first = @(Cli @('log', '--limit', '2000'))
+    $first = @(Invoke-T99Cli @('log', '--limit', '2000'))
     $firstSeq = if ($first.Count) { ($first | Measure-Object seq -Maximum).Maximum } else { 0 }
-    $null = Cli @('project', 'add', 'subject-fixture', '--repo', $repo, '--validator', 'local-validator', '--founder')
-    $null = Cli @('role', 'define', 'local-validator', '--validator', '--founder')
-    $null = Cli @('agent', 'register', '--name', 'subject-owner', '--harness', 'local', '--model', 'fixture')
-    $null = Cli @('agent', 'register', '--name', 'subject-validator', '--harness', 'local', '--model', 'fixture')
-    $null = Cli @('role', 'take', 'local-validator', '--as-agent', 'subject-validator')
-    $task = Cli @('task', 'add', 'Installed validation subject fixture', '--project', 'subject-fixture', '--as-agent', 'subject-owner')
+    $null = Invoke-T99Cli @('project', 'add', 'subject-fixture', '--repo', $repo, '--validator', 'local-validator', '--founder')
+    $null = Invoke-T99Cli @('role', 'define', 'local-validator', '--validator', '--founder')
+    $null = Invoke-T99Cli @('agent', 'register', '--name', 'subject-owner', '--harness', 'local', '--model', 'fixture')
+    $null = Invoke-T99Cli @('agent', 'register', '--name', 'subject-validator', '--harness', 'local', '--model', 'fixture')
+    $null = Invoke-T99Cli @('role', 'take', 'local-validator', '--as-agent', 'subject-validator')
+    $task = Invoke-T99Cli @('task', 'add', 'Installed validation subject fixture', '--project', 'subject-fixture', '--as-agent', 'subject-owner')
     $id = $task.id
     $html = (Invoke-WebRequest "$env:MUTHUR_URL/tasks/$id" -TimeoutSec 10).Content
     Check ($html.Contains('unknown') -and $html.Contains('revalidate')) 'unknown provenance has explicit recovery help'
     $branch = "task/$id-subject"
-    $null = Cli @('task', 'claim', $id, '--as-agent', 'subject-owner')
+    $null = Invoke-T99Cli @('task', 'claim', $id, '--as-agent', 'subject-owner')
     $null = Git @('checkout', '-q', '-b', $branch)
     $null = New-Item -ItemType Directory -Path (Join-Path $repo 'specs') -Force
     [IO.File]::WriteAllText((Join-Path $repo "specs/$id.md"), "# $id — installed fixture`nCheck exact implementation provenance.`n")
@@ -138,58 +138,62 @@ try {
     [IO.File]::WriteAllText((Join-Path $repo 'implementation.txt'), "A`n")
     $null = Git @('add', '.')
     $null = Git @('commit', '-q', '-m', 'implementation A')
-    $null = Cli @('task', 'spec', $id, "specs/$id.md", '--branch', $branch, '--as-agent', 'subject-owner')
-    $round = Cli @('task', 'implemented', $id, '--branch', $branch, '--as-agent', 'subject-owner')
-    $claim = Cli @('validate', 'claim', $id, '--as', 'local-validator', '--as-agent', 'subject-validator')
+    $null = Invoke-T99Cli @('task', 'spec', $id, "specs/$id.md", '--branch', $branch, '--as-agent', 'subject-owner')
+    $round = Invoke-T99Cli @('task', 'implemented', $id, '--branch', $branch, '--as-agent', 'subject-owner')
+    $claim = Invoke-T99Cli @('validate', 'claim', $id, '--as', 'local-validator', '--as-agent', 'subject-validator')
     $subject = $claim.currentSubject.id
     $sha = $claim.currentSubject.implementationSha
     Check ($subject -eq $round.currentSubject.id) 'claim returns full current subject'
     $html = (Invoke-WebRequest "$env:MUTHUR_URL/tasks/$id" -TimeoutSec 10).Content
     Check ($html.Contains($sha) -and $html.Contains('Spec SHA-256') -and $html.Contains('missing')) 'prerendered SHA, spec digest and missing evidence'
-    $null = Cli @('validate', 'pass', $id, '--as', 'local-validator', '--subject', $subject, '--as-agent', 'subject-validator') 2 'evidence_required'
+    $null = Invoke-T99Cli @('validate', 'pass', $id, '--as', 'local-validator', '--subject', $subject, '--as-agent', 'subject-validator') 2 'evidence_required'
     $token = [IO.File]::ReadAllText((Join-Path $scratchHome 'agents/subject-validator.token')).Trim()
     $empty = Invoke-WebRequest "$env:MUTHUR_URL/api/v1/tasks/$id/pass" -Method Post -ContentType 'application/json' -Headers @{ Authorization = "Bearer $token" } -Body (@{ validator = 'local-validator'; subjectId = $subject; evidence = '' } | ConvertTo-Json) -SkipHttpErrorCheck -TimeoutSec 10
     Check ($empty.StatusCode -eq 422 -and ($empty.Content | ConvertFrom-Json).code -eq 'evidence_required') 'empty pass API refusal'
     $report = Join-Path $scratch 'report.txt'
     Check ((Git @('show', "$sha`:implementation.txt")) -eq 'A') 'inspect exact implementation A'
     [IO.File]::WriteAllText($report, "Ran git show $sha`:implementation.txt; observed A. Reproduce with the same command.")
-    $passed = Cli @('validate', 'pass', $id, '--as', 'local-validator', '--subject', $subject, '--evidence-file', $report, '--as-agent', 'subject-validator')
+    $passed = Invoke-T99Cli @('validate', 'pass', $id, '--as', 'local-validator', '--subject', $subject, '--evidence-file', $report, '--as-agent', 'subject-validator')
     Check ($passed.state -eq 'validated') 'valid pass'
     [IO.File]::WriteAllText((Join-Path $repo 'implementation.txt'), "B`n")
     $null = Git @('add', '.')
     $null = Git @('commit', '-q', '-m', 'unreviewed B')
     $null = Git @('checkout', '-q', 'main')
-    $null = Cli @('task', 'land', $id, '--as-agent', 'subject-owner') 2 'implementation_changed'
-    $null = Cli @('task', 'revalidate', $id, '--reason', 'Review B and the amended spec.', '--as-agent', 'subject-owner')
+    $null = Invoke-T99Cli @('task', 'land', $id, '--as-agent', 'subject-owner') 2 'implementation_changed'
+    $null = Invoke-T99Cli @('task', 'revalidate', $id, '--reason', 'Review B and the amended spec.', '--as-agent', 'subject-owner')
     $html = (Invoke-WebRequest "$env:MUTHUR_URL/tasks/$id" -TimeoutSec 10).Content
     Check ($html.Contains('stale') -and $html.Contains('revalidate')) 'invalidated provenance and evidence are stale'
     $null = Git @('checkout', '-q', $branch)
     [IO.File]::AppendAllText((Join-Path $repo "specs/$id.md"), "Spec-only amendment requires explicit attachment.`n")
     $null = Git @('add', '.')
     $null = Git @('commit', '-q', '-m', 'spec-only amendment')
-    $null = Cli @('task', 'implemented', $id, '--branch', $branch, '--as-agent', 'subject-owner') 2 'spec_changed'
-    $null = Cli @('task', 'spec', $id, "specs/$id.md", '--branch', $branch, '--as-agent', 'subject-owner')
-    $fresh = Cli @('task', 'implemented', $id, '--branch', $branch, '--as-agent', 'subject-owner')
-    $claim = Cli @('validate', 'claim', $id, '--as', 'local-validator', '--as-agent', 'subject-validator')
+    $null = Invoke-T99Cli @('task', 'implemented', $id, '--branch', $branch, '--as-agent', 'subject-owner') 2 'spec_changed'
+    $null = Invoke-T99Cli @('task', 'spec', $id, "specs/$id.md", '--branch', $branch, '--as-agent', 'subject-owner')
+    $fresh = Invoke-T99Cli @('task', 'implemented', $id, '--branch', $branch, '--as-agent', 'subject-owner')
+    $claim = Invoke-T99Cli @('validate', 'claim', $id, '--as', 'local-validator', '--as-agent', 'subject-validator')
     Check ($claim.currentSubject.id -ne $subject) 'resubmission opens a new round'
-    $null = Cli @('validate', 'pass', $id, '--as', 'local-validator', '--subject', $subject, '--evidence-file', $report, '--as-agent', 'subject-validator') 3 'stale_validation_subject'
+    $null = Invoke-T99Cli @('validate', 'pass', $id, '--as', 'local-validator', '--subject', $subject, '--evidence-file', $report, '--as-agent', 'subject-validator') 3 'stale_validation_subject'
     $subject = $claim.currentSubject.id
     $sha = $claim.currentSubject.implementationSha
     Check ((Git @('show', "$sha`:implementation.txt")) -eq 'B') 'inspect exact implementation B'
     [IO.File]::WriteAllText($report, "Ran git show $sha`:implementation.txt; observed B. Reproduce with the same command.")
-    $null = Cli @('validate', 'pass', $id, '--as', 'local-validator', '--subject', $subject, '--evidence-file', $report, '--as-agent', 'subject-validator')
-    $null = Cli @('down')
+    $null = Invoke-T99Cli @('validate', 'pass', $id, '--as', 'local-validator', '--subject', $subject, '--evidence-file', $report, '--as-agent', 'subject-validator')
+    $null = Invoke-T99Cli @('down')
     $null = Start-ScratchHub
-    $restored = Cli @('task', 'show', $id)
+    $restored = Invoke-T99Cli @('task', 'show', $id)
     Check ($restored.task.currentSubject.id -eq $subject -and $restored.task.validations[0].evidenceStatus -eq 'reported') 'subject and evidence persist across restart'
     $null = Git @('checkout', '-q', 'main')
-    $landed = Cli @('task', 'land', $id, '--as-agent', 'subject-owner')
+    $landed = Invoke-T99Cli @('task', 'land', $id, '--as-agent', 'subject-owner')
     Check ($landed.state -eq 'done' -and (Git @('rev-parse', 'main^2')) -eq $sha) 'exact approved commit landed'
     $html = (Invoke-WebRequest "$env:MUTHUR_URL/tasks/$id" -TimeoutSec 10).Content
     Check ($html.Contains($subject) -and $html.Contains('reported')) 'prerendered round and reported evidence after restart'
-    $events = @(Cli @('log', '--since', "$firstSeq", '--limit', '2000'))
+    $events = @(Invoke-T99Cli @('log', '--since', "$firstSeq", '--limit', '2000'))
     $evidence.window = @{ firstExclusive = $firstSeq; lastInclusive = ($events | Measure-Object seq -Maximum).Maximum }
     $evidence.counts = @($events | Group-Object type | Sort-Object Name | ForEach-Object { @{ event = $_.Name; count = $_.Count } })
+    $evidence.sampleCount = 1
+    $evidence.roundCount = 2
+    $evidence.refusalCounts = @($events | Where-Object type -eq 'validation.verdict_refused' |
+        Group-Object { $_.payload.code } | Sort-Object Name | ForEach-Object { @{ code = $_.Name; count = $_.Count } })
     $evidence.approved = @{ task = $id; subjectId = $subject; implementationSha = $sha; specSha256 = $fresh.currentSubject.specSha256 }
     $evidence.status = 'passed'
 }
@@ -207,7 +211,7 @@ finally {
                     $hubProcesses.Add([Diagnostics.Process]::GetProcessById($scratchPid))
                 }
             }
-            $null = Cli @('down')
+            $null = Invoke-T99Cli @('down')
         }
     }
     catch { $cleanup.Add('Graceful scratch shutdown: ' + $_.Exception.Message) }

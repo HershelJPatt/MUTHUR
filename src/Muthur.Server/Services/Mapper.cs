@@ -35,7 +35,7 @@ public static class Mapper
             t.HoldReason,
             t.HoldBy,
             t.HoldExpires, t.DependsOn, t.DependencyReason, t.CurrentSubject?.ToDto(),
-            t.CurrentSubject is null ? t.ValidationInvalidationReason is null ? "unknown" : "stale" : "current");
+            t.ValidationInvalidationReason is not null ? "stale" : t.CurrentSubject is null ? "unknown" : "current");
 
     public static EventDto ToDto(this LedgerEvent e)
     {

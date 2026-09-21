@@ -48,7 +48,7 @@ public sealed partial class TaskService(Ledger ledger, LeasePolicy leases, ITask
             m.Db.Tasks.Add(task);
             await m.Db.SaveChangesAsync(ct); // assigns the sequential id the event needs
             m.Record("task.added", task.Id, new { task.Title, project = project.Key, task.Priority, parent = request.Parent });
-            return task.ToDto();
+            return await Validations.MapAsync(m.Db, task, null, ct);
         }, ct);
     }
 
@@ -98,7 +98,7 @@ public sealed partial class TaskService(Ledger ledger, LeasePolicy leases, ITask
             if (task.State == TaskState.InProgress && task.OwnerAgentId == agentId)
             {
                 task.ClaimExpires = m.Now + lease; // re-claiming your own task just renews it
-                return task.ToDto();
+                return await Validations.MapAsync(m.Db, task, null, ct);
             }
             var completed = await TaskDependencies.CompletedAsync(m.Db, ct);
             var pending = task.DependsOn.Where(d => !completed.Contains(d)).ToList();
@@ -116,7 +116,7 @@ public sealed partial class TaskService(Ledger ledger, LeasePolicy leases, ITask
             task.ClaimExpires = m.Now + lease;
             task.UpdatedAt = m.Now;
             m.Record("task.claimed", task.Id, new { agent = caller.Name, expires = task.ClaimExpires, tookOverFrom = previousOwner });
-            return task.ToDto();
+            return await Validations.MapAsync(m.Db, task, null, ct);
         }, ct);
     }
 
@@ -129,7 +129,7 @@ public sealed partial class TaskService(Ledger ledger, LeasePolicy leases, ITask
             ReturnToBacklog(task, m.Now);
             await RequestService.WithdrawForTaskAsync(m, task.Id, "task released", ct);
             m.Record("task.released", task.Id, new { agent = caller.Name, request.Reason });
-            return task.ToDto();
+            return await Validations.MapAsync(m.Db, task, null, ct);
         }, ct);
 
     public Task<TaskDto> SetDependenciesAsync(Caller caller, string id, DependenciesRequest request, CancellationToken ct = default) =>
@@ -165,7 +165,7 @@ public sealed partial class TaskService(Ledger ledger, LeasePolicy leases, ITask
             }
             task.UpdatedAt = m.Now;
             m.Record("task.dependencies_set", task.Id, new { tasks = task.DependsOn, reason = task.DependencyReason });
-            return task.ToDto();
+            return await Validations.MapAsync(m.Db, task, null, ct);
         }, ct);
 
     public Task<TaskDto> SetSpecAsync(Caller caller, string id, SetSpecRequest request, CancellationToken ct = default) =>
@@ -193,7 +193,7 @@ public sealed partial class TaskService(Ledger ledger, LeasePolicy leases, ITask
                 task.AttendedReason = $"The spec declares 'needs: {need}'. No unattended session has one, so this waits for a human validator.";
                 m.Record("task.attended", task.Id, new { reason = task.AttendedReason, source = "spec_needs", need });
             }
-            return task.ToDto();
+            return await Validations.MapAsync(m.Db, task, null, ct);
         }, ct);
 
     public Task<TaskDto> SetPriorityAsync(Caller caller, string id, SetPriorityRequest request, CancellationToken ct = default)
@@ -206,7 +206,7 @@ public sealed partial class TaskService(Ledger ledger, LeasePolicy leases, ITask
             task.Priority = request.Priority;
             task.UpdatedAt = m.Now;
             m.Record("task.priority_changed", task.Id, new { from, to = task.Priority });
-            return task.ToDto();
+            return await Validations.MapAsync(m.Db, task, null, ct);
         }, ct);
     }
 
@@ -224,12 +224,12 @@ public sealed partial class TaskService(Ledger ledger, LeasePolicy leases, ITask
             else caller.RequireIdentified();
             var was = task.AttendedReason;
             var reason = string.IsNullOrWhiteSpace(request.Reason) ? null : request.Reason.Trim();
-            if (reason == was) return task.ToDto();
+            if (reason == was) return await Validations.MapAsync(m.Db, task, null, ct);
             task.AttendedReason = reason;
             task.UpdatedAt = m.Now;
             if (reason is null) m.Record("task.attended_cleared", task.Id, new { was });
             else m.Record("task.attended", task.Id, new { reason });
-            return task.ToDto();
+            return await Validations.MapAsync(m.Db, task, null, ct);
         }, ct);
 
 
@@ -253,13 +253,13 @@ public sealed partial class TaskService(Ledger ledger, LeasePolicy leases, ITask
                 // Clearing what is not held is not an error, and neither is clearing one that has lapsed:
                 // both leave the task without a live hold, which is what the caller asked for.
                 var was = task.HoldReason;
-                if (was is null) return task.ToDto();
+                if (was is null) return await Validations.MapAsync(m.Db, task, null, ct);
                 task.HoldReason = null;
                 task.HoldBy = null;
                 task.HoldExpires = null;
                 task.UpdatedAt = m.Now;
                 m.Record("task.hold_cleared", task.Id, new { was, by = caller.Name });
-                return task.ToDto();
+                return await Validations.MapAsync(m.Db, task, null, ct);
             }
 
             task.HoldReason = reason;
@@ -267,7 +267,7 @@ public sealed partial class TaskService(Ledger ledger, LeasePolicy leases, ITask
             task.HoldExpires = m.Now + TimeSpan.FromMinutes(options.HoldMinutes);
             task.UpdatedAt = m.Now;
             m.Record("task.held", task.Id, new { reason, by = caller.Name, expires = task.HoldExpires });
-            return task.ToDto();
+            return await Validations.MapAsync(m.Db, task, null, ct);
         }, ct);
 
     /// <summary>The hold if it still counts, or null. An expired one is left on the row but is nobody's business.</summary>
@@ -288,7 +288,7 @@ public sealed partial class TaskService(Ledger ledger, LeasePolicy leases, ITask
             task.ClaimExpires = null;
             task.UpdatedAt = m.Now;
             m.Record("task.cancelled", task.Id, new { request.Reason });
-            return task.ToDto();
+            return await Validations.MapAsync(m.Db, task, null, ct);
         }, ct);
 
     public Task<TaskDto> ReopenAsync(Caller caller, string id, CancellationToken ct = default)
@@ -300,7 +300,7 @@ public sealed partial class TaskService(Ledger ledger, LeasePolicy leases, ITask
             TaskStateMachine.EnsureCanTransition(Wire.TaskId(task.Id), task.State, TaskState.Backlog);
             ReturnToBacklog(task, m.Now);
             m.Record("task.reopened", task.Id);
-            return task.ToDto();
+            return await Validations.MapAsync(m.Db, task, null, ct);
         }, ct);
     }
 
