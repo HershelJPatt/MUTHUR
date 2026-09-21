@@ -41,6 +41,8 @@ public static class Routes
     public const string ConductorOrchestrators = Api + "/conductor/orchestrators";
     public const string AccountLimits = Api + "/harness/limits";
     public const string WorkerRuns = Api + "/workers/runs";
+    public const string ProbeAdmit = Api + "/workers/probes/admit";
+    public const string ProbeRelease = Api + "/workers/probes/release";
 
     public const string Inbound = Api + "/inbound";
     public static string InboundAction(string id, string action) => $"{Inbound}/{Uri.EscapeDataString(id)}/{action}";
