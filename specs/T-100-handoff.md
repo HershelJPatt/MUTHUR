@@ -1,3 +1,5 @@
+> Historical checkpoint: superseded by the completed verification section in specs/T-100-evidence.md on 2026-09-21. Preserved for provenance.
+
 # T-100 blocked handoff — 2026-09-21
 
 T-100 is not implemented and must not be submitted or landed from this evidence.
