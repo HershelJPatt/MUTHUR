@@ -49,6 +49,10 @@ muthur kit install --harness claude                            # or: codex, gene
 build/test/run commands; agents read it. Re-running the install never overwrites a brief you have edited, and it prints the
 `muthur role define` command for each one — a brief does nothing until you create its role.
 
+Applying protected installed agent definitions requires explicit founder approval for the reviewed change
+and an attended session. `kit install` is not a sanctioned unattended bypass. See the
+[protected agent definitions workflow](kit/core/orchestrate.md#protected-agent-definitions) for approval and task routing.
+
 ## The organization
 
 | Who | Runs on | Does | Never |
