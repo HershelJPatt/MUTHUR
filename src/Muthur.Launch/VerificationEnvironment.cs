@@ -3,7 +3,7 @@ namespace Muthur.Launch;
 public static class VerificationEnvironment
 {
     public static readonly string[] Allowed = ["PATH", "SystemRoot", "COMSPEC", "PATHEXT", "ProgramFiles",
-        "ProgramFiles(x86)", "PROCESSOR_ARCHITECTURE", "DOTNET_ROOT", "NUGET_PACKAGES", "VSINSTALLDIR", "VCINSTALLDIR", "VCToolsInstallDir",
+        "ProgramFiles(x86)", "ProgramData", "PROCESSOR_ARCHITECTURE", "DOTNET_ROOT", "NUGET_PACKAGES", "VSINSTALLDIR", "VCINSTALLDIR", "VCToolsInstallDir",
         "VCToolsVersion", "WindowsSdkDir", "WindowsSDKVersion", "WindowsSDKLibVersion", "UniversalCRTSdkDir",
         "UCRTVersion", "INCLUDE", "LIB", "LIBPATH", "VSCMD_ARG_HOST_ARCH", "VSCMD_ARG_TGT_ARCH"];
 

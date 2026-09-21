@@ -100,6 +100,30 @@ public sealed class VerificationTests : IDisposable
         Assert.NotEqual(VerificationCache.Key(identity), VerificationCache.Key(VerificationEnvironment.Identity(environment)));
     }
 
+    [Fact]
+    public void Program_data_is_inherited_when_present_and_hashed_as_toolchain_identity()
+    {
+        Assert.Contains("ProgramData", VerificationEnvironment.Allowed);
+        var environment = VerificationEnvironment.Create(root, "http://127.0.0.1:12345");
+        var inherited = Environment.GetEnvironmentVariable("ProgramData");
+        if (string.IsNullOrEmpty(inherited)) Assert.DoesNotContain("ProgramData", environment.Keys);
+        else Assert.Equal(inherited, environment["ProgramData"]);
+        var identity = VerificationEnvironment.Identity(environment);
+        Assert.Equal(VerificationFiles.Hash(inherited is { Length: > 0 } ? inherited : "<absent>"), identity["environment/ProgramData"]);
+
+        environment["ProgramData"] = Path.Combine(root, "machine-data-first");
+        var first = VerificationEnvironment.Identity(environment);
+        Assert.Equal(VerificationFiles.Hash(environment["ProgramData"]), first["environment/ProgramData"]);
+        environment["ProgramData"] = Path.Combine(root, "machine-data-second");
+        var second = VerificationEnvironment.Identity(environment);
+        Assert.NotEqual(first["environment/ProgramData"], second["environment/ProgramData"]);
+        Assert.NotEqual(VerificationCache.Key(first), VerificationCache.Key(second));
+        environment.Remove("ProgramData");
+        var absent = VerificationEnvironment.Identity(environment);
+        Assert.Equal(VerificationFiles.Hash("<absent>"), absent["environment/ProgramData"]);
+        Assert.NotEqual(VerificationCache.Key(second), VerificationCache.Key(absent));
+    }
+
     [Theory]
     [InlineData("../outside")]
     [InlineData("/absolute")]
