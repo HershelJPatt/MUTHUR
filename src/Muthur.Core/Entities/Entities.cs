@@ -68,6 +68,8 @@ public sealed class WorkTask
     public string? SpecSha256 { get; set; }
     public Guid? CurrentSubjectId { get; set; }
     public ValidationSubject? CurrentSubject { get; set; }
+    public Guid? CurrentIntegrationCandidateId { get; set; }
+    public IntegrationCandidate? CurrentIntegrationCandidate { get; set; }
     public string? ValidationInvalidationReason { get; set; }
     public string? Branch { get; set; }
     public string? PrUrl { get; set; }
