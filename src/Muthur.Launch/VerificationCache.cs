@@ -36,7 +36,7 @@ public sealed class VerificationCache(string root, TimeProvider? clock = null)
     public async Task<VerificationCacheRead> RestoreAsync(string key, SortedDictionary<string, string> inputs, string install, CancellationToken ct)
     {
         using var gate = await LockAsync(key, ct);
-        RemoveAbandonedStages(key);
+        RemoveAbandonedStages(key, ct);
         var entry = Entry(key);
         if (!Directory.Exists(entry)) return new("miss", "No completed entry.", null);
         try
@@ -47,13 +47,13 @@ public sealed class VerificationCache(string root, TimeProvider? clock = null)
         }
         catch (OperationCanceledException)
         {
-            if (Directory.Exists(install)) VerificationFiles.DeleteOwned(install, Path.GetDirectoryName(install)!);
+            if (Directory.Exists(install)) VerificationFiles.DeleteOwned(install, Path.GetDirectoryName(install)!, ct);
             throw;
         }
         catch (Exception ex) when (ex is IOException or ArgumentException or JsonException or UnauthorizedAccessException)
         {
-            VerificationFiles.DeleteOwned(entry, root);
-            if (Directory.Exists(install)) VerificationFiles.DeleteOwned(install, Path.GetDirectoryName(install)!);
+            VerificationFiles.DeleteOwned(entry, root, ct);
+            if (Directory.Exists(install)) VerificationFiles.DeleteOwned(install, Path.GetDirectoryName(install)!, ct);
             return new("rejected", ex.Message, null);
         }
     }
@@ -90,7 +90,7 @@ public sealed class VerificationCache(string root, TimeProvider? clock = null)
     {
         var key = evidence.Key ?? throw new ArgumentException("No complete cache identity.");
         using var gate = await LockAsync(key, ct);
-        RemoveAbandonedStages(key);
+        RemoveAbandonedStages(key, ct);
         var stage = VerificationFiles.PlainPath(Path.Combine(root, key + ".stage-" + evidence.RunId.ToString("N")));
         using var current = Process.GetCurrentProcess();
         var owner = new VerificationCacheOwner(1, key, evidence.RunId, current.Id, current.StartTime.ToUniversalTime().Ticks);
@@ -129,7 +129,7 @@ public sealed class VerificationCache(string root, TimeProvider? clock = null)
             if (Directory.Exists(destination))
             {
                 _ = Read(destination, key, evidence.Inputs, ct);
-                VerificationFiles.DeleteOwned(stage, root);
+                VerificationFiles.DeleteOwned(stage, root, ct);
             }
             else
             {
@@ -142,7 +142,7 @@ public sealed class VerificationCache(string root, TimeProvider? clock = null)
         // maintenance follows publication, and readers accept the complete directory immediately.
     }
 
-    public void Discard(string stage, Guid runId)
+    public void Discard(string stage, Guid runId, CancellationToken ct = default)
     {
         VerificationFiles.PlainPath(stage);
         if (!VerificationFiles.Within(stage, root) || !stage.EndsWith(".stage-" + runId.ToString("N"), StringComparison.Ordinal))
@@ -152,7 +152,7 @@ public sealed class VerificationCache(string root, TimeProvider? clock = null)
         var owner = JsonSerializer.Deserialize(File.ReadAllText(ownerPath), VerificationJsonContext.Default.VerificationCacheOwner);
         if (owner?.Version != 1 || owner.RunId != runId || Path.GetFileName(stage) != owner.Key + ".stage-" + runId.ToString("N"))
             throw new IOException("Staging sidecar ownership mismatch.");
-        VerificationFiles.DeleteOwned(stage, root);
+        VerificationFiles.DeleteOwned(stage, root, ct);
         File.Delete(ownerPath);
     }
 
@@ -160,7 +160,7 @@ public sealed class VerificationCache(string root, TimeProvider? clock = null)
     {
         using var gate = await LockAsync(evidence.Key!, ct);
         ct.ThrowIfCancellationRequested();
-        Discard(stage, evidence.RunId);
+        Discard(stage, evidence.RunId, ct);
     }
 
     public async Task RevokeAsync(VerificationEvidence evidence, CancellationToken ct)
@@ -171,7 +171,7 @@ public sealed class VerificationCache(string root, TimeProvider? clock = null)
             VerificationFiles.DeleteOwned(entry, root, ct);
     }
 
-    private void RemoveAbandonedStages(string key)
+    private void RemoveAbandonedStages(string key, CancellationToken ct)
     {
         foreach (var sidecar in Directory.EnumerateFiles(root, key + ".stage-*.owner"))
         {
@@ -190,7 +190,7 @@ public sealed class VerificationCache(string root, TimeProvider? clock = null)
                 if (!process.HasExited && process.StartTime.ToUniversalTime().Ticks == owner.StartUtcTicks) continue;
             }
             catch (ArgumentException) { }
-            VerificationFiles.DeleteOwned(stage, root);
+            VerificationFiles.DeleteOwned(stage, root, ct);
             File.Delete(ownerPath);
         }
     }

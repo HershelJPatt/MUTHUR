@@ -127,33 +127,36 @@ public static class VerificationFiles
         if (!Within(path, parent)) throw new IOException("Deletion escaped owned root.");
         PlainPath(path);
         if (!Directory.Exists(path)) return;
-        // Inspect every directory before recursing: Directory.Delete must never traverse a junction.
-        void Check(string dir)
+        void DeleteDirectory(string dir)
         {
             ct.ThrowIfCancellationRequested();
+            PlainPath(dir);
             foreach (var entry in Directory.EnumerateFileSystemEntries(dir))
             {
                 ct.ThrowIfCancellationRequested();
-                PlainPath(entry);
-                if (Directory.Exists(entry)) Check(entry);
-            }
-        }
-        Check(path);
-        void ClearReadOnly(string dir)
-        {
-            ct.ThrowIfCancellationRequested();
-            foreach (var entry in Directory.EnumerateFileSystemEntries(dir))
-            {
-                ct.ThrowIfCancellationRequested();
-                PlainPath(entry);
+                PlainPath(dir);
                 var attributes = File.GetAttributes(entry);
-                if ((attributes & FileAttributes.Directory) != 0) ClearReadOnly(entry);
-                else if ((attributes & FileAttributes.ReadOnly) != 0)
-                    File.SetAttributes(entry, attributes & ~FileAttributes.ReadOnly);
+                if ((attributes & FileAttributes.ReparsePoint) != 0)
+                {
+                    // Unlink only this entry, including dangling links; never inspect its target.
+                    if ((attributes & FileAttributes.Directory) != 0) Directory.Delete(entry, false);
+                    else File.Delete(entry);
+                }
+                else if ((attributes & FileAttributes.Directory) != 0) DeleteDirectory(entry);
+                else
+                {
+                    PlainPath(entry);
+                    if ((attributes & FileAttributes.ReadOnly) != 0)
+                        File.SetAttributes(entry, attributes & ~FileAttributes.ReadOnly);
+                    ct.ThrowIfCancellationRequested();
+                    PlainPath(entry);
+                    File.Delete(entry);
+                }
             }
+            ct.ThrowIfCancellationRequested();
+            PlainPath(dir);
+            Directory.Delete(dir, false);
         }
-        ClearReadOnly(path);
-        ct.ThrowIfCancellationRequested();
-        Directory.Delete(path, true);
+        DeleteDirectory(path);
     }
 }

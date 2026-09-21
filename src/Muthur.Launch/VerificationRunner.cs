@@ -182,7 +182,7 @@ public sealed class VerificationRunner(IProcessRunner processes, TimeProvider? t
                 {
                     using var cleanup = new CancellationTokenSource(TimeSpan.FromSeconds(45));
                     if (job is not null) await job.StopAsync(cleanup.Token);
-                    VerificationFiles.DeleteOwned(provisionalScratch, Path.GetDirectoryName(provisionalScratch)!);
+                    VerificationFiles.DeleteOwned(provisionalScratch, Path.GetDirectoryName(provisionalScratch)!, cleanup.Token);
                 }
                 catch (Exception ex) { exit = 1; earlyError = "Initial cleanup failed: " + ex.Message; }
             }
@@ -557,7 +557,7 @@ public sealed class VerificationRunner(IProcessRunner processes, TimeProvider? t
                 throw new IOException("Owned checkout HEAD changed; refuse deletion.");
             await Git(ownership.Repository, ["worktree", "remove", "--force", ownership.Checkout], ct, environment);
         }
-        VerificationFiles.DeleteOwned(ownership.Scratch, ownership.Output);
+        VerificationFiles.DeleteOwned(ownership.Scratch, ownership.Output, ct);
         ownership.Cleaned = true;
         SaveOwnership(ownership);
     }

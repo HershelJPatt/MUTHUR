@@ -103,7 +103,7 @@ public static class VerificationContainmentFixture
                 try { await running.WaitAsync(cleanup.Token); }
                 catch (OperationCanceledException) { }
             }
-            VerificationFiles.DeleteOwned(scratch, output);
+            VerificationFiles.DeleteOwned(scratch, output, cleanup.Token);
             owner.Cleaned = true; owner.CommandRunning = false; owner.ActiveCommand = null;
             evidence.CleanupSucceeded = true; evidence.EndedUtc = DateTimeOffset.UtcNow;
             if (evidence.Status == "running") evidence.Status = "failed";

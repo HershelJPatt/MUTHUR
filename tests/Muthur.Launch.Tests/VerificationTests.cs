@@ -447,10 +447,43 @@ public sealed class VerificationTests : IDisposable
             var readOnly = Path.Combine(target, "keep");
             File.WriteAllText(readOnly, "outside owned junction");
             File.SetAttributes(readOnly, File.GetAttributes(readOnly) | FileAttributes.ReadOnly);
-            Assert.Throws<IOException>(() => VerificationFiles.DeleteOwned(root, Path.GetDirectoryName(root)!));
+            Assert.Throws<IOException>(() => VerificationFiles.Copy(root, Path.Combine(root, "copy"),
+                [new("junction/keep", new FileInfo(readOnly).Length, VerificationFiles.HashFile(readOnly))]));
+            Assert.Throws<IOException>(() => VerificationFiles.DeleteOwned(link, root));
+            Assert.Throws<IOException>(() => VerificationFiles.DeleteOwned(Path.Combine(link, "child"), root));
             Assert.True((File.GetAttributes(readOnly) & FileAttributes.ReadOnly) != 0);
         }
         finally { Directory.Delete(link); }
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task Owned_nested_junction_is_unlinked_without_touching_target(bool dangling)
+    {
+        var owned = Path.Combine(root, "owned");
+        var nested = Path.Combine(owned, "kit", "linked");
+        Directory.CreateDirectory(nested);
+        var target = Path.Combine(root, "outside");
+        Directory.CreateDirectory(target);
+        var sentinel = Path.Combine(target, "keep");
+        byte[] bytes = [0, 1, 2, 255];
+        File.WriteAllBytes(sentinel, bytes);
+        File.SetAttributes(sentinel, File.GetAttributes(sentinel) | FileAttributes.ReadOnly | FileAttributes.Archive);
+        var attributes = File.GetAttributes(sentinel);
+        var targetAttributes = File.GetAttributes(target);
+        await CreateJunction(Path.Combine(nested, "out"), target);
+        if (dangling) Directory.Move(target, target + "-moved");
+        using var cancel = new CancellationTokenSource();
+        cancel.Cancel();
+        Assert.Throws<OperationCanceledException>(() => VerificationFiles.DeleteOwned(owned, root, cancel.Token));
+        Assert.True((File.GetAttributes(Path.Combine(nested, "out")) & FileAttributes.ReparsePoint) != 0);
+        VerificationFiles.DeleteOwned(owned, root);
+        Assert.False(Directory.Exists(owned));
+        var retained = dangling ? target + "-moved" : target;
+        Assert.Equal(bytes, File.ReadAllBytes(Path.Combine(retained, "keep")));
+        Assert.Equal(attributes, File.GetAttributes(Path.Combine(retained, "keep")));
+        Assert.Equal(targetAttributes, File.GetAttributes(retained));
     }
 
     [Theory]
@@ -523,7 +556,18 @@ public sealed class VerificationTests : IDisposable
         var output = Path.Combine(root, "output");
         Directory.CreateDirectory(output);
         var scratch = Path.Combine(output, "scratch-" + evidence.RunId.ToString("N"));
-        if (!alreadyCleaned) Directory.CreateDirectory(scratch);
+        var target = Path.Combine(root, "outside");
+        Directory.CreateDirectory(target);
+        var sentinel = Path.Combine(target, "keep");
+        File.WriteAllText(sentinel, "preserve interrupted fixture target");
+        File.SetAttributes(sentinel, File.GetAttributes(sentinel) | FileAttributes.ReadOnly);
+        var attributes = File.GetAttributes(sentinel);
+        if (!alreadyCleaned)
+        {
+            var nested = Path.Combine(scratch, "temp", "fixture", "kit", "linked");
+            Directory.CreateDirectory(nested);
+            await CreateJunction(Path.Combine(nested, "out"), target);
+        }
         var owner = new VerificationOwnership
         {
             RunId = evidence.RunId, Output = output, Repository = root, Scratch = scratch,
@@ -537,6 +581,19 @@ public sealed class VerificationTests : IDisposable
         Assert.Equal("interrupted", (await runner.CleanupAsync(output)).Status);
         Assert.False(Directory.Exists(scratch));
         Assert.True(File.Exists(Path.Combine(output, "evidence.json")));
+        var recovered = JsonSerializer.Deserialize(File.ReadAllText(Path.Combine(output, "evidence.json")), VerificationJsonContext.Default.VerificationEvidence)!;
+        Assert.Equal("interrupted", recovered.Status);
+        Assert.True(recovered.CleanupSucceeded);
+        Assert.Equal("preserve interrupted fixture target", File.ReadAllText(sentinel));
+        Assert.Equal(attributes, File.GetAttributes(sentinel));
+    }
+
+    private async Task CreateJunction(string link, string target)
+    {
+        var script = Path.Combine(root, "create-junction.ps1");
+        File.WriteAllText(script, "param($Link, $Target) New-Item -ItemType Junction -Path $Link -Target $Target | Out-Null");
+        var result = await new ProcessRunner().RunAsync("pwsh", ["-NoProfile", "-File", script, link, target], root);
+        Assert.True(result.Ok, result.Message);
     }
 
     [Fact]
