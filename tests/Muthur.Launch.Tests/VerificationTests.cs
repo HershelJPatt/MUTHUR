@@ -171,7 +171,7 @@ public sealed class VerificationTests : IDisposable
     {
         var environment = VerificationEnvironment.Create(root, "http://127.0.0.1:12345");
         Assert.All(environment.Keys, key => Assert.True(VerificationEnvironment.Allowed.Contains(key) ||
-            new[] { "HOME", "USERPROFILE", "DOTNET_CLI_HOME", "TEMP", "TMP", "MUTHUR_HOME", "MUTHUR_URL", "APPDATA", "LOCALAPPDATA" }.Contains(key)));
+            new[] { "HOME", "USERPROFILE", "DOTNET_CLI_HOME", "TEMP", "TMP", "MUTHUR_HOME", "MUTHUR_URL", "APPDATA", "LOCALAPPDATA", "GIT_CEILING_DIRECTORIES" }.Contains(key)));
         Assert.DoesNotContain("MUTHUR_TOKEN", environment.Keys);
         Assert.DoesNotContain("MUTHUR_AGENT", environment.Keys);
         foreach (var variable in new[] { "HOME", "USERPROFILE", "DOTNET_CLI_HOME", "TEMP", "TMP", "MUTHUR_HOME", "APPDATA", "LOCALAPPDATA" })

@@ -1,0 +1,23 @@
+@page "/outcomes"
+@inherits LivePanel
+@inject ObjectiveService Objectives
+
+<PageTitle>MUTHUR · Outcomes</PageTitle>
+<div class="page">
+    <h1>Outcomes</h1>
+    <p>Delivered work and demonstrated outcomes are recorded separately.</p>
+    @if (_items.Count == 0) { <p>No approved objectives have been recorded.</p> }
+    <table>
+        <thead><tr><th>Objective</th><th>Project</th><th>Owner</th><th>State</th><th>Revision</th></tr></thead>
+        <tbody>
+        @foreach (var item in _items)
+        {
+            <tr><td><a href="@($"/outcomes/{item.Id}")">@item.Id · @item.Title</a></td><td>@item.Project</td><td>@item.Owner</td><td>@item.State</td><td>@item.Revision</td></tr>
+        }
+        </tbody>
+    </table>
+</div>
+@code {
+    private IReadOnlyList<ObjectiveDto> _items = [];
+    protected override async Task LoadAsync() => _items = await Objectives.ListAsync();
+}

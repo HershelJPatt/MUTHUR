@@ -166,6 +166,24 @@ public sealed class IntegrationService(Ledger ledger, ITaskLander lander, Muthur
 
     internal Task SweepAsync(CancellationToken ct = default) => ledger.MutateAsync(Caller.System, m => SweepAsync(m, ct), ct);
 
+    internal Task<WorkTask?> NextAsync(IReadOnlySet<string> budgetBlocked, CancellationToken ct = default) =>
+        ledger.MutateAsync<WorkTask?>(Caller.System, async m =>
+        {
+            await SweepAsync(m, ct);
+            var active = await m.Db.IntegrationCandidates.Where(c => ActiveStates.Contains(c.State)).ToListAsync(ct);
+            if (active.Any(c => ActiveStates.Contains(c.State))) return null;
+            var tasks = await m.Db.Tasks.Include(t => t.Project).Where(t => t.State == TaskState.Validated && t.Project!.LandMode == LandMode.Merge).ToListAsync(ct);
+            var eligible = new List<WorkTask>();
+            foreach (var task in tasks)
+            {
+                if (budgetBlocked.Contains(Wire.TaskId(task.Id) + "/#integration")) continue;
+                try { await RequireEligibleAsync(m, task, ct); await RequireRetryAsync(m, task, ct); eligible.Add(task); }
+                catch (MuthurException) { }
+            }
+            var events = await m.Db.Events.Where(e => e.Type == "task.validated" || e.Type == "integration.invalidated" || e.Type == "integration.interrupted").ToListAsync(ct);
+            return eligible.OrderBy(t => events.Where(e => e.TaskId == t.Id).Select(e => e.Seq).DefaultIfEmpty(long.MaxValue).Max()).ThenBy(t => t.Id).FirstOrDefault();
+        }, ct);
+
     internal async Task SweepAsync(Mutation m, CancellationToken ct)
     {
         var active = await m.Db.IntegrationCandidates.Where(c => ActiveStates.Contains(c.State)).ToListAsync(ct);
@@ -190,12 +208,17 @@ public sealed class IntegrationService(Ledger ledger, ITaskLander lander, Muthur
             try { await RequireInputsAsync(m, task, ct); }
             catch (MuthurException ex) { refusal = ex; }
         }
-        if (refusal is null && await lander.BranchHeadAsync(task.Project!, c.DefaultBranch, ct) != c.TargetSha)
-            refusal = Fail.Conflict("integration_target_changed", "The default branch moved. Check a new candidate against its current revision.");
+        if (refusal is null && await lander.BranchHeadAsync(task.Project!, c.DefaultBranch, ct) is { } target && target != c.TargetSha)
+        {
+            var recoveringPromotion = c.State == "passed" && c.PromotionIntentAt is not null && c.CandidateSha is not null
+                && await lander.IsAncestorAsync(task.Project!, c.CandidateSha, target, ct);
+            if (!recoveringPromotion) refusal = Fail.Conflict("integration_target_changed", "The default branch moved. Check a new candidate against its current revision.");
+        }
         if (refusal is not null)
         {
             Invalidate(m, c, refusal.Code, refusal.Message);
-            if (c.Attempt >= options.ConductorMaxAttempts && task.State == TaskState.Validated)
+            if (c.Attempt >= options.ConductorMaxAttempts && task.State == TaskState.Validated
+                && task.CurrentSubjectId == c.SubjectId && task.CurrentIntegrationCandidateId == c.Id)
                 ReturnToOwner(m, task, "Integration retry limit reached. " + Validations.Recovery);
             return refusal;
         }
@@ -294,7 +317,7 @@ public sealed class IntegrationService(Ledger ledger, ITaskLander lander, Muthur
             if (c.CandidateSha is not null)
             {
                 if (c.CandidateSha != request.CandidateSha || c.TreeSha != request.TreeSha || c.AlreadyIncluded != request.AlreadyIncluded)
-                    throw Fail.Conflict("integration_candidate_invalid", "A different immutable candidate is already recorded.");
+                    throw Invalid();
                 return;
             }
             RequireActive(c);

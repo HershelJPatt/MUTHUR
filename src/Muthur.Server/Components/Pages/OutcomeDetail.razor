@@ -1,0 +1,73 @@
+@page "/outcomes/{Id}"
+@inherits LivePanel
+@inject ObjectiveService Objectives
+
+<PageTitle>MUTHUR · Outcome @Id</PageTitle>
+<div class="page">
+@if (_view is null) { <h1>Objective not found</h1><a href="/outcomes">All outcomes</a> }
+else
+{
+    var o = _view.Objective;
+    var d = o.Revisions[^1].Definition;
+    <h1>@o.Id · @o.Title</h1>
+    <p>@o.State · revision @o.Revision · owned by @o.Owner</p>
+    <h2>Approved outcome</h2><p>@d.Outcome</p><p>@d.Scope</p>
+    <h2>Success condition</h2><p>@d.SuccessCondition</p>
+    <p>@d.Metric @d.Comparison @d.Target @d.Baseline.Unit · minimum sample @d.MinimumSample</p>
+    <p>@d.WindowStart.ToString("u") to @d.WindowEnd.ToString("u") · @_view.ObservationStatus</p>
+    <h2>Baseline</h2><p>@d.Baseline.Quality · @(d.Baseline.Value?.ToString() ?? "unknown") @d.Baseline.Unit · n=@d.Baseline.SampleCount</p>
+    <p>@d.Baseline.Evidence · @d.Baseline.MissingData</p>
+    <h2>Contributing work</h2>
+    <ul>@foreach (var task in _view.Tasks) { <li><a href="@($"/tasks/{task.Id}")">@task.Id · @task.Title</a> · @task.Role · @task.State @(task.DeliveredCapability ? "· delivered capability" : "")</li> }</ul>
+    <h2>Blockers and decisions</h2>
+    <ul>@foreach (var blocker in _view.Blockers) { <li>@blocker.Task waits for @blocker.Dependency: @blocker.Reason</li> }</ul>
+    <ul>@foreach (var decision in _view.Decisions) { <li><a href="/needs-you">Request @decision.Id</a> · @decision.Task · @decision.Question</li> }</ul>
+    <h2>Evidence</h2>
+    @foreach (var e in o.Evidence)
+    {
+        <article><h3>@e.Key · @e.Kind · revision @e.Revision</h3><p>@e.Description</p>
+        <p>@e.Measurement.Quality · @(e.Measurement.Value?.ToString() ?? "unknown") @e.Measurement.Unit · n=@e.Measurement.SampleCount · @e.Measurement.MissingData</p>
+        <p>@e.Measurement.From.ToString("u") to @e.Measurement.To.ToString("u") · @e.Measurement.Evidence</p>
+        <p>@e.Actor at @e.At.ToString("u")</p></article>
+    }
+    <h2>Founder accepted outcomes</h2>
+    @foreach (var a in o.Acceptances) { <p>Revision @a.Revision · @a.ObservationKey · @a.Actor at @a.At.ToString("u"): @a.Reason</p> }
+    @if (_view.RegressionAfterAcceptance) { <p>Regression evidence was recorded after acceptance and needs review.</p> }
+    <h2>Founder effort</h2>
+    <p>@_view.MeasuredFounderMinutes measured minutes; @_view.EstimatedFounderMinutes estimated minutes.</p>
+    <p>Accepted outcomes per measured founder hour: @(_view.OutcomesPerMeasuredFounderHour?.ToString() ?? "unknown"). Per estimated hour: @(_view.OutcomesPerEstimatedFounderHour?.ToString() ?? "unknown").</p>
+    @foreach (var e in o.Effort) { <p>@e.Key: @e.Minutes @e.Quality minutes · @e.Source · @e.Note</p> }
+    <h2>Revision history</h2>
+    @foreach (var revision in o.Revisions)
+    {
+        <details><summary>Revision @revision.Number · @revision.Actor · @revision.At.ToString("u")</summary>
+        <p>@revision.Definition.Reason</p><p>@revision.Definition.Outcome</p><p>@revision.Definition.SuccessCondition</p>
+        <h3>Recorded approval reference</h3><pre>@revision.ApprovalText</pre></details>
+    }
+    <h2>Resource evidence</h2>
+    <p>@_view.Resources.From.ToString("u") to @_view.Resources.To.ToString("u") · cohort @string.Join(", ", _view.Resources.Cohort)</p>
+    <p>@_view.Resources.StaffingAttempts staffing attempts; @(_view.Resources.ActualStarts?.ToString() ?? "unknown") actual starts; @_view.Resources.WorkerReports terminal worker reports.</p>
+    <p>@_view.Resources.RecordedWorkerSeconds recorded worker run-seconds; @_view.Resources.WaitingTaskSeconds waiting task-seconds.</p>
+    <p>@_view.Resources.RepeatedDependencyParkings repeated dependency parking proxy events; @_view.Resources.FounderInterventions founder answers.</p>
+    <p>Delivery n=@_view.Resources.Deliveries.Count · median @(_view.Resources.MedianDeliverySeconds?.ToString() ?? "unknown") seconds · p90 @(_view.Resources.P90DeliverySeconds?.ToString() ?? "unknown") seconds.</p>
+    <table><thead><tr><th>Ledger event</th><th>Run</th><th>Task</th><th>Worker</th><th>Seconds</th><th>Cost USD</th><th>Tokens in / out</th><th>Revision</th></tr></thead><tbody>
+    @foreach (var row in _view.Resources.Runs)
+    {
+        <tr><td>@row.Sequence</td><td>@(row.Run.RunId ?? "unknown")</td><td>@row.Run.Task</td><td>@row.Run.Worker · @row.Run.Account · @row.Run.Status</td><td>@row.Run.Seconds</td><td>@(row.Run.CostUsd?.ToString() ?? "unknown")</td><td>@(row.Run.InputTokens?.ToString() ?? "unknown") / @(row.Run.OutputTokens?.ToString() ?? "unknown")</td><td>@row.Run.HeadCommit</td></tr>
+    }
+    </tbody></table>
+    @foreach (var missing in _view.Resources.MissingData) { <p>@missing</p> }
+    @foreach (var missing in _view.MissingData) { <p>@missing</p> }
+}
+</div>
+@code {
+    [Parameter] public string Id { get; set; } = "";
+    private ObjectiveView? _view;
+    protected override async Task OnParametersSetAsync() => await LoadAsync();
+    protected override TimeSpan? ClockInterval => TimeSpan.FromMinutes(1);
+    protected override async Task LoadAsync()
+    {
+        try { _view = await Objectives.GetAsync(Id); }
+        catch (Muthur.Core.MuthurException ex) when (ex.Code == "not_found") { _view = null; }
+    }
+}

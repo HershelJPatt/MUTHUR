@@ -12,5 +12,6 @@
   </ItemGroup>
   <ItemGroup>
     <Using Include="Xunit" />
+    <Compile Include="../Muthur.XmlDocCheck.Tests/RepositoryFixtureCleanup.cs" Link="RepositoryFixtureCleanup.cs" />
   </ItemGroup>
 </Project>

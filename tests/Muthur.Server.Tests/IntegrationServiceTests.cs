@@ -424,6 +424,75 @@ public sealed class IntegrationServiceTests : IDisposable
         Assert.Equal(TaskState.InProgress, (await _owner.GetTaskAsync(task.Id)).Task.State);
     }
 
+    [Fact]
+    public async Task Historical_attempt_cap_cannot_recover_a_newly_approved_subject()
+    {
+        var task = await ApprovedAsync();
+        _hub.Services.GetRequiredService<MuthurOptions>().ConductorMaxAttempts = 1;
+        var old = (await ClaimAsync(task)).Candidate;
+        (await _owner.PostActionAsync(task.Id, "revalidate", new RevalidateRequest("A fresh independent round is required."))).EnsureSuccessStatusCode();
+        task = await (await _owner.PostActionAsync(task.Id, "implemented", new ImplementedRequest("task/" + task.Id))).ReadTaskAsync();
+        task = await (await _validator.PostActionAsync(task.Id, "pass", new VerdictRequest("win-validator", "Independently checked the replacement round and recorded fixture evidence.", task.CurrentSubject!.Id))).ReadTaskAsync();
+        var next = (await ClaimAsync(task)).Candidate;
+        Assert.NotEqual(old.SubjectId, next.SubjectId);
+        Assert.Equal(1, next.Attempt);
+        Assert.Equal(TaskState.Validated, (await _owner.GetTaskAsync(task.Id)).Task.State);
+        Assert.Equal("invalidated", (await Service.ShowAsync(Caller.Founder, task.Id)).History.Single(c => c.Id == old.Id).State);
+        await ErrorAsync("stale_integration_candidate", await PostAsync(task, "renew", new IntegrationRenewRequest(old.AssignmentId, old.SubjectId)));
+        var after = (await _owner.GetTaskAsync(task.Id)).Task;
+        Assert.Equal(TaskState.Validated, after.State);
+        Assert.Equal(next.Id, after.CurrentIntegrationCandidate!.Id);
+        Assert.Equal(next.LeaseExpires, after.CurrentIntegrationCandidate.LeaseExpires);
+    }
+
+    [Fact]
+    public async Task Landing_requires_tested_candidate_refuses_checked_out_target_and_promotes_exactly_once()
+    {
+        var task = await ApprovedAsync();
+        await ErrorAsync("integration_required", await _owner.PostActionAsync(task.Id, "land", new { }));
+        var candidate = await RegisterAsync(task, (await ClaimAsync(task)).Candidate);
+        await ReadAsync<IntegrationCandidateDto>(await PostAsync(task, "verdict", Evidence(candidate)));
+        await ErrorAsync("integration_target_checked_out", await _owner.PostActionAsync(task.Id, "land", new { }));
+        Assert.Equal(candidate.TargetSha, _repo.Git("rev-parse", "main"));
+        _repo.Git("checkout", "--detach", "-q", "main");
+        (await _owner.PostActionAsync(task.Id, "land", new { })).EnsureSuccessStatusCode();
+        Assert.Equal(candidate.CandidateSha, _repo.Git("rev-parse", "main"));
+        (await _owner.PostActionAsync(task.Id, "land", new { })).EnsureSuccessStatusCode();
+        Assert.Single((await _owner.GetTaskAsync(task.Id)).Events, e => e.Type == "integration.promoted");
+        Assert.Single((await _owner.GetTaskAsync(task.Id)).Events, e => e.Type == "task.landed");
+    }
+
+    [Fact]
+    public async Task Durable_intent_recovers_after_git_update_before_ledger_finalization()
+    {
+        var task = await ApprovedAsync();
+        var candidate = await RegisterAsync(task, (await ClaimAsync(task)).Candidate);
+        await ReadAsync<IntegrationCandidateDto>(await PostAsync(task, "verdict", Evidence(candidate)));
+        await ErrorAsync("integration_target_checked_out", await _owner.PostActionAsync(task.Id, "land", new { }));
+        Assert.NotNull((await Service.ShowAsync(Caller.Founder, task.Id)).Current!.PromotionIntentAt);
+        _repo.Git("checkout", "--detach", "-q", "main");
+        _repo.Git("update-ref", "refs/heads/main", candidate.CandidateSha!, candidate.TargetSha);
+        (await _owner.PostActionAsync(task.Id, "land", new { })).EnsureSuccessStatusCode();
+        Assert.Equal(TaskState.Done, (await _owner.GetTaskAsync(task.Id)).Task.State);
+        Assert.Equal(candidate.CandidateSha, _repo.Git("rev-parse", "main"));
+    }
+
+    [Fact]
+    public async Task Terminal_registration_replay_preserves_evidence_and_lease()
+    {
+        var task = await ApprovedAsync();
+        var assigned = (await ClaimAsync(task)).Candidate;
+        var request = Candidate(assigned);
+        var candidate = await ReadAsync<IntegrationCandidateDto>(await PostAsync(task, "candidate", request));
+        var passed = await ReadAsync<IntegrationCandidateDto>(await PostAsync(task, "verdict", Evidence(candidate)));
+        _hub.Clock.Advance(TimeSpan.FromSeconds(2));
+        var replay = await ReadAsync<IntegrationCandidateDto>(await PostAsync(task, "candidate", request));
+        Assert.Equal(passed.LeaseExpires, replay.LeaseExpires);
+        Assert.Equal(passed.EvidenceSha256, replay.EvidenceSha256);
+        Assert.Equal("passed", replay.State);
+        await ErrorAsync("integration_candidate_invalid", await PostAsync(task, "candidate", request with { TreeSha = new string('a', 40) }));
+    }
+
     private sealed class InspectionBarrier : Muthur.Launch.IProcessRunner
     {
         private readonly Muthur.Launch.ProcessRunner _inner = new();

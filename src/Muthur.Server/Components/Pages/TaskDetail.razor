@@ -28,6 +28,14 @@
                 <dl class="kv" style="margin-top: 12px">
                     <dt>Project</dt><dd>@task.Project</dd>
                     <dt>Validation provenance</dt><dd>@task.ProvenanceStatus</dd>
+                    @if (task.CurrentIntegrationCandidate is { } integration)
+                    {
+                        <dt>Integration</dt><dd>@integration.State · attempt @integration.Attempt</dd>
+                        <dt>Integration target</dt><dd>@integration.TargetSha</dd>
+                        <dt>Tested candidate</dt><dd>@(integration.CandidateSha ?? "not constructed")</dd>
+                        <dt>Integration evidence</dt><dd>@(integration.EvidenceSha256 ?? "not recorded")</dd>
+                        @if (integration.FailureMessage is { } failure) { <dt>Integration recovery</dt><dd>@failure</dd> }
+                    }
                     @if (task.CurrentSubject is { } subject)
                     {
                         <dt>Validation round</dt><dd>@subject.Id</dd>

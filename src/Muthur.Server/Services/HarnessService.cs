@@ -86,9 +86,9 @@ public sealed class HarnessService(Ledger ledger, MuthurOptions options)
             // every run came from somewhere, and a tree is only readable while that stays false.
             object payload = report.Parent is { Length: > 0 } parent
                 ? new { report.Tier, worker, report.Account, report.Branch, report.Unit, seconds, report.CostUsd, report.InputTokens, report.OutputTokens, parent,
-                    report.RunId, report.Status, report.FailureKind, report.BaseCommit, report.HeadCommit, report.SpecBlob, report.ExitCode, report.Attempts }
+                    report.RunId, report.Status, report.FailureKind, report.BaseCommit, report.HeadCommit, report.SpecBlob, report.ExitCode, report.Attempts, report.WorkKind, report.PolicyVersion, report.ReasoningEffort }
                 : new { report.Tier, worker, report.Account, report.Branch, report.Unit, seconds, report.CostUsd, report.InputTokens, report.OutputTokens,
-                    report.RunId, report.Status, report.FailureKind, report.BaseCommit, report.HeadCommit, report.SpecBlob, report.ExitCode, report.Attempts };
+                    report.RunId, report.Status, report.FailureKind, report.BaseCommit, report.HeadCommit, report.SpecBlob, report.ExitCode, report.Attempts, report.WorkKind, report.PolicyVersion, report.ReasoningEffort };
             m.Record(report.Success ? "worker.finished" : "worker.failed", taskId, payload);
         }, ct);
     }

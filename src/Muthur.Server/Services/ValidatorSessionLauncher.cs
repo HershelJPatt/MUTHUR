@@ -71,7 +71,7 @@ public sealed class ValidatorSessionLauncher(
     AgentService agents,
     HarnessService harnesses,
     IProcessRunner processes,
-    ILogger<ValidatorSessionLauncher> logger, TimeProvider? clock = null, ITaskLander? lander = null) : IValidatorSessionLauncher
+    ILogger<ValidatorSessionLauncher> logger, TimeProvider? clock = null, ITaskLander? lander = null, KnowledgeService? knowledge = null) : IValidatorSessionLauncher
 {
     private const string Tier = "mastermind";
 
@@ -91,12 +91,18 @@ public sealed class ValidatorSessionLauncher(
         var scratch = Path.Combine(options.DataDir, "conductor", $"{assignment.TaskKey}-{assignment.RoleKey}");
         Directory.CreateDirectory(scratch);
 
+        var lessons = new Dictionary<HarnessCandidate, LessonContext>();
+        if (knowledge is not null)
+            foreach (var candidate in candidates)
+                lessons[candidate] = await knowledge.ContextAsync(assignment.Project, assignment.RoleKey, candidate.Harness,
+                    OperatingSystem.IsWindows() ? "windows" : OperatingSystem.IsLinux() ? "linux" : "macos",
+                    Validations.Hash(string.Join("\n", SessionCommands.Allowed.Concat(SessionCommands.Denied))), ct);
         var launcher = new AgentLauncher(processes, heartbeat: agents.RenewChildAsync, timeProvider: clock, exited: agents.ReleaseChildAsync);
         var attempts = await launcher.RunAsync(
             candidates,
             candidate => new WorkerRequest(
                 WorkingDirectory: repo,
-                Prompt: Prompt(assignment, candidate),
+                Prompt: Prompt(assignment, candidate) + (lessons.GetValueOrDefault(candidate)?.Text ?? ""),
                 Model: candidate.Model,
                 GitCommonDirectory: null,
                 AllowedCommands: SessionCommands.Allowed,
@@ -111,6 +117,10 @@ public sealed class ValidatorSessionLauncher(
 
         EnsureSomethingRan(assignment.TaskKey, attempts);
 
+        if (knowledge is not null)
+            foreach (var attempt in attempts.Where(a => a.Started))
+                if (lessons.GetValueOrDefault(attempt.Candidate) is { Lessons.Count: > 0 } received)
+                    await knowledge.DeliveredAsync(assignment.TaskId, assignment.RoleKey, attempt.Candidate.Harness, attempt.Candidate.Model ?? "default", received, ct);
         var last = attempts[^1];
         logger.LogInformation("Validator session for {Task}/{Role} finished on {Harness}.",
             assignment.TaskKey, assignment.RoleKey, last.Candidate.Harness);

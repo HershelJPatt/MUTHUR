@@ -87,7 +87,7 @@ public sealed class ReceiptsService(Ledger ledger)
             .ToList();
 
     /// <summary>Newest first, by <c>Seq</c>: two runs reported in the same mutation share an <c>At</c>.</summary>
-    private static List<WorkerRunDto> Runs(IReadOnlyList<LedgerEvent> window) =>
+    internal static List<WorkerRunDto> Runs(IReadOnlyList<LedgerEvent> window) =>
         window
             .Where(e => WorkerRunTypes.Contains(e.Type))
             .OrderByDescending(e => e.Seq)
@@ -111,7 +111,8 @@ public sealed class ReceiptsService(Ledger ledger)
                     p.TryGetProperty("inputTokens", out var input) && input.ValueKind == JsonValueKind.Number && input.TryGetInt32(out var inputCount) ? inputCount : null,
                     p.TryGetProperty("outputTokens", out var output) && output.ValueKind == JsonValueKind.Number && output.TryGetInt32(out var outputCount) ? outputCount : null,
                     Text(p, "runId"), Text(p, "status"), Text(p, "failureKind"), Text(p, "baseCommit"), Text(p, "headCommit"), Text(p, "specBlob"),
-                    p.TryGetProperty("exitCode", out var exit) && exit.ValueKind == JsonValueKind.Number && exit.TryGetInt32(out var exitCode) ? exitCode : null);
+                    p.TryGetProperty("exitCode", out var exit) && exit.ValueKind == JsonValueKind.Number && exit.TryGetInt32(out var exitCode) ? exitCode : null,
+                    Text(p, "workKind"), Text(p, "policyVersion"), Text(p, "reasoningEffort"));
             })
             .ToList();
 

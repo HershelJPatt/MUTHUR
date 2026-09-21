@@ -40,9 +40,7 @@ public sealed class CapabilityProbeTests : IAsyncLifetime
                 Assert.DoesNotContain("worktree " + worktree.Replace('\\', '/'), listing.StdOut);
         }
         AssertRealCallsCompleted();
-        var options = new EnumerationOptions { RecurseSubdirectories = true, AttributesToSkip = FileAttributes.ReparsePoint, IgnoreInaccessible = false };
-        foreach (var file in Directory.EnumerateFiles(_root, "*", options)) File.SetAttributes(file, FileAttributes.Normal);
-        Directory.Delete(_root, recursive: true);
+        Muthur.XmlDocCheck.Tests.RepositoryFixtureCleanup.Delete(_root);
         Assert.False(Directory.Exists(_root));
         _cleanupCompleted = true;
     }

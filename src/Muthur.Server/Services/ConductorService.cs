@@ -70,7 +70,9 @@ public sealed partial class ConductorService(
     LifecycleService lifecycle,
     ITaskLander lander,
     HarnessService harnesses,
-    OverseerService? overseer = null)
+    OverseerService? overseer = null,
+    IIntegrationSessionLauncher? integrations = null,
+    IntegrationService? integrationService = null)
 {
     private readonly SemaphoreSlim _pass = new(1, 1);
     private readonly HashSet<string> _running = [];
@@ -285,7 +287,7 @@ public sealed partial class ConductorService(
             times.Add(e.At);
         }
         var activeIds = await db.Tasks.Where(t => t.State == TaskState.Backlog || t.State == TaskState.InProgress ||
-            t.State == TaskState.Validating || t.State == TaskState.Blocked).Select(t => t.Id).ToListAsync(ct);
+            t.State == TaskState.Validating || t.State == TaskState.Validated || t.State == TaskState.Blocked).Select(t => t.Id).ToListAsync(ct);
         var active = activeIds.Select(Wire.TaskId).ToHashSet(StringComparer.Ordinal);
         lock (_budgetBlocks)
         {
@@ -1010,6 +1012,11 @@ public sealed partial class ConductorService(
                 // has already shipped would send the founder looking for a fault that does not exist.
                 continue;
             }
+            catch (MuthurException pending) when (pending.Code is "integration_required" or "integration_target_changed" or "stale_integration_candidate")
+            {
+                _lastAction = $"{orphan.TaskKey} waits for current integration evidence";
+                continue;
+            }
             catch (MuthurException failed)
             {
                 await AnnounceLandFailureAsync(orphan, failed, ct);
@@ -1089,6 +1096,17 @@ public sealed partial class ConductorService(
     }
 
     /// <summary>One pass: start what the plan asks for, up to the session budget. Returns how many it started.</summary>
+    private async Task RunIntegrationAsync(string task, int taskId, string key)
+    {
+        try { await integrations!.StartAsync(task, _sessions.Token); }
+        catch (OperationCanceledException) when (_sessions.IsCancellationRequested) { }
+        catch (Exception ex)
+        {
+            await ledger.MutateAsync(Caller.System, m => { m.Record("integration.launch_failed", taskId, new { message = ex.Message }); return Task.CompletedTask; });
+        }
+        finally { lock (_running) _running.Remove(key); }
+    }
+
     public async Task<int> RunPassAsync(CancellationToken ct = default)
     {
         // A pass that races the stop would launch a child with nobody left to cancel it — the orphan this whole
@@ -1115,6 +1133,24 @@ public sealed partial class ConductorService(
                 (await ProbeReservationsAsync(db, ct)).Count(r => !r.Released) + (await WorkerReservationsAsync(db, ct)).Count(r => !r.Released), ct);
 
             var started = 0;
+            if (integrations is not null && integrationService is not null && RunningCount < ceiling)
+            {
+                var budget = await ledger.ReadAsync((db, now) => BudgetBlockedAsync(db, now, ct), ct);
+                var task = await integrationService.NextAsync(budget, ct);
+                if (task is not null)
+                {
+                    var taskKey = Wire.TaskId(task.Id);
+                    var key = taskKey + "/#integration";
+                    bool reserved;
+                    lock (_running) reserved = _running.Count < ceiling && _running.Add(key);
+                    if (reserved)
+                    {
+                        await ledger.MutateAsync(Caller.System, m => { m.Record("conductor.staffing", task.Id, new { role = "#integration" }); return Task.CompletedTask; }, ct);
+                        Track(RunIntegrationAsync(taskKey, task.Id, key));
+                        started++;
+                    }
+                }
+            }
             const string overseerKey = "organization/#overseer";
             if (overseer is not null && RunningCount < ceiling)
             {

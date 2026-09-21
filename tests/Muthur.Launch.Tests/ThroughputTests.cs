@@ -9,8 +9,7 @@ public sealed class ThroughputTests : IDisposable
     public ThroughputTests() => Directory.CreateDirectory(_root);
     public void Dispose()
     {
-        foreach (var file in Directory.EnumerateFiles(_root, "*", SearchOption.AllDirectories)) File.SetAttributes(file, FileAttributes.Normal);
-        Directory.Delete(_root, true);
+        Muthur.XmlDocCheck.Tests.RepositoryFixtureCleanup.Delete(_root);
     }
 
     private async Task<string> Git(params string[] args)

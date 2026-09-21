@@ -7,7 +7,7 @@ using Muthur.Server.Auth;
 namespace Muthur.Server.Services;
 
 /// <summary>The second half of a task's life: implemented → validating → validated → landed.</summary>
-public sealed class LifecycleService(Ledger ledger, LeasePolicy leases, ITaskLander lander, MuthurOptions options)
+public sealed class LifecycleService(Ledger ledger, LeasePolicy leases, ITaskLander lander, MuthurOptions options, IntegrationService integration)
 {
     private readonly SemaphoreSlim _landing = new(1, 1);
 
@@ -410,10 +410,32 @@ public sealed class LifecycleService(Ledger ledger, LeasePolicy leases, ITaskLan
         {
             LandResult result = null!;
             MuthurException? refusal = null;
+            // The intent must commit before the Git side effect so a crash can be reconciled exactly once.
+            refusal = await ledger.MutateAsync<MuthurException?>(caller, async m =>
+            {
+                var task = await TaskService.LoadAsync(m.Db, id, ct);
+                TaskService.RequireOwnerOrFounder(task, caller);
+                if (task.Project!.LandMode != LandMode.Merge || task.State != TaskState.Validated) return null;
+                if (await CheckSubjectAsync(m, task, ct) is { } subjectError) return subjectError;
+                if (await integration.RequirePassedAsync(m, task, ct) is { } candidateError) return candidateError;
+                var candidate = task.CurrentIntegrationCandidate!;
+                if (candidate.PromotionIntentAt is null)
+                {
+                    candidate.PromotionIntentAt = m.Now;
+                    m.Record("integration.promotion_intent", task.Id, new { candidate.Id, candidate.SubjectId, candidate.TargetSha, candidate.CandidateSha, candidate.EvidenceSha256 });
+                }
+                return null;
+            }, ct);
+            if (refusal is not null) throw refusal;
             var dto = await ledger.MutateAsync<TaskDto?>(caller, async m =>
             {
                 var current = await TaskService.LoadAsync(m.Db, id, ct);
                 TaskService.RequireOwnerOrFounder(current, caller);
+                if (current.State == TaskState.Done && current.CurrentIntegrationCandidate is { State: "promoted" } promoted)
+                {
+                    result = new LandResult(LandOutcome.Landed, Commit: promoted.CandidateSha);
+                    return await Validations.MapAsync(m.Db, current, null, ct);
+                }
                 if (current.CurrentSubject is null) throw Fail.Rule("validation_provenance_unknown", Validations.Recovery);
                 if (current.State != TaskState.Validated)
                     throw Fail.Rule("not_validated", $"{Wire.TaskId(current.Id)} is '{current.State.ToWire()}'. Only a validated task can land.");
@@ -425,6 +447,11 @@ public sealed class LifecycleService(Ledger ledger, LeasePolicy leases, ITaskLan
                 if (!current.CurrentSubject!.ToDto().RequiredValidators.All(key => rows.Any(v => v.ValidatorKey == key
                     && v.SubjectId == current.CurrentSubjectId && v.Verdict == Verdict.Yes && Validations.UsefulEvidence(v.Evidence))))
                     throw Fail.Rule("not_validated", "Every required validator must pass this exact subject with useful evidence. " + Validations.Recovery);
+                if (current.Project!.LandMode == LandMode.Merge)
+                {
+                    refusal = await integration.RequirePassedAsync(m, current, ct);
+                    if (refusal is not null) return null;
+                }
                 result = await lander.LandAsync(current.Project!, current, current.Owner?.Name ?? caller.Name, ct);
                 switch (result.Outcome)
                 {
@@ -436,11 +463,18 @@ public sealed class LifecycleService(Ledger ledger, LeasePolicy leases, ITaskLan
                         current.State = TaskState.Done;
                         current.DoneAt = m.Now;
                         current.PrUrl = result.PrUrl ?? current.PrUrl;
+                        if (result.PrUrl is null && current.CurrentIntegrationCandidate is { } candidate)
+                        {
+                            candidate.State = "promoted";
+                            candidate.PromotedAt = m.Now;
+                            m.Record("integration.promoted", current.Id, new { candidate.Id, candidate.SubjectId, candidate.TargetSha, candidate.CandidateSha, candidate.EvidenceSha256 });
+                        }
                         m.Record(result.PrUrl is null ? "task.landed" : "task.pr_opened", current.Id,
                             new
                             {
                                 mode = current.Project!.LandMode.ToWire(), current.Branch, commit = result.Commit, prUrl = result.PrUrl,
                                 subject = current.CurrentSubject!.ToDto(),
+                                integrationStatus = result.PrUrl is null ? "passed" : "delegated_external_checks_unknown",
                                 overrodeHold = held is { } h ? new { by = h.By, reason = h.Reason, placedAt = h.PlacedAt } : null,
                             });
                         if (held is { } hold)

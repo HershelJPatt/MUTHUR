@@ -166,19 +166,32 @@ public sealed partial class GitLander(IProcessRunner processes, IPullRequestOpen
     {
         var repo = project.RepoPath;
         var target = project.DefaultBranch;
-        var branch = task.CurrentSubject!.ImplementationSha;
-
-        var targetSha = await GitAsync(repo, ct, "rev-parse", "--verify", "--quiet", $"refs/heads/{target}");
-        if (!targetSha.Ok)
-            return LandResult.Refuse("default_branch_missing", $"Default branch '{target}' does not exist in {repo}.");
-
-        if ((await GitAsync(repo, ct, "merge-base", "--is-ancestor", branch, targetSha.StdOut.Trim())).Ok)
-            return new LandResult(LandOutcome.Landed, Commit: targetSha.StdOut.Trim()); // already merged
-
-        var message = $"Land {Wire.TaskId(task.Id)}: {task.Title}\n\nLanded by MUTHUR for {ownerName}.";
-        return await FindCheckoutAsync(repo, target, ct) is { } checkout
-            ? await MergeInCheckoutAsync(checkout, target, branch, message, ct)
-            : await MergeWithoutCheckoutAsync(repo, target, branch, targetSha.StdOut.Trim(), message, ct);
+        var candidate = task.CurrentIntegrationCandidate;
+        if (candidate is not { State: "passed", CandidateSha: not null, TreeSha: not null, PromotionIntentAt: not null }
+            || candidate.SubjectId != task.CurrentSubjectId || candidate.EvidenceSha256 is null)
+            return LandResult.Refuse("integration_required", "A current passing integration candidate and durable promotion intent are required.");
+        var inspection = await InspectCommitAsync(project, candidate.CandidateSha, ct);
+        if (inspection is null || inspection.TreeSha != candidate.TreeSha
+            || (!candidate.AlreadyIncluded && !inspection.Parents.SequenceEqual(new[] { candidate.TargetSha, candidate.ImplementationSha }))
+            || (candidate.AlreadyIncluded && (candidate.CandidateSha != candidate.TargetSha || !await IsAncestorAsync(project, candidate.ImplementationSha, candidate.TargetSha, ct))))
+            return LandResult.Refuse("integration_candidate_invalid", "The tested candidate no longer has its recorded structure.");
+        var targetSha = await BranchHeadAsync(project, target, ct);
+        if (targetSha is null) return LandResult.Refuse("default_branch_missing", $"Default branch '{target}' is missing.");
+        if (targetSha != candidate.TargetSha && await IsAncestorAsync(project, candidate.CandidateSha, targetSha, ct))
+            return new LandResult(LandOutcome.Landed, Commit: candidate.CandidateSha); // Recover an exact durable intent, never an implementation-only ancestor.
+        if (targetSha != candidate.TargetSha) return LandResult.Refuse("integration_target_changed", "The default branch moved; test a new integration candidate.");
+        var inventory = await GitAsync(repo, ct, "worktree", "list", "--porcelain");
+        if (!inventory.Ok) return LandResult.Refuse("git_failed", inventory.Message);
+        string? checkout = null;
+        foreach (var line in inventory.StdOut.Split('\n', StringSplitOptions.TrimEntries))
+        {
+            if (line.StartsWith("worktree ", StringComparison.Ordinal)) checkout = line[9..];
+            if (line == $"branch refs/heads/{target}")
+                return LandResult.Refuse("integration_target_checked_out", $"'{target}' is checked out at {checkout}. Its owner must switch to another branch or detached HEAD before exact promotion.");
+        }
+        var update = await GitAsync(repo, ct, "update-ref", "-m", $"muthur: promote {Wire.TaskId(task.Id)}", $"refs/heads/{target}", candidate.CandidateSha, candidate.TargetSha);
+        return update.Ok ? new LandResult(LandOutcome.Landed, Commit: candidate.CandidateSha)
+            : LandResult.Refuse("integration_target_changed", "Compare-and-swap refused promotion: " + update.Message);
     }
 
     /// <summary>The default branch is checked out somewhere: merge there so its working tree stays in sync.</summary>
@@ -243,7 +256,8 @@ public sealed partial class GitLander(IProcessRunner processes, IPullRequestOpen
         var body = $"{task.Body}\n\n---\nTask {Wire.TaskId(task.Id)} · owner `{ownerName}`" +
                    (task.SpecPath is null ? "" : $" · spec `{task.SpecPath}`") +
                    $"\nValidation subject `{subject.Id:D}` · implementation `{subject.ImplementationSha}` · spec SHA-256 `{subject.SpecSha256}`." +
-                   "\nValidated in MUTHUR; opened by the hub. A human merges.";
+                   "\nValidated in MUTHUR; opened by the hub. A human merges." +
+                   "\nIntegration status: delegated_external_checks_unknown. External CI must test the exact current base/head merge result and enforce freshness.";
         try
         {
             var url = await pullRequests.OpenAsync(project.RepoPath, project.DefaultBranch, branch, $"{Wire.TaskId(task.Id)}: {task.Title}", body, ct);

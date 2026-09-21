@@ -243,11 +243,13 @@ public static class WorkerCommands
         try { assignment = await WorkerAssignment.ResolveAsync(processes, repo, baseRef, defaultName, o.Spec, branchName, worktree, ct); }
         catch (WorkerDispatchException ex) { return Output.Error(ex.Code, ex.Message, ExitCodes.RuleViolation); }
         IReadOnlyList<string> requirements;
+        string workKind;
         try
         {
             var frozen = await Git(repo, "cat-file", "blob", assignment.SpecBlob)
                 ?? throw new WorkerDispatchException("spec_unreadable", "The pinned spec blob cannot be read.");
             requirements = CapabilityRequirements.Parse(frozen);
+            workKind = RoutingPolicy.WorkKind(frozen);
             if (requirements.Count > 0) (verify, extraAllowed) = await ReadPinnedProjectAsync(processes, repo, assignment.BaseCommit, ct);
         }
         catch (WorkerDispatchException ex) { return Output.Error(ex.Code, ex.Message, ExitCodes.RuleViolation); }
@@ -324,7 +326,7 @@ public static class WorkerCommands
             var reported = await hub.PostAsync(Routes.WorkerRuns, new WorkerRunReport(o.Task, o.Tier, final.Candidate.Harness, final.Candidate.Model, final.Candidate.Account,
             branchName, o.Unit, success, (int)final.Duration.TotalSeconds, final.Outcome.CostUsd, o.Parent,
             RunId: final.RunId, Status: status, FailureKind: failureKind, BaseCommit: assignment.BaseCommit, HeadCommit: headCommit,
-            SpecBlob: assignment.SpecBlob, ExitCode: final.ExitCode,
+            SpecBlob: assignment.SpecBlob, ExitCode: final.ExitCode, WorkKind: workKind, PolicyVersion: "catalog-order-v1", ReasoningEffort: final.Candidate.ReasoningEffort,
             Attempts: attempts.Select(a => new WorkerAttemptReport(a.Candidate.Harness, a.Candidate.Model, a.Candidate.Account,
                 a.RunId, a.ReservationId, a.Started, a.FailureKind, a.Cleanup?.ToString())).ToArray()), MuthurJsonContext.Default.WorkerRunReport, ct);
             if (!reported.IsSuccess) reportError = reported.Body;
