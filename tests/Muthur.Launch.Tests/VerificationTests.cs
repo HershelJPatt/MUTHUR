@@ -165,6 +165,32 @@ public sealed class VerificationTests : IDisposable
         Assert.NotEqual(VerificationCache.Key(VerificationEnvironment.Identity(first)), VerificationCache.Key(VerificationEnvironment.Identity(second)));
     }
 
+    [Fact]
+    public void Checkout_probe_paths_have_stable_identity_but_sdk_version_changes_miss()
+    {
+        var firstRoot = Path.Combine(root, "first");
+        var secondRoot = Path.Combine(root, "second");
+        var first = VerificationEnvironment.Create(firstRoot, "http://127.0.0.1:1");
+        var second = VerificationEnvironment.Create(secondRoot, "http://127.0.0.1:2");
+        var suffix = Path.Combine("checkout", "global.json");
+        string Probe(string scratch, IReadOnlyDictionary<string, string> environment) =>
+            "SDK version: 10.0.204\nglobal.json: " + Path.Combine(scratch, suffix) +
+            "\nHOME: " + environment["HOME"] + "\nTEMP: " + environment["TEMP"];
+        var canonical = VerificationEnvironment.Canonicalize(Probe(firstRoot, first), first);
+        var other = VerificationEnvironment.Canonicalize(Probe(secondRoot, second), second);
+        Assert.Equal(canonical, other);
+        Assert.Equal("SDK version: 10.0.204\nglobal.json: {run-owned/scratch}" + Path.DirectorySeparatorChar + suffix +
+            "\nHOME: {run-owned/HOME}\nTEMP: {run-owned/TEMP}", canonical);
+        var firstInputs = VerificationEnvironment.Identity(first);
+        var secondInputs = VerificationEnvironment.Identity(second);
+        firstInputs["dotnet/version"] = canonical;
+        secondInputs["dotnet/version"] = other;
+        Assert.Equal(VerificationCache.Key(firstInputs), VerificationCache.Key(secondInputs));
+        secondInputs["dotnet/version"] = VerificationEnvironment.Canonicalize(
+            Probe(secondRoot, second).Replace("10.0.204", "10.0.205"), second);
+        Assert.NotEqual(VerificationCache.Key(firstInputs), VerificationCache.Key(secondInputs));
+    }
+
     [Theory]
     [InlineData("hub.db")]
     [InlineData("founder.token")]

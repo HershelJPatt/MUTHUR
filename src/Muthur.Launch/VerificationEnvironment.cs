@@ -40,6 +40,7 @@ public static class VerificationEnvironment
         foreach (var variable in new[] { "APPDATA", "LOCALAPPDATA", "HOME", "TEMP", "MUTHUR_HOME", "MUTHUR_URL" }
             .OrderByDescending(name => environment[name].Length))
             value = value.Replace(environment[variable], "{run-owned/" + variable + "}", StringComparison.OrdinalIgnoreCase);
-        return value;
+        var scratch = Path.GetDirectoryName(environment["HOME"])!;
+        return value.Replace(scratch, "{run-owned/scratch}", StringComparison.OrdinalIgnoreCase);
     }
 }
