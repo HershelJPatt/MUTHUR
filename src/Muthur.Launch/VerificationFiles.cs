@@ -8,10 +8,19 @@ namespace Muthur.Launch;
 public static class VerificationFiles
 {
     public static string Hash(string text) => Convert.ToHexStringLower(SHA256.HashData(Encoding.UTF8.GetBytes(text)));
-    public static string HashFile(string path)
+    public static string HashFile(string path, CancellationToken ct = default)
     {
         using var stream = File.OpenRead(path);
-        return Convert.ToHexStringLower(SHA256.HashData(stream));
+        using var hash = IncrementalHash.CreateHash(HashAlgorithmName.SHA256);
+        var buffer = new byte[65536];
+        int count;
+        while ((count = stream.Read(buffer)) != 0)
+        {
+            ct.ThrowIfCancellationRequested();
+            hash.AppendData(buffer, 0, count);
+        }
+        ct.ThrowIfCancellationRequested();
+        return Convert.ToHexStringLower(hash.GetHashAndReset());
     }
 
     public static bool Within(string path, string root) => Path.GetFullPath(path).StartsWith(
@@ -60,7 +69,7 @@ public static class VerificationFiles
         finally { if (File.Exists(temporary)) File.Delete(temporary); }
     }
 
-    public static List<VerificationFile> Inventory(string root)
+    public static List<VerificationFile> Inventory(string root, CancellationToken ct = default)
     {
         PlainPath(root);
         var files = new List<VerificationFile>();
@@ -69,6 +78,7 @@ public static class VerificationFiles
         {
             foreach (var entry in Directory.EnumerateFileSystemEntries(directory).Order(StringComparer.Ordinal))
             {
+                ct.ThrowIfCancellationRequested();
                 PlainPath(entry);
                 var relative = Relative(Path.GetRelativePath(root, entry).Replace('\\', '/'));
                 if (!names.Add(relative)) throw new IOException("Case-colliding installation paths.");
@@ -80,30 +90,39 @@ public static class VerificationFiles
                     name is "credentials" or "credentials.json" or "id_rsa" or "id_ed25519")
                     throw new IOException($"Mutable or credential installation path is forbidden: {relative}");
                 if (Directory.Exists(entry)) Visit(entry);
-                else files.Add(new(relative, new FileInfo(entry).Length, HashFile(entry)));
+                else files.Add(new(relative, new FileInfo(entry).Length, HashFile(entry, ct)));
             }
         }
         Visit(root);
         return files.OrderBy(f => f.Path, StringComparer.Ordinal).ToList();
     }
 
-    public static void Copy(string source, string destination, List<VerificationFile> files)
+    public static void Copy(string source, string destination, List<VerificationFile> files, CancellationToken ct = default)
     {
         PlainPath(source);
         PlainPath(destination);
         Directory.CreateDirectory(destination);
         foreach (var file in files)
         {
+            ct.ThrowIfCancellationRequested();
             var relative = Relative(file.Path);
             var input = PlainPath(Path.Combine(source, relative));
             var output = PlainPath(Path.Combine(destination, relative));
             Directory.CreateDirectory(Path.GetDirectoryName(output)!);
-            File.Copy(input, output, false);
+            using var sourceStream = File.OpenRead(input);
+            using var destinationStream = new FileStream(output, FileMode.CreateNew);
+            var buffer = new byte[65536];
+            int count;
+            while ((count = sourceStream.Read(buffer)) != 0)
+            {
+                ct.ThrowIfCancellationRequested();
+                destinationStream.Write(buffer, 0, count);
+            }
         }
-        if (!Inventory(destination).SequenceEqual(files)) throw new IOException("Copied installation digest mismatch.");
+        if (!Inventory(destination, ct).SequenceEqual(files)) throw new IOException("Copied installation digest mismatch.");
     }
 
-    public static void DeleteOwned(string path, string parent)
+    public static void DeleteOwned(string path, string parent, CancellationToken ct = default)
     {
         if (!Within(path, parent)) throw new IOException("Deletion escaped owned root.");
         PlainPath(path);
@@ -111,6 +130,7 @@ public static class VerificationFiles
         // Inspect every directory before recursing: Directory.Delete must never traverse a junction.
         void Check(string dir)
         {
+            ct.ThrowIfCancellationRequested();
             foreach (var entry in Directory.EnumerateFileSystemEntries(dir))
             {
                 PlainPath(entry);
@@ -118,6 +138,7 @@ public static class VerificationFiles
             }
         }
         Check(path);
+        ct.ThrowIfCancellationRequested();
         Directory.Delete(path, true);
     }
 }

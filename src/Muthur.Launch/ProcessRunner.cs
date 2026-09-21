@@ -6,6 +6,7 @@ namespace Muthur.Launch;
 public sealed record ProcessResult(int ExitCode, string StdOut, string StdErr)
 {
     public bool Ok => ExitCode == 0;
+    public bool Started { get; init; } = true;
 
     /// <summary>Whichever stream says something, for error messages.</summary>
     public string Message => (StdErr.Trim().Length > 0 ? StdErr : StdOut).Trim();
@@ -58,25 +59,41 @@ public sealed class ProcessRunner : IProcessRunner
         using var timeoutSource = CancellationTokenSource.CreateLinkedTokenSource(ct);
         if (timeout is { } limit) timeoutSource.CancelAfter(limit);
         ct.ThrowIfCancellationRequested();
-        using var process = new Process { StartInfo = info };
+        VerificationJob.Child? contained = null;
+        Process process;
         try
         {
-            process.Start();
+            if (VerificationJob.Current is { } job)
+            {
+                contained = job.Start(info);
+                process = contained.Process;
+            }
+            else
+            {
+                process = new Process { StartInfo = info };
+                try { process.Start(); }
+                catch { process.Dispose(); throw; }
+            }
         }
         catch (Exception ex) when (ex is System.ComponentModel.Win32Exception or FileNotFoundException)
         {
-            return new ProcessResult(127, "", $"Could not start '{fileName}': {ex.Message}");
+            return new ProcessResult(127, "", $"Could not start '{fileName}': {ex.Message}") { Started = false };
         }
 
+        using var processLifetime = process;
+        using var containedLifetime = contained;
+        using var input = contained is null ? process.StandardInput : new StreamWriter(contained.Input, new UTF8Encoding(false));
+        using var outputReader = contained is null ? process.StandardOutput : new StreamReader(contained.Output, Encoding.UTF8);
+        using var errorReader = contained is null ? process.StandardError : new StreamReader(contained.Error, Encoding.UTF8);
         var output = new StringBuilder();
         var error = new StringBuilder();
-        var stdout = DrainAsync(process.StandardOutput, output);
-        var stderr = DrainAsync(process.StandardError, error);
+        var stdout = DrainAsync(outputReader, output);
+        var stderr = DrainAsync(errorReader, error);
         try
         {
             started?.Invoke(process);
-            if (stdin is not null) await process.StandardInput.WriteAsync(stdin.AsMemory(), timeoutSource.Token);
-            process.StandardInput.Close();
+            if (stdin is not null) await input.WriteAsync(stdin.AsMemory(), timeoutSource.Token);
+            input.Close();
             await process.WaitForExitAsync(timeoutSource.Token);
             await Task.WhenAll(stdout, stderr).WaitAsync(timeoutSource.Token);
         }
@@ -85,7 +102,8 @@ public sealed class ProcessRunner : IProcessRunner
             using var cleanup = new CancellationTokenSource(TimeSpan.FromSeconds(10));
             try
             {
-                if (!process.HasExited) process.Kill(entireProcessTree: true);
+                if (VerificationJob.Current is { } job) await job.StopAsync(cleanup.Token);
+                else if (!process.HasExited) process.Kill(entireProcessTree: true);
                 await process.WaitForExitAsync(cleanup.Token);
                 await Task.WhenAll(stdout, stderr).WaitAsync(cleanup.Token);
             }
@@ -101,7 +119,8 @@ public sealed class ProcessRunner : IProcessRunner
         catch
         {
             using var cleanup = new CancellationTokenSource(TimeSpan.FromSeconds(10));
-            if (!process.HasExited) process.Kill(entireProcessTree: true);
+            if (VerificationJob.Current is { } job) await job.StopAsync(cleanup.Token);
+            else if (!process.HasExited) process.Kill(entireProcessTree: true);
             await process.WaitForExitAsync(cleanup.Token);
             await Task.WhenAll(stdout, stderr).WaitAsync(cleanup.Token);
             throw;

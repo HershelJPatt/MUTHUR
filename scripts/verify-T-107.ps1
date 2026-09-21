@@ -23,6 +23,8 @@ $outputs = [Collections.Generic.List[string]]::new()
 $defects = [Collections.Generic.List[string]]::new()
 $fixtureProcesses = [Collections.Generic.List[Diagnostics.Process]]::new()
 $completed = $false
+$fixtures = [Collections.Generic.List[object]]::new()
+$fixtureOutcomes = [Collections.Generic.List[object]]::new()
 
 function Invoke-Installed([string[]]$Arguments) {
     $text = & $cli @Arguments
@@ -60,6 +62,41 @@ function Invoke-Run([string]$Name, [string]$ExpectedCache) {
     return $evidence
 }
 
+function Read-Barrier($Fixture, [string]$Phase) {
+    $budget = [Threading.CancellationTokenSource]::new([timespan]::FromSeconds(20))
+    try { $line = $Fixture.Reader.ReadLineAsync($budget.Token).AsTask().GetAwaiter().GetResult() }
+    finally { $budget.Dispose() }
+    if (-not $line.StartsWith($Phase + ':')) { throw "Expected fixture $Phase barrier, got '$line'." }
+    return $line
+}
+
+function Start-Fixture([string]$Name) {
+    $output = Join-Path $OutputRoot $Name
+    $outputs.Add($output)
+    $pipeName = 'muthur-pilot-' + [guid]::NewGuid().ToString('N')
+    $pipe = [IO.Pipes.NamedPipeServerStream]::new($pipeName, [IO.Pipes.PipeDirection]::InOut, 1,
+        [IO.Pipes.PipeTransmissionMode]::Byte, [IO.Pipes.PipeOptions]::Asynchronous)
+    $info = [Diagnostics.ProcessStartInfo]::new($cli)
+    $info.UseShellExecute = $false; $info.CreateNoWindow = $true
+    foreach ($argument in @('verify', 'containment-fixture', '--output', $output, '--barrier', $pipeName)) { $info.ArgumentList.Add($argument) }
+    $process = [Diagnostics.Process]::Start($info)
+    $fixtureProcesses.Add($process)
+    $fixture = [pscustomobject]@{ Process = $process; Pipe = $pipe; Reader = $null; Writer = $null; Output = $output; Child = $null }
+    $fixtures.Add($fixture)
+    $budget = [Threading.CancellationTokenSource]::new([timespan]::FromSeconds(20))
+    try { $pipe.WaitForConnectionAsync($budget.Token).GetAwaiter().GetResult() }
+    finally { $budget.Dispose() }
+    $fixture.Reader = [IO.StreamReader]::new($pipe)
+    $fixture.Writer = [IO.StreamWriter]::new($pipe); $fixture.Writer.AutoFlush = $true
+    $null = Read-Barrier $fixture 'registered'
+    $fixture.Writer.WriteLine('go')
+    $null = Read-Barrier $fixture 'suspended'
+    $fixture.Writer.WriteLine('go')
+    $ready = Read-Barrier $fixture 'ready'
+    $fixture.Child = [Diagnostics.Process]::GetProcessById([int]$ready.Split(':')[1])
+    return $fixture
+}
+
 try {
     $first = Invoke-Run 'first' 'miss'
     $second = Invoke-Run 'second' 'hit'
@@ -71,42 +108,24 @@ try {
     [IO.File]::AppendAllText($artifact, 'T-107 corruption fixture')
     $null = Invoke-Run 'corrupted' 'rejected'
 
-    # Lightweight installed subprocess fixture: two recoverers race only on synthetic, owned empty scratch.
-    $fixture = Join-Path $OutputRoot 'cleanup-fixture'
-    [IO.Directory]::CreateDirectory($fixture) | Out-Null
-    $fixtureId = [guid]::NewGuid()
-    $scratch = Join-Path $fixture ('scratch-' + $fixtureId.ToString('N'))
-    [IO.Directory]::CreateDirectory($scratch) | Out-Null
-    $ownership = [ordered]@{
-        version = 1; runId = $fixtureId; output = $fixture; repository = $Repository
-        scratch = $scratch; checkout = (Join-Path $scratch 'checkout'); commit = $first.commit
-        runner = @{ pid = [int]::MaxValue; startUtcTicks = 1; executable = $cli }
-        url = 'http://127.0.0.1:1'; server = $null; serverLaunchStarted = $false; cleaned = $false
+    # Each real child remains alive after its intermediate parent exits. The two run-owned jobs coexist.
+    $firstFixture = Start-Fixture 'cancel-fixture'
+    $secondFixture = Start-Fixture 'hard-kill-fixture'
+    $firstFixture.Writer.WriteLine('cancel')
+    if (-not $firstFixture.Process.WaitForExit(20000) -or $firstFixture.Process.ExitCode -ne 130) { throw 'Installed cancellation failed.' }
+    if (-not $firstFixture.Child.WaitForExit(10000)) { throw 'Cancelled fixture orphaned its child.' }
+    if ($secondFixture.Child.HasExited) { throw 'Cancelling one run terminated the concurrent run.' }
+    $secondFixture.Process.Kill() # Only the supervisor: the job must contain the detached child.
+    if (-not $secondFixture.Process.WaitForExit(10000) -or -not $secondFixture.Child.WaitForExit(10000)) { throw 'Hard interruption orphaned a child.' }
+    foreach ($fixture in @($firstFixture, $secondFixture)) {
+        $null = Invoke-Installed @('verify', 'cleanup', '--output', $fixture.Output)
+        $null = Invoke-Installed @('verify', 'cleanup', '--output', $fixture.Output)
+        $recovered = Get-Content -LiteralPath (Join-Path $fixture.Output 'evidence.json') -Raw | ConvertFrom-Json
+        if (-not $recovered.cleanupSucceeded -or @(Get-ChildItem -LiteralPath $fixture.Output -Directory -Filter 'scratch-*').Count -ne 0) {
+            throw 'Installed fixture cleanup failed.'
+        }
+        $fixtureOutcomes.Add([pscustomobject]@{ output = $fixture.Output; status = $recovered.status; childExited = $fixture.Child.HasExited })
     }
-    $ownership | ConvertTo-Json -Depth 10 | Set-Content -LiteralPath (Join-Path $fixture 'ownership.json')
-    $fixtureEvidence = $first | ConvertTo-Json -Depth 30 | ConvertFrom-Json
-    $fixtureEvidence.runId = $fixtureId
-    $fixtureEvidence.status = 'running'
-    $fixtureEvidence.cleanupSucceeded = $false
-    $fixtureEvidence | ConvertTo-Json -Depth 30 | Set-Content -LiteralPath (Join-Path $fixture 'evidence.json')
-    1..2 | ForEach-Object {
-        $info = [Diagnostics.ProcessStartInfo]::new($cli)
-        $info.UseShellExecute = $false
-        $info.CreateNoWindow = $true
-        $info.RedirectStandardOutput = $true
-        $info.RedirectStandardError = $true
-        foreach ($argument in @('verify', 'cleanup', '--output', $fixture)) { $info.ArgumentList.Add($argument) }
-        $fixtureProcesses.Add([Diagnostics.Process]::Start($info))
-    }
-    $successes = 0
-    foreach ($process in $fixtureProcesses) {
-        if (-not $process.WaitForExit(30000)) { throw 'Installed cleanup fixture exceeded its hang-detector budget.' }
-        if ($process.ExitCode -eq 0) { $successes++ }
-    }
-    if ($successes -eq 0) { throw 'Neither installed cleanup contender succeeded.' }
-    $null = Invoke-Installed @('verify', 'cleanup', '--output', $fixture)
-    $recovered = Get-Content -LiteralPath (Join-Path $fixture 'evidence.json') -Raw | ConvertFrom-Json
-    if ([IO.Directory]::Exists($scratch) -or $recovered.status -ne 'interrupted') { throw 'Interrupted cleanup failed.' }
     $completed = $true
 }
 catch {
@@ -118,6 +137,12 @@ finally {
         if (-not $process.HasExited) { $process.Kill($true); $process.WaitForExit() }
         $process.Dispose()
     }
+    foreach ($fixture in $fixtures) {
+        if ($null -ne $fixture.Child) { $fixture.Child.Dispose() }
+        if ($null -ne $fixture.Writer) { $fixture.Writer.Dispose() }
+        if ($null -ne $fixture.Reader) { $fixture.Reader.Dispose() }
+        $fixture.Pipe.Dispose()
+    }
     foreach ($output in $outputs) {
         if ([IO.File]::Exists((Join-Path $output 'ownership.json'))) {
             & $cli verify cleanup --output $output | Set-Content -LiteralPath (Join-Path $output 'pilot-cleanup.json')
@@ -127,10 +152,11 @@ finally {
     [ordered]@{
         cohort = 'T-107-preparation-v1'; startedUtc = $started; endedUtc = [datetimeoffset]::UtcNow
         sampleCount = $runs.Count; runs = @($runs.ToArray()); success = ($completed -and $defects.Count -eq 0)
-        executionModelCalls = 0; defects = @($defects.ToArray())
+        executionModelCalls = 0; defects = @($defects.ToArray()); containmentFixtures = @($fixtureOutcomes.ToArray())
         missingRealWorldData = @('Post-landing installed revision and first live-use measurement remain follow-ups; no controlled speedup claim.')
     } | ConvertTo-Json -Depth 20 | Set-Content -LiteralPath (Join-Path $OutputRoot 'pilot.json')
     $env:MUTHUR_HOME = $previousHome
     $env:MUTHUR_URL = $previousUrl
 }
 if ($defects.Count -gt 0) { throw 'Pilot cleanup failed; see pilot.json.' }
+

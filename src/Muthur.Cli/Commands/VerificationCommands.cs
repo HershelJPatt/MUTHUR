@@ -49,6 +49,11 @@ public static class VerificationCommands
         });
         verify.Subcommands.Add(run);
         verify.Subcommands.Add(cleanup);
+        var fixtureOutput = new Option<string>("--output") { Required = true };
+        var barrier = new Option<string>("--barrier") { Required = true };
+        var fixture = new Command("containment-fixture", "Bounded installed containment diagnostic; never recipe success.") { fixtureOutput, barrier };
+        fixture.SetAction(async (parse, ct) => await VerificationContainmentFixture.RunAsync(parse.GetValue(fixtureOutput)!, parse.GetValue(barrier)!, ct));
+        verify.Subcommands.Add(fixture);
         root.Subcommands.Add(verify);
     }
 }

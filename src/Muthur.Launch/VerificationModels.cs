@@ -72,6 +72,7 @@ public sealed class VerificationOwnership
     public required string Commit { get; init; }
     public required VerificationProcess Runner { get; init; }
     public required string Url { get; init; }
+    public string? Containment { get; init; }
     public bool CommandRunning { get; set; }
     public VerificationProcess? ActiveCommand { get; set; }
     public VerificationProcess? Server { get; set; }

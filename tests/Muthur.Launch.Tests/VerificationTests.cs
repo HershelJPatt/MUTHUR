@@ -58,12 +58,22 @@ public sealed class VerificationTests : IDisposable
     {
         var environment = VerificationEnvironment.Create(root, "http://127.0.0.1:12345");
         Assert.All(environment.Keys, key => Assert.True(VerificationEnvironment.Allowed.Contains(key) ||
-            new[] { "HOME", "USERPROFILE", "DOTNET_CLI_HOME", "TEMP", "TMP", "MUTHUR_HOME", "MUTHUR_URL" }.Contains(key)));
+            new[] { "HOME", "USERPROFILE", "DOTNET_CLI_HOME", "TEMP", "TMP", "MUTHUR_HOME", "MUTHUR_URL", "APPDATA", "LOCALAPPDATA" }.Contains(key)));
         Assert.DoesNotContain("MUTHUR_TOKEN", environment.Keys);
         Assert.DoesNotContain("MUTHUR_AGENT", environment.Keys);
-        foreach (var variable in new[] { "HOME", "USERPROFILE", "DOTNET_CLI_HOME", "TEMP", "TMP", "MUTHUR_HOME" })
+        foreach (var variable in new[] { "HOME", "USERPROFILE", "DOTNET_CLI_HOME", "TEMP", "TMP", "MUTHUR_HOME", "APPDATA", "LOCALAPPDATA" })
             Assert.True(VerificationFiles.Within(environment[variable], root));
         Assert.Equal("http://127.0.0.1:12345", environment["MUTHUR_URL"]);
+    }
+
+    [Fact]
+    public void Run_owned_paths_have_stable_identity_but_inherited_toolchain_changes_miss()
+    {
+        var first = VerificationEnvironment.Create(Path.Combine(root, "first"), "http://127.0.0.1:1");
+        var second = VerificationEnvironment.Create(Path.Combine(root, "second"), "http://127.0.0.1:2");
+        Assert.Equal(VerificationCache.Key(VerificationEnvironment.Identity(first)), VerificationCache.Key(VerificationEnvironment.Identity(second)));
+        second["VCToolsVersion"] = "changed";
+        Assert.NotEqual(VerificationCache.Key(VerificationEnvironment.Identity(first)), VerificationCache.Key(VerificationEnvironment.Identity(second)));
     }
 
     [Theory]
@@ -150,6 +160,67 @@ public sealed class VerificationTests : IDisposable
     }
 
     [Fact]
+    public async Task Lock_cancellation_is_bounded_and_failed_staging_leaves_no_owned_stage()
+    {
+        var evidence = Evidence();
+        var cache = new VerificationCache(Path.Combine(root, "cache"));
+        using (await cache.LockAsync(evidence.Key!, default))
+        {
+            using var cancel = new CancellationTokenSource();
+            var waiting = cache.LockAsync(evidence.Key!, cancel.Token);
+            cancel.Cancel();
+            await Assert.ThrowsAnyAsync<OperationCanceledException>(() => waiting);
+        }
+        var install = Install();
+        File.WriteAllText(Path.Combine(install, "hub.db"), "forbidden");
+        await Assert.ThrowsAsync<IOException>(() => cache.StageAsync(evidence, install, default));
+        Assert.Empty(Directory.EnumerateFileSystemEntries(Path.Combine(root, "cache"), "*.stage-*"));
+    }
+
+    [Theory]
+    [InlineData("run")]
+    [InlineData("commit")]
+    [InlineData("spec")]
+    [InlineData("recipe")]
+    [InlineData("time")]
+    public async Task Recomputed_checksum_does_not_hide_invalid_producer_provenance(string field)
+    {
+        var evidence = Evidence();
+        var cache = await Publish(evidence);
+        var entry = Path.Combine(root, "cache", evidence.Key!);
+        var path = Path.Combine(entry, "manifest.json");
+        var manifest = JsonSerializer.Deserialize(File.ReadAllText(path), VerificationJsonContext.Default.VerificationCacheManifest)!;
+        manifest = field switch
+        {
+            "run" => manifest with { RunId = Guid.Empty },
+            "commit" => manifest with { Commit = new string('f', 40) },
+            "spec" => manifest with { SpecSha256 = new string('f', 64) },
+            "recipe" => manifest with { RecipeSha256 = new string('f', 64) },
+            _ => manifest with { CompletedUtc = default },
+        };
+        VerificationFiles.Atomic(path, manifest, VerificationJsonContext.Default.VerificationCacheManifest);
+        File.WriteAllText(Path.Combine(entry, "manifest.sha256"), VerificationFiles.HashFile(path));
+        Assert.Equal("rejected", (await cache.RestoreAsync(evidence.Key!, evidence.Inputs, Path.Combine(root, "restored"), default)).Status);
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task Dead_staging_owner_recovers_before_and_after_directory_creation(bool directoryCreated)
+    {
+        var evidence = Evidence();
+        var cacheRoot = Path.Combine(root, "cache");
+        Directory.CreateDirectory(cacheRoot);
+        var stage = Path.Combine(cacheRoot, evidence.Key + ".stage-" + evidence.RunId.ToString("N"));
+        VerificationFiles.Atomic(stage + ".owner", new VerificationCacheOwner(1, evidence.Key!, evidence.RunId, int.MaxValue, 1), VerificationJsonContext.Default.VerificationCacheOwner);
+        if (directoryCreated) Directory.CreateDirectory(stage);
+        var cache = new VerificationCache(cacheRoot);
+        Assert.Equal("miss", (await cache.RestoreAsync(evidence.Key!, evidence.Inputs, Path.Combine(root, "restored"), default)).Status);
+        Assert.False(Directory.Exists(stage));
+        Assert.False(File.Exists(stage + ".owner"));
+    }
+
+    [Fact]
     public async Task Concurrent_publishers_keep_one_complete_entry()
     {
         var evidence = Evidence();
@@ -179,6 +250,63 @@ public sealed class VerificationTests : IDisposable
         var result = await new VerificationRunner(runner).RunAsync(new(root, "HEAD", "specs/T-107.md", "unknown", Path.Combine(root, "out"), Path.Combine(root, "cache")));
         Assert.Equal(2, result.ExitCode);
         Assert.NotEqual(Guid.Empty, result.RunId);
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task Test_launch_failure_or_prelaunch_cancellation_never_reports_started(bool cancelBeforeLaunch)
+    {
+        var repo = Path.Combine(root, "repo");
+        Directory.CreateDirectory(repo);
+        using var cancel = new CancellationTokenSource();
+        var runner = new VerificationRunner(new RecipeRunner(repo, "test-launch"), beforeStage: (name, token) =>
+        {
+            if (name == "test" && cancelBeforeLaunch) { cancel.Cancel(); token.ThrowIfCancellationRequested(); }
+            return Task.CompletedTask;
+        });
+        var result = await runner.RunAsync(new(repo, "HEAD", "specs/T-107.md", "muthur", Path.Combine(root, "output"), Path.Combine(root, "cache")), cancel.Token);
+        var evidence = JsonSerializer.Deserialize(File.ReadAllText(result.EvidencePath!), VerificationJsonContext.Default.VerificationEvidence)!;
+        Assert.False(evidence.TestsStarted);
+        Assert.False(evidence.TestsCompleted);
+        Assert.Equal(cancelBeforeLaunch ? 130 : 1, result.ExitCode);
+        Assert.True(evidence.CleanupSucceeded);
+    }
+
+    [Fact]
+    public async Task Publication_wait_observes_cancellation_and_does_not_create_a_success_entry()
+    {
+        var evidence = Evidence();
+        var cache = new VerificationCache(Path.Combine(root, "cache"));
+        var stage = await cache.StageAsync(evidence, Install(), default);
+        using (await cache.LockAsync(evidence.Key!, default))
+        {
+            using var cancel = new CancellationTokenSource();
+            var publication = cache.PublishAsync(stage, evidence, cancel.Token);
+            cancel.Cancel();
+            await Assert.ThrowsAnyAsync<OperationCanceledException>(() => publication);
+        }
+        Assert.False(Directory.Exists(Path.Combine(root, "cache", evidence.Key!)));
+        await cache.DiscardAsync(stage, evidence, default);
+        Assert.False(Directory.Exists(stage));
+    }
+
+    [Fact]
+    public async Task Junction_ancestors_are_refused_for_writable_paths_and_installations()
+    {
+        var target = Path.Combine(root, "target");
+        var link = Path.Combine(root, "junction");
+        Directory.CreateDirectory(target);
+        var script = Path.Combine(root, "junction.ps1");
+        File.WriteAllText(script, "param($Link, $Target) New-Item -ItemType Junction -Path $Link -Target $Target | Out-Null");
+        var result = await new ProcessRunner().RunAsync("pwsh", ["-NoProfile", "-File", script, link, target], root);
+        Assert.True(result.Ok, result.Message);
+        try
+        {
+            Assert.Throws<IOException>(() => VerificationFiles.PlainPath(Path.Combine(link, "new-output")));
+            Assert.Throws<IOException>(() => VerificationFiles.Inventory(root));
+        }
+        finally { Directory.Delete(link); }
     }
 
     [Theory]
@@ -322,11 +450,14 @@ public sealed class VerificationTests : IDisposable
 
     private VerificationEvidence Evidence(string value = "same")
     {
-        var inputs = new SortedDictionary<string, string>(StringComparer.Ordinal) { ["commit"] = value };
+        var commit = VerificationFiles.Hash(value)[..40];
+        var spec = VerificationFiles.Hash("spec");
+        var recipe = VerificationFiles.Hash("recipe");
+        var inputs = new SortedDictionary<string, string>(StringComparer.Ordinal) { ["commit"] = commit, ["spec"] = spec, ["recipe"] = recipe };
         return new()
         {
-            RunId = Guid.NewGuid(), Repository = root, GitDirectory = Path.Combine(root, ".git"), Commit = value,
-            Tree = "tree", SpecPath = "specs/T-107.md", SpecSha256 = "spec", RecipeSha256 = "recipe",
+            RunId = Guid.NewGuid(), Repository = root, GitDirectory = Path.Combine(root, ".git"), Commit = commit,
+            Tree = "tree", SpecPath = "specs/T-107.md", SpecSha256 = spec, RecipeSha256 = recipe,
             Recipe = VerificationRecipes.Muthur, StartedUtc = DateTimeOffset.UnixEpoch, Inputs = inputs,
             Key = VerificationCache.Key(inputs), Status = "success", CleanupSucceeded = true,
         };
@@ -388,6 +519,7 @@ public sealed class VerificationTests : IDisposable
             else
             {
                 var stage = arguments[0] is "build" or "test" or "up" ? arguments[0] : "preparation";
+                if (stage == "test" && failure == "test-launch") return Task.FromResult(new ProcessResult(127, "", "launch failed") { Started = false });
                 code = stage == failure ? 1 : 0;
             }
             return Task.FromResult(new ProcessResult(code, output, code == 0 ? "" : "fixture failure"));

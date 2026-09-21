@@ -21,6 +21,7 @@ public sealed class VerificationRunner(IProcessRunner processes, TimeProvider? t
         VerificationEvidence? evidence = null;
         VerificationOwnership? ownership = null;
         VerificationCache? cache = null;
+        VerificationJob? job = null;
         Dictionary<string, string>? environment = null;
         string? stage = null;
         string? evidencePath = null;
@@ -50,6 +51,11 @@ public sealed class VerificationRunner(IProcessRunner processes, TimeProvider? t
             provisionalScratch = scratch;
             var url = LoopbackUrl();
             environment = VerificationEnvironment.Create(scratch, url);
+            if (processes is ProcessRunner)
+            {
+                File.WriteAllText(Path.Combine(output, "containment.txt"), VerificationJob.Name(runId));
+                job = new VerificationJob(runId);
+            }
             var root = (await Git(repo, ["rev-parse", "--show-toplevel"], budget.Token, environment)).Trim();
             repo = VerificationFiles.PlainPath(root);
             foreach (var path in new[] { output, cacheRoot })
@@ -83,6 +89,7 @@ public sealed class VerificationRunner(IProcessRunner processes, TimeProvider? t
             {
                 RunId = runId, Output = output, Repository = repo, Scratch = scratch, Checkout = checkout,
                 Commit = commit, Runner = Identity(Process.GetCurrentProcess()), Url = url,
+                Containment = job is null ? null : VerificationJob.Name(runId),
             };
             SaveOwnership(ownership);
             var frozenSpec = Path.Combine(output, "spec.bin");
@@ -104,11 +111,7 @@ public sealed class VerificationRunner(IProcessRunner processes, TimeProvider? t
             if (inputProbe is null) await Provenance(evidence, output, checkout, environment, budget.Token);
             else await inputProbe(evidence, budget.Token);
             await Command(evidence, output, "build", recipe.Build, checkout, environment, budget.Token);
-            evidence.TestsStarted = true;
-            Save(evidence, output);
             await Command(evidence, output, "test", recipe.Test, checkout, environment, budget.Token);
-            evidence.TestsCompleted = true;
-            Save(evidence, output);
             cache = new VerificationCache(cacheRoot, clock);
             if (!request.NoCache && evidence.Key is not null)
             {
@@ -149,7 +152,7 @@ public sealed class VerificationRunner(IProcessRunner processes, TimeProvider? t
                 try
                 {
                     using var cleanup = new CancellationTokenSource(TimeSpan.FromSeconds(45));
-                    await Clean(ownership, evidence, environment!, cleanup.Token);
+                    await Clean(ownership, evidence, environment!, cleanup.Token, job: job);
                     if (evidence is not null) evidence.CleanupSucceeded = true;
                 }
                 catch (Exception ex)
@@ -159,7 +162,30 @@ public sealed class VerificationRunner(IProcessRunner processes, TimeProvider? t
                 }
             }
             else if (provisionalScratch is not null)
-                VerificationFiles.DeleteOwned(provisionalScratch, Path.GetDirectoryName(provisionalScratch)!);
+            {
+                try
+                {
+                    using var cleanup = new CancellationTokenSource(TimeSpan.FromSeconds(45));
+                    if (job is not null) await job.StopAsync(cleanup.Token);
+                    VerificationFiles.DeleteOwned(provisionalScratch, Path.GetDirectoryName(provisionalScratch)!);
+                }
+                catch (Exception ex) { exit = 1; earlyError = "Initial cleanup failed: " + ex.Message; }
+            }
+            if (job is not null)
+            {
+                try
+                {
+                    using var stop = new CancellationTokenSource(TimeSpan.FromSeconds(10));
+                    await job.StopAsync(stop.Token);
+                }
+                catch (Exception ex)
+                {
+                    exit = 1;
+                    if (evidence is not null) { evidence.CleanupSucceeded = false; evidence.CleanupError = ex.Message; }
+                    else earlyError = ex.Message;
+                }
+                finally { job.Dispose(); }
+            }
         }
         if (evidence is null) return new(runId, exit == 2 ? "invalid" : "failed", evidencePath, "bypassed", exit, earlyError);
         if (exit == 0 && budget.IsCancellationRequested)
@@ -173,13 +199,44 @@ public sealed class VerificationRunner(IProcessRunner processes, TimeProvider? t
         {
             if (stage is not null)
             {
-                if (exit == 0) await cache!.PublishAsync(stage, evidence, CancellationToken.None);
-                else cache!.Discard(stage, runId);
+                if (exit == 0) await cache!.PublishAsync(stage, evidence, budget.Token);
+                else
+                {
+                    using var discard = new CancellationTokenSource(TimeSpan.FromSeconds(10));
+                    await cache!.DiscardAsync(stage, evidence, discard.Token);
+                }
             }
         }
-        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or JsonException)
-        { exit = 1; evidence.Status = "failed"; evidence.Error = "Cache finalization failed: " + ex.Message; }
-        Save(evidence, ownership!.Output);
+        catch (Exception ex)
+        {
+            exit = 1; evidence.Status = "failed"; evidence.Error = "Cache finalization failed: " + ex.Message;
+            if (stage is not null)
+            {
+                try
+                {
+                    using var discard = new CancellationTokenSource(TimeSpan.FromSeconds(10));
+                    await cache!.DiscardAsync(stage, evidence, discard.Token);
+                }
+                catch (Exception discard) { evidence.Error += " Discard failed: " + discard.Message; }
+            }
+        }
+        try { Save(evidence, ownership!.Output); }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            exit = 1; evidence.Status = "failed"; evidence.Error = "Final evidence write failed: " + ex.Message;
+            if (stage is not null && evidence.Key is not null)
+            {
+                try
+                {
+                    using var revoke = new CancellationTokenSource(TimeSpan.FromSeconds(10));
+                    await cache!.RevokeAsync(evidence, revoke.Token);
+                }
+                catch (Exception revoke) { evidence.Error += " Cache revocation failed: " + revoke.Message; }
+            }
+            // If storage remains unwritable, the previous atomic running bundle is still not success.
+            try { Save(evidence, ownership!.Output); }
+            catch (Exception retry) when (retry is IOException or UnauthorizedAccessException) { }
+        }
         return new(runId, evidence.Status, evidencePath, evidence.CacheStatus, exit, evidence.Error ?? evidence.CleanupError);
     }
 
@@ -221,6 +278,7 @@ public sealed class VerificationRunner(IProcessRunner processes, TimeProvider? t
                 result = await observed.RunObservedAsync(command.File, command.Arguments, cwd, ct: ct,
                     scrubEnvironment: VerificationEnvironment.Scrub(), environment: environment, started: process =>
                     {
+                        if (name == "test") { evidence.TestsStarted = true; Save(evidence, output); }
                         commandOwner.ActiveCommand = Identity(process);
                         SaveOwnership(commandOwner);
                     });
@@ -229,15 +287,20 @@ public sealed class VerificationRunner(IProcessRunner processes, TimeProvider? t
                     scrubEnvironment: VerificationEnvironment.Scrub(), environment: environment);
             if (name == "test")
             {
-                evidence.TestsStarted = result.ExitCode != 127;
-                evidence.TestsCompleted = result.ExitCode is not (127 or 124 or 130);
+                evidence.TestsStarted = result.Started;
+                evidence.TestsCompleted = result.Started && result.ExitCode is not (124 or 130);
             }
             stage.ExitCode = result.ExitCode;
             stage.Status = result.Ok ? "success" : "failed";
             if (!result.Ok) throw new VerificationCommandException(name, result.ExitCode);
             return result;
         }
-        catch (ProcessCancelledException ex) { result = ex.Result; stage.ExitCode = result.ExitCode; stage.Status = "cancelled"; throw; }
+        catch (ProcessCancelledException ex)
+        {
+            result = ex.Result;
+            if (name == "test") { evidence.TestsStarted = result.Started; evidence.TestsCompleted = false; }
+            stage.ExitCode = result.ExitCode; stage.Status = "cancelled"; throw;
+        }
         catch { stage.Status = "failed"; throw; }
         finally
         {
@@ -278,8 +341,7 @@ public sealed class VerificationRunner(IProcessRunner processes, TimeProvider? t
         inputs["buildConfiguration"] = evidence.Recipe.BuildConfiguration;
         inputs["preparationConfiguration"] = evidence.Recipe.PreparationConfiguration;
         inputs["runner"] = VerificationFiles.HashFile(Environment.ProcessPath ?? throw new IOException("Runner executable unknown."));
-        foreach (var variable in VerificationEnvironment.Allowed)
-            inputs["environment/" + variable] = VerificationFiles.Hash(environment.GetValueOrDefault(variable, "<absent>"));
+        foreach (var (key, value) in VerificationEnvironment.Identity(environment)) inputs[key] = value;
         try
         {
             foreach (var (name, arguments) in new (string, string[])[] { ("dotnet", ["--info"]), ("pwsh", ["--version"]), ("git", ["--version"]) })
@@ -289,7 +351,7 @@ public sealed class VerificationRunner(IProcessRunner processes, TimeProvider? t
                 inputs[name + "/executable"] = VerificationFiles.HashFile(resolved.FileName);
                 var result = await Command(evidence, output, "probe-" + name, new(resolved.FileName, arguments), checkout, environment, ct);
                 if (string.IsNullOrWhiteSpace(result.StdOut)) throw new IOException("Empty toolchain probe: " + name);
-                inputs[name + "/version"] = result.StdOut;
+                inputs[name + "/version"] = VerificationEnvironment.Canonicalize(result.StdOut, environment);
             }
             // Match the installer's vswhere discovery and fingerprint the complete discovered tool trees.
             // A missing prerequisite disables reuse; it never relaxes the build/test/smoke gates.
@@ -420,12 +482,14 @@ public sealed class VerificationRunner(IProcessRunner processes, TimeProvider? t
         SaveOwnership(ownership);
     }
 
-    private async Task Clean(VerificationOwnership ownership, VerificationEvidence? evidence, Dictionary<string, string> environment, CancellationToken ct, bool recovering = false)
+    private async Task Clean(VerificationOwnership ownership, VerificationEvidence? evidence, Dictionary<string, string> environment, CancellationToken ct, bool recovering = false, VerificationJob? job = null)
     {
         ValidateOwnership(ownership);
         if (ownership.Cleaned) return;
         var journal = JsonSerializer.Deserialize(File.ReadAllText(Path.Combine(ownership.Output, "ownership.json")), VerificationJsonContext.Default.VerificationOwnership)!;
-        if (journal.CommandRunning)
+        var contained = ownership.Containment is not null;
+        if (recovering && contained) await VerificationJob.RecoverAsync(ownership.RunId, ct);
+        if (journal.CommandRunning && !contained)
         {
             if (journal.ActiveCommand is null)
                 throw new IOException("Interrupted command launch has no persisted PID/start identity; inspect scratch manually before cleanup.");
@@ -441,11 +505,12 @@ public sealed class VerificationRunner(IProcessRunner processes, TimeProvider? t
             ownership.ActiveCommand = null;
             SaveOwnership(ownership);
         }
-        if (ownership.ServerLaunchStarted)
+        if (ownership.ServerLaunchStarted && !(recovering && contained))
         {
-            if (ownership.Server is null) CaptureServer(ownership);
-            using var owned = Find(ownership.Server!);
-            if (owned is null && !recovering) throw new IOException("Owned server exited before installed down; smoke cleanup did not complete normally.");
+            if (ownership.Server is null && File.Exists(Path.Combine(ownership.Scratch, "home", MuthurEnvironment.PidFile))) CaptureServer(ownership);
+            if (ownership.Server is null && !contained) throw new IOException("Server identity missing; cannot establish ownership.");
+            using var owned = ownership.Server is null ? null : Find(ownership.Server);
+            if (owned is null && !recovering && evidence?.Error is null) throw new IOException("Owned server exited before installed down; smoke cleanup did not complete normally.");
             var down = Expand(VerificationRecipes.Muthur.Down, Path.Combine(ownership.Scratch, "install"));
             Exception? downError = null;
             try
@@ -459,7 +524,7 @@ public sealed class VerificationRunner(IProcessRunner processes, TimeProvider? t
                 }
             }
             catch (Exception ex) { downError = ex; }
-            using var process = Find(ownership.Server!);
+            using var process = ownership.Server is null ? null : Find(ownership.Server);
             if (process is not null)
             {
                 process.Kill(entireProcessTree: true);
@@ -467,6 +532,10 @@ public sealed class VerificationRunner(IProcessRunner processes, TimeProvider? t
             }
             if (downError is not null) throw new IOException("Installed down failed; owned server stopped but retain evidence/scratch.", downError);
         }
+        if (job is not null) await job.StopAsync(ct);
+        ownership.CommandRunning = false;
+        ownership.ActiveCommand = null;
+        SaveOwnership(ownership);
         if (Directory.Exists(ownership.Checkout))
         {
             if ((await Git(ownership.Checkout, ["rev-parse", "HEAD"], ct, environment)).Trim() != ownership.Commit)
@@ -486,6 +555,8 @@ public sealed class VerificationRunner(IProcessRunner processes, TimeProvider? t
         if (ownership.Version != 1 || ownership.Scratch != expected || ownership.Checkout != Path.Combine(expected, "checkout") ||
             ownership.RunId == Guid.Empty || !VerificationFiles.Within(ownership.Scratch, ownership.Output))
             throw new IOException("Malformed ownership; inspect ownership.json manually. No guessed cleanup.");
+        if (ownership.Containment is not null && ownership.Containment != VerificationJob.Name(ownership.RunId))
+            throw new IOException("Malformed containment identity; no guessed cleanup.");
         VerificationFiles.PlainPath(ownership.Scratch);
         if (!Uri.TryCreate(ownership.Url, UriKind.Absolute, out var url) || url.Host != "127.0.0.1" || url.Scheme != "http" ||
             url.AbsolutePath != "/" || url.Port < 1 || url.UserInfo.Length != 0 || url.Query.Length != 0)
