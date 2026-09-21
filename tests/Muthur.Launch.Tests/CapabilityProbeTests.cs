@@ -4,16 +4,54 @@ using Muthur.Contracts;
 namespace Muthur.Launch.Tests;
 
 [Collection("Capability environment")]
-public sealed class CapabilityProbeTests : IDisposable
+public sealed class CapabilityProbeTests : IAsyncLifetime
 {
     private readonly string _root = Path.Combine(Path.GetTempPath(), "muthur-tests", "capability-probe-" + Guid.NewGuid().ToString("n"));
     private readonly FixtureRunner _runner = new();
     private readonly FixtureAdapter _adapter = new();
+    private bool _repositoryInitialized;
+    private bool _cleanupCompleted;
     public CapabilityProbeTests() => Directory.CreateDirectory(_root);
-    public void Dispose()
+    public Task InitializeAsync() => Task.CompletedTask;
+    public Task DisposeAsync() => CleanupAsync();
+
+    private async Task CleanupAsync()
     {
-        foreach (var file in Directory.EnumerateFiles(_root, "*", SearchOption.AllDirectories)) File.SetAttributes(file, FileAttributes.Normal);
+        if (_cleanupCompleted) return;
+        AssertRealCallsCompleted();
+        var boundary = Path.GetFullPath(Path.Combine(_root, "scratch")) + Path.DirectorySeparatorChar;
+        foreach (var worktree in _runner.AddedWorktrees)
+        {
+            var full = Path.GetFullPath(worktree);
+            Assert.True(full.StartsWith(boundary, OperatingSystem.IsWindows() ? StringComparison.OrdinalIgnoreCase : StringComparison.Ordinal),
+                $"Recorded worktree is outside fixture scratch: {full}");
+            for (var current = full; current is not null; current = Path.GetDirectoryName(current))
+            {
+                if (Path.Exists(current)) Assert.False((File.GetAttributes(current) & FileAttributes.ReparsePoint) != 0, $"Linked cleanup path: {current}");
+                if (current == Path.GetFullPath(_root)) break;
+            }
+            if (Directory.Exists(full)) await _runner.CleanupGitAsync(_root, "worktree", "remove", "--force", "--force", full);
+            Assert.False(Path.Exists(full), $"Worktree remains after cleanup: {full}");
+        }
+        if (_repositoryInitialized)
+        {
+            var listing = await _runner.CleanupGitAsync(_root, "worktree", "list", "--porcelain");
+            foreach (var worktree in _runner.AddedWorktrees)
+                Assert.DoesNotContain("worktree " + worktree.Replace('\\', '/'), listing.StdOut);
+        }
+        AssertRealCallsCompleted();
+        var options = new EnumerationOptions { RecurseSubdirectories = true, AttributesToSkip = FileAttributes.ReparsePoint, IgnoreInaccessible = false };
+        foreach (var file in Directory.EnumerateFiles(_root, "*", options)) File.SetAttributes(file, FileAttributes.Normal);
         Directory.Delete(_root, recursive: true);
+        Assert.False(Directory.Exists(_root));
+        _cleanupCompleted = true;
+    }
+
+    private void AssertRealCallsCompleted()
+    {
+        Assert.True(_runner.UncertainRealCall is null, $"Real process ownership is uncertain: {_runner.UncertainRealCall}");
+        Assert.Equal(0, _runner.RealCallsInFlight);
+        Assert.Equal(_runner.RealCallsStarted, _runner.RealCallsCompleted);
     }
 
     private (string, IReadOnlyList<string>)? Resolve(string name) => name == "fixture" ? (Path.Combine(_root, "fixture"), []) : ExecutableResolver.Resolve(name);
@@ -26,6 +64,7 @@ public sealed class CapabilityProbeTests : IDisposable
             return result;
         }
         await Git("init", "--quiet");
+        _repositoryInitialized = true;
         await Git("-c", "user.name=Fixture", "-c", "user.email=fixture@example.invalid", "-c", "commit.gpgsign=false", "commit", "--allow-empty", "-m", "fixture baseline");
         var head = (await Git("rev-parse", "HEAD")).StdOut.Trim();
         return new(_root, "", "fixture", Path.Combine(_root, ".git"), ["fixture permissions"], ["git push*"], Path.Combine(_root, "scratch"),
@@ -109,6 +148,23 @@ public sealed class CapabilityProbeTests : IDisposable
     [InlineData("cleanup")]
     [InlineData("process-cleanup")]
     public async Task Uncertain_cleanup_retains_reservation_and_never_publishes_cache(string mode)
+        => await AssertRetainedReservationAsync(mode);
+
+    [Theory]
+    [InlineData("cleanup")]
+    [InlineData("process-cleanup")]
+    public async Task Test_owned_cleanup_removes_retained_worktree_without_releasing_reservation(string mode)
+    {
+        var (admission, worktree) = await AssertRetainedReservationAsync(mode);
+        await CleanupAsync();
+        Assert.False(Directory.Exists(worktree));
+        Assert.False(Directory.Exists(_root));
+        Assert.Equal(0, admission.Releases);
+        Assert.Equal(1, _runner.RealRemoveAttempts);
+        AssertRealCallsCompleted();
+    }
+
+    private async Task<(Admission Admission, string Worktree)> AssertRetainedReservationAsync(string mode)
     {
         var request = await Request();
         _runner.Mode = mode;
@@ -119,6 +175,14 @@ public sealed class CapabilityProbeTests : IDisposable
         Assert.Contains("retained", error.Message);
         Assert.Equal(0, admission.Releases);
         Assert.False(Directory.Exists(request.Capabilities!.CacheDirectory));
+        Assert.Equal(1, _runner.ModelInvocations);
+        Assert.True(_runner.RealCallsStarted > 0);
+        AssertRealCallsCompleted();
+        var worktree = Assert.Single(_runner.AddedWorktrees);
+        Assert.True(Directory.Exists(worktree));
+        Assert.Equal(mode == "cleanup" ? 1 : 0, _runner.SimulatedRemoveAttempts);
+        Assert.Equal(0, _runner.RealRemoveAttempts);
+        return (admission, worktree);
     }
 
     [Fact]
@@ -276,12 +340,64 @@ public sealed class CapabilityProbeTests : IDisposable
     private sealed class FixtureRunner : ICapabilityProcessRunner
     {
         private readonly CapabilityProcessRunner _real = new();
+        private readonly List<string> _addedWorktrees = [];
+        public IReadOnlyList<string> AddedWorktrees => _addedWorktrees.AsReadOnly();
+        public int RealCallsStarted { get; private set; }
+        public int RealCallsCompleted { get; private set; }
+        public int RealCallsInFlight { get; private set; }
+        public string? UncertainRealCall { get; private set; }
+        public int SimulatedRemoveAttempts { get; private set; }
+        public int RealRemoveAttempts { get; private set; }
         public string Mode { get; set; } = "execute";
         public int ModelInvocations { get; private set; }
         public string? ReservedEntry { get; set; }
         public string? ExternalDirectory { get; set; }
         public string? SetupFailureStep { get; set; }
         public int SetupFailureExitCode { get; set; }
+
+        public async Task<ProcessResult> CleanupGitAsync(string workingDirectory, params string[] arguments)
+        {
+            // Simulated uncertainty retains production ownership; real calls still confirm exit and pipe drain.
+            string[] command = ["-c", "core.hooksPath=" + (OperatingSystem.IsWindows() ? "NUL" : "/dev/null"),
+                "-c", "core.fsmonitor=false", "-c", "submodule.recurse=false", "-c", "diff.external=", .. arguments];
+            var result = await RunRealAsync("git", command, workingDirectory, timeout: TimeSpan.FromSeconds(10));
+            Assert.True(result.Ok, $"Fixture cleanup git {string.Join(' ', command)} in {workingDirectory} failed with exit code {result.ExitCode}: {result.Message}");
+            return result;
+        }
+
+        private async Task<ProcessResult> RunRealAsync(string fileName, IReadOnlyList<string> arguments, string workingDirectory,
+            string? stdin = null, TimeSpan? timeout = null, CancellationToken ct = default, IReadOnlyCollection<string>? scrubEnvironment = null,
+            IReadOnlyDictionary<string, string>? environment = null)
+        {
+            var isolated = new Dictionary<string, string>(environment ?? new Dictionary<string, string>())
+            {
+                ["GIT_CONFIG_GLOBAL"] = OperatingSystem.IsWindows() ? "NUL" : "/dev/null",
+                ["GIT_CONFIG_NOSYSTEM"] = "1",
+            };
+            RealCallsStarted++;
+            RealCallsInFlight++;
+            if (fileName == "git" && arguments.Contains("worktree") && arguments.Contains("remove")) RealRemoveAttempts++;
+            var uncertain = false;
+            try
+            {
+                var result = await _real.RunAsync(fileName, arguments, workingDirectory, stdin, timeout, ct, scrubEnvironment, isolated);
+                if (result.Ok && fileName == "git" && arguments.Contains("worktree") && arguments.Contains("add"))
+                    _addedWorktrees.Add(Path.GetFullPath(arguments[arguments.ToList().IndexOf("--detach") + 1], workingDirectory));
+                return result;
+            }
+            catch (ProbeCleanupUncertainException)
+            {
+                uncertain = true;
+                UncertainRealCall = $"{fileName} {string.Join(' ', arguments)} in {workingDirectory}";
+                throw;
+            }
+            finally
+            {
+                if (!uncertain) RealCallsCompleted++;
+                RealCallsInFlight--;
+            }
+        }
+
         public async Task<ProcessResult> RunAsync(string fileName, IReadOnlyList<string> arguments, string workingDirectory,
             string? stdin = null, TimeSpan? timeout = null, CancellationToken ct = default, IReadOnlyCollection<string>? scrubEnvironment = null,
             IReadOnlyDictionary<string, string>? environment = null)
@@ -290,12 +406,11 @@ public sealed class CapabilityProbeTests : IDisposable
             if (SetupFailureStep is not null && arguments.Contains(SetupFailureStep) &&
                 workingDirectory.EndsWith(Path.Combine(".muthur-capability", "commit"), StringComparison.Ordinal))
                 return new(SetupFailureExitCode, "private stdout", "private stderr");
-            var isolated = new Dictionary<string, string>(environment ?? new Dictionary<string, string>())
+            if (Mode == "cleanup" && arguments.Contains("worktree") && arguments.Contains("remove"))
             {
-                ["GIT_CONFIG_GLOBAL"] = OperatingSystem.IsWindows() ? "NUL" : "/dev/null",
-                ["GIT_CONFIG_NOSYSTEM"] = "1",
-            };
-            if (Mode == "cleanup" && arguments.Contains("worktree") && arguments.Contains("remove")) return new(1, "", "simulated cleanup failure");
+                SimulatedRemoveAttempts++;
+                return new(1, "", "simulated cleanup failure");
+            }
             if (Path.GetFileName(fileName) == "fixture")
             {
                 if (arguments.Contains("--version")) return new(0, "fixture-v2", "");
@@ -312,15 +427,15 @@ public sealed class CapabilityProbeTests : IDisposable
                 foreach (var step in steps)
                 {
                     var command = Mode == "denied-build" && step.Key == "build" ? "$global:LASTEXITCODE = 126" : step.Command;
-                    var result = await _real.RunAsync("pwsh", ["-NoProfile", "-Command", command + "\n" + step.Receipt], workingDirectory,
-                        timeout: timeout, ct: ct, scrubEnvironment: scrubEnvironment, environment: isolated);
+                    var result = await RunRealAsync("pwsh", ["-NoProfile", "-Command", command + "\n" + step.Receipt], workingDirectory,
+                        timeout: timeout, ct: ct, scrubEnvironment: scrubEnvironment, environment: environment);
                     Assert.True(result.Ok, result.Message);
                 }
                 if (Mode == "forged-nonce") File.WriteAllText(Path.Combine(fixture, "build.receipt.json"), "{\"nonce\":\"wrong\",\"exitCode\":0}");
                 if (Mode == "tampered-fixture") File.AppendAllText(Path.Combine(fixture, "fixture.proj"), "<!-- changed -->");
                 return new(0, "Simulated harness, real deterministic SDK fixture commands.", "");
             }
-            var run = await _real.RunAsync(fileName, arguments, workingDirectory, stdin, timeout ?? TimeSpan.FromSeconds(10), ct, scrubEnvironment, isolated);
+            var run = await RunRealAsync(fileName, arguments, workingDirectory, stdin, timeout ?? TimeSpan.FromSeconds(10), ct, scrubEnvironment, environment);
             if (run.Ok && ReservedEntry is not null && arguments.Contains("worktree") && arguments.Contains("add"))
             {
                 var worktree = arguments[arguments.ToList().IndexOf("--detach") + 1];
@@ -332,7 +447,7 @@ public sealed class CapabilityProbeTests : IDisposable
                     var target = ReservedEntry == "link" ? ExternalDirectory! : Path.Combine(ExternalDirectory!, "missing");
                     if (OperatingSystem.IsWindows())
                     {
-                        var link = await _real.RunAsync("cmd.exe", ["/c", "mklink", "/J", reserved, target], workingDirectory, ct: ct);
+                        var link = await RunRealAsync("cmd.exe", ["/c", "mklink", "/J", reserved, target], workingDirectory, timeout: TimeSpan.FromSeconds(10), ct: ct);
                         Assert.True(link.Ok, link.Message);
                     }
                     else Directory.CreateSymbolicLink(reserved, target);
