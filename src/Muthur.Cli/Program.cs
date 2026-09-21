@@ -16,10 +16,17 @@ RoleCommands.AddTo(root);
 MessageCommands.AddTo(root);
 WorkerCommands.AddTo(root);
 CapabilityCommands.AddTo(root);
+VerificationCommands.AddTo(root);
 UtilityCommands.AddTo(root);
 OverseerCommands.AddTo(root);
 InboundCommands.AddTo(root);
 OutboundCommands.AddTo(root);
 KitCommands.AddTo(root);
 
-return await root.Parse(args).InvokeAsync();
+var parsed = root.Parse(args);
+if (args.FirstOrDefault() == "verify" && VerificationCommands.ParseError(parsed) is { } error)
+{
+    Console.WriteLine(System.Text.Json.JsonSerializer.Serialize(error, Muthur.Launch.VerificationJsonContext.Default.VerificationResult));
+    return error.ExitCode;
+}
+return await parsed.InvokeAsync();
