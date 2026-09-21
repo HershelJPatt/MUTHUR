@@ -29,6 +29,8 @@ Schema version 1 writes `comparison.json`/`.md`, per-revision `aggregate.json`/`
 
 The positive completion grader requires a Done task, independent validator approval, required scenario observations and git evidence with `main:result.txt` exactly `42` after removing at most one terminal LF or CRLF. Spaces and multiple newlines are significant. Missing evidence fails closed. `false-green` separately reports `productCorrect=false`, `falseApproval=true`, `detected=true`; detection passes that scenario but never contributes to successful product completion. `no-verdict-loop` tests bounded orchestration while the task remains Validating, and also contributes zero product successes.
 
+On revisions with validation subjects, scripted clients capture `currentSubject.id` from implementation and validation-claim responses. Each verdict sends the subject captured by that validator's claim, including the original expired claim in `late-verdict`; it never fetches a newer subject at verdict time. Trial `validationSubjects` records identify each observed response binding. Retained HTTP evidence includes request bodies as well as responses, so submitted subject IDs and descriptive verdict evidence can be checked against the actual claims. Malformed subject evidence fails closed. On the original baseline, `currentSubject` is absent: verdicts send a null subject ID and the binding records explicitly say `unmeasured`, with the legacy absence as the reason. Product grading remains identical across revisions; legacy runs do not demonstrate subject binding.
+
 Counts name separate observations: staffing attempts come from real `conductor.staffing` events; scripted launcher invocations come from the fake launcher's observed calls; worker runs count scripted implementation submissions. Actual OS starts means agent/harness starts (zero), excluding git, build and test infrastructure. Registrations never count as OS starts. Human interventions, paid sessions and model calls are zero by construction. Tokens/cost are null with an unavailable reason. Aggregate wall durations show minimum, maximum and mean across samples; fake intervals/task-hours are never summed into wall time. Reports make no speedup claim.
 
 An incompatible revision, failed build/test, missing trial/evidence, unknown scenario or interruption exits nonzero and leaves an incomplete/error report. Only identical suite version/hash, cohort, selection and trial counts are comparable. `-Mode real` resolves the requested revisions, writes a visibly unmeasured report explaining that no approved admitted real-harness route exists and budget is zero, then exits nonzero without starting any harness.
@@ -38,6 +40,8 @@ Every child process has a ten-minute bound (with a bounded termination wait); on
 Installed-product provenance and post-landing observation are orchestrator follow-ups; this benchmark starts no live hub and does not install or push anything.
 
 ## First deterministic verification
+
+The following Unit A measurements predate the integrated T-99/T-113 candidate and are not integrated compatibility measurements.
 
 Executed on 2026-09-20 in the assigned Unit A worktree, with baseline `89dc34c0ed8e1208ef75529de8f493aed7306fe6` and candidate `a3dea76c1826ce4e57ee4188bf3c7dadbc5bb0f7`. Driver HEAD was the candidate commit; the benchmark files were the uncommitted launcher-owned submission, identified by retained content hashes. These are observed scripted outcomes, not real-agent measurements.
 

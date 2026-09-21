@@ -43,7 +43,8 @@ public sealed class WorkflowScenarios : IDisposable
         using var response = await client.SendAsync(request);
         var text = await response.Content.ReadAsStringAsync();
         var json = string.IsNullOrEmpty(text) ? JsonSerializer.SerializeToElement<object?>(null) : JsonDocument.Parse(text).RootElement.Clone();
-        _report.Http.Add(new(method, path, (int)response.StatusCode, json));
+        _report.Http.Add(new(method, path, (int)response.StatusCode, json,
+            body is null ? null : JsonSerializer.SerializeToElement(body, WorkflowReport.Json)));
         Assert.True((int)response.StatusCode == status, $"{method} {path}: expected {status}, got {(int)response.StatusCode}: {text}");
         return json;
     }
@@ -71,7 +72,30 @@ public sealed class WorkflowScenarios : IDisposable
     }
 
     private async Task Submit(HttpClient owner, string id) =>
-        await Action(owner, id, "implemented", new ImplementedRequest($"task/{id}-work"));
+        CaptureSubject(id, "implemented", await Action(owner, id, "implemented", new ImplementedRequest($"task/{id}-work")));
+
+    public static string? SubjectId(JsonElement response)
+    {
+        if (!response.TryGetProperty("currentSubject", out var subject)) return null;
+        if (subject.ValueKind != JsonValueKind.Object || !subject.TryGetProperty("id", out var id)
+            || id.ValueKind != JsonValueKind.String || !Guid.TryParse(id.GetString(), out _))
+            throw new InvalidDataException("Invalid validation subject in response.");
+        return id.GetString();
+    }
+
+    private string? CaptureSubject(string id, string action, JsonElement response)
+    {
+        var subject = SubjectId(response);
+        _report.ValidationSubjects.Add(new(id, action, subject, subject is null ? "unmeasured" : "observed",
+            subject is null ? "Legacy response has no currentSubject; subject binding is unavailable." : null));
+        return subject;
+    }
+
+    private async Task<string?> ClaimValidation(HttpClient validator, string id) =>
+        CaptureSubject(id, "validate-claim", await Action(validator, id, "validate-claim", new ClaimValidationRequest(Role)));
+
+    private Task<JsonElement> Verdict(HttpClient validator, string id, string? subject, string evidence, int status = 200) =>
+        Action(validator, id, "pass", new { validator = Role, evidence, subjectId = subject }, status);
 
     private async Task<HttpClient> Validator(string name)
     {
@@ -82,10 +106,14 @@ public sealed class WorkflowScenarios : IDisposable
 
     private async Task Approve(HttpClient validator, string id, bool negative = false)
     {
+        await ApproveClaim(validator, id, await ClaimValidation(validator, id), negative);
+    }
+
+    private async Task ApproveClaim(HttpClient validator, string id, string? subject, bool negative = false)
+    {
         if (!negative) Assert.Equal("42", _repo.Git("show", $"task/{id}-work:result.txt"));
-        await Action(validator, id, "validate-claim", new ClaimValidationRequest(Role));
-        await Action(validator, id, "pass", new VerdictRequest(Role,
-            negative ? "Scripted false approval: claimed success without checking product" : "Independent scripted read of task branch result.txt equals 42"));
+        await Verdict(validator, id, subject,
+            negative ? "Scripted false approval: claimed success without checking product" : "Independent scripted read of task branch result.txt equals 42");
     }
 
     private void Advance(string name, int minutes, bool blocked = false)
@@ -200,7 +228,7 @@ public sealed class WorkflowScenarios : IDisposable
         var validator = await Validator("validator");
         if (scenario.Id == "late-verdict")
         {
-            await Action(validator, _id, "validate-claim", new ClaimValidationRequest(Role));
+            var firstSubject = await ClaimValidation(validator, _id);
             var second = await Validator("current-validator");
             for (var i = 0; i < 3; i++)
             {
@@ -208,13 +236,14 @@ public sealed class WorkflowScenarios : IDisposable
                 await Send(second, Routes.AgentHeartbeat, new HeartbeatRequest());
             }
             Check("first-claim-expired", await _hub.Services.GetRequiredService<LifecycleService>().SweepExpiredValidationClaimsAsync() == 1);
-            await Action(second, _id, "validate-claim", new ClaimValidationRequest(Role));
+            var secondSubject = await ClaimValidation(second, _id);
             await Send(validator, Routes.RoleAction(Role, "take"));
-            var stale = await Action(validator, _id, "pass", new VerdictRequest(Role, "stale success"), 409);
+            var stale = await Verdict(validator, _id, firstSubject, "Expired validator scripted read of task branch result.txt equals 42; submitting the original claim", 409);
             Check("stale-verdict-refused", stale.GetProperty("code").GetString() == "validation_claimed");
             validator = second;
+            await ApproveClaim(validator, _id, secondSubject);
         }
-        await Approve(validator, _id, scenario.Id == "false-green");
+        else await Approve(validator, _id, scenario.Id == "false-green");
         if (scenario.Id == "conflicting-branches")
         {
             _repo.Write("result.txt", "conflicting main\n");

@@ -12,8 +12,9 @@ public sealed record Scenario(string Id, string Cohort, string SourceIncident, s
     string[] ScriptedEvents, string[] ExpectedOutcomes, string[] FailureConditions, Resources Resources);
 public sealed record ScenarioSuite(int Version, Scenario[] Scenarios);
 public sealed record Phase(string Name, DateTimeOffset Start, DateTimeOffset End, bool Blocked);
-public sealed record HttpEvidence(string Method, string Path, int Status, JsonElement Body);
+public sealed record HttpEvidence(string Method, string Path, int Status, JsonElement Body, JsonElement? Request = null);
 public sealed record GitEvidence(string MainHead, string? BranchHead, string? Result, bool ResultPresent);
+public sealed record ValidationSubjectEvidence(string TaskId, string Action, string? SubjectId, string Status, string? Reason);
 public sealed record Grade(bool Passed, bool ProductCorrect, bool FalseApproval, bool Detected, int SuccessfulOutcomes);
 
 public sealed class TrialReport
@@ -35,6 +36,7 @@ public sealed class TrialReport
     public List<Phase> FakePhases { get; } = [];
     public double BlockedSeconds => FakePhases.Where(p => p.Blocked).Sum(p => (p.End - p.Start).TotalSeconds);
     public List<HttpEvidence> Http { get; } = [];
+    public List<ValidationSubjectEvidence> ValidationSubjects { get; } = [];
     public TaskDetailDto? Task { get; set; }
     public IReadOnlyList<TaskDto>? Tasks { get; set; }
     public IReadOnlyList<EventDto>? Events { get; set; }

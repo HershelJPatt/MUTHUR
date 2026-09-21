@@ -6,6 +6,29 @@ namespace Muthur.Server.Tests.Benchmark;
 public sealed class WorkflowBenchmarkTests
 {
     [Fact]
+    public void Subject_binding_uses_the_captured_response_and_marks_legacy_absence()
+    {
+        var firstId = Guid.NewGuid().ToString();
+        var secondId = Guid.NewGuid().ToString();
+        var first = System.Text.Json.JsonSerializer.SerializeToElement(new { currentSubject = new { id = firstId } });
+        var second = System.Text.Json.JsonSerializer.SerializeToElement(new { currentSubject = new { id = secondId } });
+        var captured = WorkflowScenarios.SubjectId(first);
+        Assert.Equal(secondId, WorkflowScenarios.SubjectId(second));
+        Assert.Equal(firstId, captured);
+        Assert.Null(WorkflowScenarios.SubjectId(System.Text.Json.JsonSerializer.SerializeToElement(new { id = "T-1" })));
+    }
+
+    [Theory]
+    [InlineData("{\"currentSubject\":null}")]
+    [InlineData("{\"currentSubject\":{}}")]
+    [InlineData("{\"currentSubject\":{\"id\":\"invalid\"}}")]
+    public void Malformed_subject_evidence_is_not_treated_as_legacy(string json)
+    {
+        using var document = System.Text.Json.JsonDocument.Parse(json);
+        Assert.Throws<InvalidDataException>(() => WorkflowScenarios.SubjectId(document.RootElement));
+    }
+
+    [Fact]
     [Trait("Category", "WorkflowBenchmark")]
     public async Task Scripted_workflows_are_graded_from_retained_evidence()
     {
