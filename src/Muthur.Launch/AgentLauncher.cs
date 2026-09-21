@@ -18,7 +18,7 @@ public sealed record AgentIdentity(string Name, string Token);
 public sealed class AgentLauncher(IProcessRunner processes, Func<string, (string FileName, IReadOnlyList<string> Prefix)?>? resolve = null,
     Func<AgentIdentity, CancellationToken, Task>? heartbeat = null, TimeProvider? timeProvider = null,
     Func<AgentIdentity, CancellationToken, Task>? exited = null,
-    IReadOnlyDictionary<string, string>? extraEnvironment = null)
+    IReadOnlyDictionary<string, string>? extraEnvironment = null, Func<string, IHarnessAdapter?>? adapterFor = null)
 {
     private readonly Func<string, (string FileName, IReadOnlyList<string> Prefix)?> _resolve = resolve ?? ExecutableResolver.Resolve;
 
@@ -46,14 +46,27 @@ public sealed class AgentLauncher(IProcessRunner processes, Func<string, (string
         foreach (var candidate in candidates)
         {
             var clock = Stopwatch.StartNew();
-            if (Harnesses.Find(candidate.Harness) is not { } adapter)
+            var requested = requestFor(candidate);
+            CapabilityMatch? match = null;
+            if (requested.Capabilities is { Requirements.Count: > 0 })
+            {
+                match = (await new CapabilityEvaluator(processes, timeProvider, _resolve)
+                    .InspectAsync((adapterFor ?? Harnesses.Find)(candidate.Harness), requested, ct)).Match;
+                if (!match.Allowed)
+                {
+                    attempts.Add(new(candidate, new(false, CapabilityEvaluator.Explain(match), false), clock.Elapsed,
+                        Started: false, FailureKind: "capability_mismatch", CapabilityMatch: match));
+                    continue;
+                }
+            }
+            if ((adapterFor ?? Harnesses.Find)(candidate.Harness) is not { } adapter)
             {
                 attempts.Add(new(candidate, new WorkerOutcome(false, $"Unknown harness '{candidate.Harness}'.", false), clock.Elapsed, Started: false));
                 continue;
             }
 
             var runId = Guid.NewGuid().ToString("n");
-            var request = SessionWorkspace.ForAttempt(requestFor(candidate), runId);
+            var request = SessionWorkspace.ForAttempt(requested, runId);
             var invocation = adapter.Build(request);
             if (_resolve(invocation.FileName) is not { } executable)
             {
@@ -94,7 +107,7 @@ public sealed class AgentLauncher(IProcessRunner processes, Func<string, (string
             }
             var outcome = adapter.Interpret(request, result);
             attempts.Add(new(candidate, outcome, clock.Elapsed, RunId: runId,
-                FailureKind: SessionWorkspace.FailureKind(result, outcome), ExitCode: result.ExitCode));
+                FailureKind: SessionWorkspace.FailureKind(result, outcome), ExitCode: result.ExitCode, CapabilityMatch: match));
 
             // A session that ran and gave a verdict is finished, right or wrong. Only an account that could not
             // answer at all is worth trying elsewhere.
