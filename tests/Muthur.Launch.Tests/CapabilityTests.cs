@@ -3,6 +3,10 @@ using Muthur.Contracts;
 
 namespace Muthur.Launch.Tests;
 
+[CollectionDefinition("Capability environment", DisableParallelization = true)]
+public sealed class CapabilityEnvironment;
+
+[Collection("Capability environment")]
 public sealed class CapabilityTests : IDisposable
 {
     private readonly string _root = Path.Combine(Path.GetTempPath(), "muthur-tests", "capability-" + Guid.NewGuid().ToString("n"));
@@ -141,6 +145,79 @@ public sealed class CapabilityTests : IDisposable
     }
 
     [Fact]
+    public async Task Ambient_toolchain_and_git_configuration_changes_invalidate_identity()
+    {
+        var previous = Environment.GetEnvironmentVariable("DOTNET_ROOT_X64");
+        try
+        {
+            var request = Request("build");
+            var identity = await Identity(request);
+            Assert.NotNull(identity);
+            Store.Write(identity, [Observation(identity, "build")]);
+            Environment.SetEnvironmentVariable("DOTNET_ROOT_X64", Path.Combine(_root, "different-toolchain"));
+            var changed = await new CapabilityEvaluator(_runner, _clock, Resolve).InspectAsync(_adapter, request);
+            Assert.NotEqual(identity, changed.Identity);
+            Assert.False(changed.Match.Allowed);
+            Environment.SetEnvironmentVariable("DOTNET_ROOT_X64", previous);
+            _runner.Config = "user.name\nChanged principal configuration\0";
+            changed = await new CapabilityEvaluator(_runner, _clock, Resolve).InspectAsync(_adapter, request);
+            Assert.NotEqual(identity, changed.Identity);
+            Assert.False(changed.Match.Allowed);
+        }
+        finally { Environment.SetEnvironmentVariable("DOTNET_ROOT_X64", previous); }
+    }
+
+    [Theory]
+    [InlineData("overflow")]
+    [InlineData("malformed-git")]
+    public async Task Incomplete_native_inputs_return_unknown_without_reusing_cache(string mode)
+    {
+        Directory.CreateDirectory(Path.Combine(_root, ".git"));
+        var request = Request("build");
+        var identity = await Identity(request);
+        Store.Write(identity, [Observation(identity, "build")]);
+        var previous = Environment.GetEnvironmentVariable("GIT_CONFIG_COUNT");
+        try
+        {
+            if (mode == "overflow") _runner.Config = new string('x', 1_048_577);
+            else Environment.SetEnvironmentVariable("GIT_CONFIG_COUNT", "malformed");
+            var result = await new CapabilityEvaluator(_runner, _clock, Resolve).InspectAsync(_adapter, request);
+            Assert.Null(result.Identity);
+            Assert.False(result.Match.Allowed);
+            Assert.Equal("unknown", Assert.Single(result.Match.Missing).State);
+            Assert.NotNull(result.Diagnostic);
+        }
+        finally { Environment.SetEnvironmentVariable("GIT_CONFIG_COUNT", previous); }
+    }
+
+    [Theory]
+    [InlineData("native-subagent")]
+    [InlineData("conductor-validator")]
+    [InlineData("conductor-orchestrator")]
+    public async Task Unsupported_identity_prediction_refuses_before_agent_allocation(string path)
+    {
+        var request = Request("native-agent-tools");
+        request = request with { Capabilities = request.Capabilities! with { LaunchPath = path } };
+        var attempt = Assert.Single(await new AgentLauncher(_runner, Resolve, timeProvider: _clock, adapterFor: _ => _adapter)
+            .RunAsync([Candidate], _ => request, _ => throw new InvalidOperationException("Identity must not be allocated"),
+                TimeSpan.FromSeconds(1), _ => Task.CompletedTask));
+        Assert.False(attempt.Started);
+        Assert.Equal("capability_mismatch", attempt.FailureKind);
+        Assert.Equal(0, _runner.FullStarts);
+    }
+
+    [Fact]
+    public async Task Malformed_cached_identity_is_diagnostic_and_does_not_match()
+    {
+        var identity = await Identity(Request("shell"));
+        Store.Write(identity, [Observation(identity, "shell")]);
+        var path = Store.PathFor(identity);
+        File.WriteAllText(path, File.ReadAllText(path).Replace("worker-run", "invented-path", StringComparison.Ordinal));
+        Assert.Empty(Store.Read(identity).Observations);
+        Assert.Contains("Malformed", Store.Read(identity).Diagnostic);
+    }
+
+    [Fact]
     public async Task Production_admission_and_unsupported_paths_never_start_a_probe()
     {
         var admission = new RefusedAdmission();
@@ -185,6 +262,7 @@ public sealed class CapabilityTests : IDisposable
         public string Version { get; set; } = "fixture 1";
         public int VersionReads { get; private set; }
         public int FullStarts { get; private set; }
+        public string Config { get; set; } = "";
         public Task<ProcessResult> RunAsync(string fileName, IReadOnlyList<string> arguments, string workingDirectory,
             string? stdin = null, TimeSpan? timeout = null, CancellationToken ct = default, IReadOnlyCollection<string>? scrubEnvironment = null,
             IReadOnlyDictionary<string, string>? environment = null)
@@ -197,7 +275,7 @@ public sealed class CapabilityTests : IDisposable
                 {
                     "rev-parse" when arguments[1] == "HEAD" => new string('a', 40),
                     "rev-parse" => Path.Combine(workingDirectory, ".git"),
-                    "config" => "safe.directory\n" + Path.GetFullPath(workingDirectory).Replace('\\', '/') + "\0",
+                    "config" => Config + "safe.directory\n" + Path.GetFullPath(workingDirectory).Replace('\\', '/') + "\0",
                     _ => "",
                 };
                 return Task.FromResult(new ProcessResult(0, output, ""));

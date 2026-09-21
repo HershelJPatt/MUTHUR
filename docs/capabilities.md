@@ -1,58 +1,73 @@
 # Demonstrated assignment capabilities
 
-Opt in on a standalone line in the committed frozen spec:
+Opt in with a standalone line in the committed frozen spec:
 
 ```text
 capabilities: shell, build, test, worktree-base, commit
 ```
 
-Multiple lines form a union. Unknown keys, empty items and malformed declarations refuse dispatch.
-Other accepted keys are `headless-interaction`, `connector-interaction`, `platform:<name>` and
-`native-agent-tools`. They require their own evidence. A headless render, executable discovery or
-success on another route never proves interaction. Existing specs without declarations retain their
-current routing, including `needs: browser` and attended validation.
+Multiple lines union. Unknown keys and malformed lists refuse dispatch. Other keys are
+`headless-interaction`, `connector-interaction`, `platform:<name>` and `native-agent-tools`.
+These require independent evidence. Specs without declarations preserve existing routing,
+including `needs: browser`; this is incremental opt-in.
 
 `muthur capability inspect --spec specs/T-n.md --base task/T-n --default-branch main --harness codex --launch-path worker-run`
-reads the pinned committed spec and cache without mutation or model sessions. Inspection uses the
-first matching implementer catalog candidate for worker-run and mastermind candidate for conductor
-paths. Its identity includes that candidate's model/reasoning and the effective command configuration.
+reads the committed spec and exact candidate identity without mutation or model sessions.
+There must be exactly one matching catalog candidate. Inspect requires the checkout's effective
+project/settings inputs to match the pinned base. An unknown identity is a refusal, never permission
+to reuse an earlier success. First-slice conductor/native identity prediction is unsupported.
 `worker-run`, `conductor-validator`, `conductor-orchestrator` and `native-subagent` never cross-satisfy.
 
-Observations live under the selected `MUTHUR_HOME/capabilities`, in atomic per-identity JSON files.
-Machine, harness/version, canonical repository root, base revision, launch path and configuration must
-match ordinally. The configuration digest covers executable/prefix, command lists, model/reasoning,
-Git environment and adapter-owned settings content hashes. Secret values are hashed in memory, never
-stored as evidence. Only the launcher-appended `safe.directory` for its allocated worktree is represented
-by a stable slot; inherited trust and other Git overrides stay exact. Settings are identified by scope
-and content, so allocating an equivalent temporary worktree does not invent a configuration change.
-The probe refuses if the disposable worktree's effective identity differs from the requested route.
+Identity v2 covers machine, effective Windows SID or Unix UID, OS/architecture, canonical common
+repository, base, resolved harness/version, permission mode, generated adapter settings, model/reasoning,
+command rules, effective Git configuration, and resolved dotnet/pwsh/git versions and paths.
+Configuration values are persisted only as digests. Relevant inherited PATH, PATHEXT, home/profile,
+APPDATA, CODEX_HOME, CLAUDE_CONFIG_DIR, DOTNET_ROOT/DOTNET_ROOT_X64, DOTNET_CLI_HOME,
+MSBuildSDKsPath, NuGet and TEMP/TMP inputs and project/ancestor toolchain settings are hashed.
+Only launcher-added safe.directory and known adapter-generated workspace/output/scratch slots are
+normalized. User paths, ancestor settings and permission rules remain exact. A Windows principal
+or ambient configuration difference can make a probe worktree unknown; never widen permissions to
+make it match. Missing, unreadable, oversized or malformed identity inputs fail closed.
 
-Maximum lifetime is 24 hours; temporary failures last five minutes. Expired, missing, malformed,
-unreadable or future-dated evidence refuses explicit requirements. Unknown adapters and unreadable
-identity inputs do not reuse previous successes. Doctor reads counts and unknown coverage; even
-`doctor --probe` never starts a model capability probe.
+Observations live under the selected `MUTHUR_HOME/capabilities` as atomic per-identity JSON files.
+No cross-home cache exists. Maximum lifetime is 24 hours, or five minutes for transient failures.
+Unknown, stale, unavailable and temporarily-failing evidence all refuse explicit requirements.
+Doctor reports observation/stale/unknown counts and unobserved coverage without launching models,
+even with `doctor --probe`. Cache observations are not authoritative task state.
 
-`muthur capability probe` takes the inspect options plus `--timeout-seconds` (default 90, maximum 120).
-Production admission currently returns `capability_probe_admission_unavailable` for worker-run and
-unsupported for other paths, with zero model starts. A follow-up to T-100 must connect the shared
-worker account, catalog, budget and capacity reservation before enabling production admission.
-No retries, concurrency increase, permission expansion or account provisioning are authorized here.
+`muthur capability probe` takes the inspect options plus required `--task T-n` and optional
+`--timeout-seconds` (default 90, range 1..120). T-113 shared admission checks the exact catalog candidate,
+account, current mastermind ownership (or Founder), task daily budget and process ceiling. One request
+permits at most one model start with no retries. Other launch paths reject before admission. Inspect
+needs no reservation. Admission refusals retain their diagnostics; do not change accounts, budgets,
+permissions or concurrency to work around them.
 
-The bounded engine behind the admission interface is exercised with admitted fake runners. It runs
-one fixed shell script in a disposable worktree pinned to the requested revision. A fresh nonce and
-per-step receipts plus resulting artifacts/HEAD are required. The offline MSBuild fixture has explicit
-Build and Test targets using SDK tasks, without package downloads or product code. The commit step
-only commits a generated file in its own disposable repository. This proves shell/tool execution and
-the SDK route, not that any arbitrary project's build or tests will work. Prose and process exit 0 alone
-prove nothing. Admission leases must reap all descendants before release; worktree cleanup runs in
-finally. Probe duration and starts are distinct from full sessions. A full session avoided is counted
-only for a rejected full launch, never a successful probe or full session.
+The admitted engine creates a disposable worktree pinned to the base and an immutable package-free
+MSBuild fixture. The measured harness must execute individually visible shell commands, including
+`dotnet build <fixture.proj> --no-restore` and `dotnet test <fixture.proj> --no-restore`.
+Build writes a fresh nonce; VSTest asserts that output before writing its distinct nonce output.
+Each exact native command and its exit receipt must be in the SAME shell-tool invocation. A later
+shell cannot recover LASTEXITCODE. Prose, msbuild substitutions and exit zero alone prove nothing.
+Receipts, immutable input hashes, resulting outputs and isolated commit HEAD are checked separately.
+Commit affects only a generated file in a disposable repository, never the task/default branch.
+This proves SDK command execution and a deterministic fixture assertion, not a framework test suite
+or arbitrary product correctness. Partial failure does not manufacture another step's success.
 
-Recovery: inspect the exact identity and diagnostics, remove only its selected stale JSON record, then
-request an explicit authorized re-probe after production admission exists. Do not delete the whole
-cache, add permissions, switch accounts or claim availability from documentation. Until admission is
-integrated, fixture-seeded observations are simulated evidence only and belong only in a scratch home.
+Setup and execution share the selected budget, with separately bounded cleanup. Process exit and
+worktree cleanup must finish before reservation release or cache publication. If cleanup is uncertain,
+the reservation is retained: confirm process and worktree cleanup, then have the original caller or
+Founder release that specific reservation through the existing admission API. Do not claim fake tests
+prove hard-crash or arbitrary detached-descendant cleanup. Probe starts/overhead are separate from full
+starts; only a rejected full launch counts as a full session avoided.
 
-T-94 owns the future browser integration seam. T-67/T-97 still require real native Agent-tool evidence
-on the native-subagent path; an installed real Claude native pilot is unavailable in this slice. No
-native, browser or platform capability is marked available by the bounded fixture.
+Recovery: inspect the exact identity and diagnostics, remove only its selected stale JSON record,
+then explicitly request an authorized re-probe. Never delete the entire cache or seed live successes.
+`scripts/Test-T100Capabilities.ps1 -Install <absolute-install-path> -Revision <candidate-head>` is an
+orchestrator-only installed scratch check. It creates a private home, loopback hub and simulated harness;
+fixture evidence is never a real-use observation. Workers write but do not execute this hub script.
+The orchestrator separately records the authorized installed observation, window/cohort/sample/revision,
+probe overhead and unavailable routes. No live-hub automated tests or paid fixture calls are permitted.
+
+T-94 owns browser integration. T-67/T-97 still require actual native Agent-tool evidence; the real native
+Claude pilot remains unavailable. No browser, connector, platform or native capability is established
+by this fixture or by a host-only command experiment.

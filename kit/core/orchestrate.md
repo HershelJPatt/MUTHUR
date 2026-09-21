@@ -24,7 +24,7 @@ For frozen specs with standalone `capabilities:` requirements, inspect the exact
 candidate and launch path before dispatch. Unknown, stale, unavailable and temporarily failing evidence
 refuses a full session; do not loop or widen permissions. Cache identity includes version, configuration
 and revision. Remove only a selected stale record and explicitly re-probe once shared admission permits
-it. Production capability probes currently refuse with zero model starts. Existing specs without the
+it. Explicit worker-run probes require --task and shared catalog/account/budget/capacity admission; refusal starts no model. Existing specs without the
 line retain their routing. Browser work remains T-94; native Agent-tool evidence remains T-67/T-97.
 Fixture smoke results are simulated, never a real-use pilot. See `docs/capabilities.md` for limitations.
 

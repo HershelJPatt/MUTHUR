@@ -15,6 +15,11 @@ public static class CapabilityFixture
             <WriteLinesToFile File="$(MSBuildThisFileDirectory)build.txt" Lines="{{nonce}}" Overwrite="true" />
           </Target>
           <Target Name="VSTest">
+            <Error Condition="!Exists('$(MSBuildThisFileDirectory)build.txt')" Text="Build nonce output is missing." />
+            <ReadLinesFromFile File="$(MSBuildThisFileDirectory)build.txt">
+              <Output TaskParameter="Lines" ItemName="BuildNonce" />
+            </ReadLinesFromFile>
+            <Error Condition="'@(BuildNonce)' != '{{nonce}}'" Text="Build nonce output does not match." />
             <WriteLinesToFile File="$(MSBuildThisFileDirectory)test.txt" Lines="{{nonce}}" Overwrite="true" />
           </Target>
         </Project>
@@ -37,7 +42,9 @@ public static class CapabilityFixture
 
     public static string Prompt(IReadOnlyList<CapabilityProbeStep> steps) =>
         "Execute each Command exactly once, directly as a standalone PowerShell shell-tool command. " +
-        "Do not wrap these commands in a script or substitute msbuild. Immediately after each Command, execute its Receipt in the same shell. " +
+        "For each step use ONE shell-tool invocation containing Command followed immediately by a newline and Receipt. " +
+        "Keep the exact native command individually visible to the permission engine; do not wrap it in a script or substitute msbuild. " +
+        "The native exit code and receipt write MUST occur in that SAME invocation; a later fresh shell cannot read the prior LASTEXITCODE. " +
         "For a tool denial, record exitCode 126 for that step if writing the receipt is permitted, then continue the other steps. " +
         "Never edit fixture inputs, invent outputs, or request more permissions. " + Limitation + "\n" +
         JsonSerializer.Serialize(steps, CapabilityJsonContext.Default.IReadOnlyListCapabilityProbeStep);

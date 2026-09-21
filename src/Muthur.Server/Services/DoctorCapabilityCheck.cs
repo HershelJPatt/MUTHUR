@@ -31,6 +31,6 @@ public sealed class DoctorCapabilityCheck(MuthurOptions options) : IDoctorCheck
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { unknown++; }
         return Task.FromResult<IReadOnlyList<CheckDto>>([new("capability", "cache", CheckStatus.Warn,
             $"Cached observations: {count}; stale: {stale}; unknown/malformed: {unknown}. Unobserved identities have unknown coverage. " +
-            "Use capability inspect with the committed spec/base and exact launch path. capability probe requires shared admission (currently unavailable). Doctor never starts model probes, including --probe.")]);
+            "Use capability inspect with the committed spec/base and exact launch path. Explicit capability probe --task requires shared catalog/account/budget/capacity admission. Doctor never starts model probes, including --probe.")]);
     }
 }

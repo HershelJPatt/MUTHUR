@@ -25,9 +25,9 @@ public sealed class ProbeAdmissionTests : IDisposable
     public ProbeAdmissionTests() => _hub.Settings["Muthur:ConductorEnabled"] = "true";
     public void Dispose() { Environment.SetEnvironmentVariable("PATH", _path); _hub.Dispose(); _repo.Dispose(); }
 
-    private async Task<(HttpClient Client, ProbeAdmissionRequest Request)> Setup()
+    private async Task<(HttpClient Client, ProbeAdmissionRequest Request)> Setup(string[]? validators = null)
     {
-        await _hub.AddProjectAsync(repoPath: _repo.Path);
+        await _hub.AddProjectAsync(repoPath: _repo.Path, validators: validators);
         var client = await _hub.RegisterAgentAsync("owner", tier: "mastermind");
         var task = await client.AddTaskAsync("Probe fixture");
         (await client.ClaimAsync(task.Id)).EnsureSuccessStatusCode();
@@ -71,7 +71,7 @@ public sealed class ProbeAdmissionTests : IDisposable
     [InlineData("overseer", false)]
     public async Task Admission_and_each_launch_class_share_the_gate(string kind, bool admissionFirst)
     {
-        var (client, request) = await Setup();
+        var (client, request) = await Setup(kind == "validator" ? ["fixture-validator"] : []);
         var process = new HeldProcess();
         var overseer = ActivatorUtilities.CreateInstance<OverseerService>(_hub.Services, process);
         var conductor = ActivatorUtilities.CreateInstance<ConductorService>(_hub.Services, overseer);
@@ -92,13 +92,16 @@ public sealed class ProbeAdmissionTests : IDisposable
             else
             {
                 (await _hub.Founder().PutAsJsonAsync(Routes.Roles, new DefineRoleRequest("fixture-validator", "Validate", true))).EnsureSuccessStatusCode();
-                await Ledger.MutateAsync(Caller.Founder, async m =>
-                {
-                    var row = await TaskService.LoadAsync(m.Db, task.Id, default);
-                    row.State = TaskState.Validating;
-                    m.Db.TaskValidations.Add(new TaskValidation { TaskId = row.Id, ValidatorKey = "fixture-validator", Verdict = Verdict.Pending, WaitingSince = m.Now });
-                    m.Record("task.implemented", row.Id, new { head = "fixture" });
-                });
+                (await client.ClaimAsync(task.Id)).EnsureSuccessStatusCode();
+                var branch = $"task/{task.Id}-admission";
+                _repo.Git("checkout", "-q", "-b", branch);
+                var spec = _repo.WriteSpec(task.Id);
+                _repo.Commit("Freeze admission staffing fixture");
+                (await client.PostActionAsync(task.Id, "spec", new SetSpecRequest(spec, branch))).EnsureSuccessStatusCode();
+                var implemented = await client.PostActionAsync(task.Id, "implemented", new ImplementedRequest(branch));
+                implemented.EnsureSuccessStatusCode();
+                Assert.NotNull((await implemented.ReadTaskAsync()).CurrentSubject);
+                _repo.Git("checkout", "-q", "main");
             }
         }
         var entered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);

@@ -38,7 +38,11 @@ public sealed class CapabilityProcessRunner : ICapabilityProcessRunner
             if (stdin is not null) await process.StandardInput.WriteAsync(stdin.AsMemory(), budget.Token);
             process.StandardInput.Close();
             await process.WaitForExitAsync(budget.Token);
-            return new(process.ExitCode, await stdout.WaitAsync(budget.Token), await stderr.WaitAsync(budget.Token));
+            var output = await stdout.WaitAsync(budget.Token);
+            var error = await stderr.WaitAsync(budget.Token);
+            if (output.Overflow || error.Overflow)
+                return new(125, "", "Capability process output exceeded the 1 MiB input limit; identity/evidence is incomplete.");
+            return new(process.ExitCode, output.Text, error.Text);
         }
         catch (OperationCanceledException) when (!ct.IsCancellationRequested)
         { return new(124, "", "Probe command execution budget expired."); }
@@ -56,13 +60,18 @@ public sealed class CapabilityProcessRunner : ICapabilityProcessRunner
         }
     }
 
-    private static async Task<string> DrainAsync(StreamReader reader)
+    private static async Task<(string Text, bool Overflow)> DrainAsync(StreamReader reader)
     {
+        const int maximum = 1_048_576;
         var output = new StringBuilder();
         var buffer = new char[4096];
+        var overflow = false;
         int read;
         while ((read = await reader.ReadAsync(buffer)) > 0)
-            if (output.Length < 65_536) output.Append(buffer, 0, Math.Min(read, 65_536 - output.Length));
-        return output.ToString();
+        {
+            if (read > maximum - output.Length) overflow = true;
+            output.Append(buffer, 0, Math.Min(read, maximum - output.Length));
+        }
+        return (output.ToString(), overflow);
     }
 }

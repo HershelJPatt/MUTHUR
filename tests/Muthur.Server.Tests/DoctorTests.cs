@@ -11,6 +11,28 @@ public sealed class DoctorTests : IDisposable
 
     public void Dispose() => _hub.Dispose();
 
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task Capability_cache_check_is_read_only_even_when_probe_is_requested(bool probe)
+    {
+        var directory = Path.Combine(_hub.DataDir, "capabilities");
+        Directory.CreateDirectory(directory);
+        var file = Path.Combine(directory, "malformed.json");
+        const string content = "not observations";
+        File.WriteAllText(file, content);
+        var report = await _hub.CreateClient().GetFromJsonAsync($"{Routes.Doctor}?probe={probe.ToString().ToLowerInvariant()}", MuthurJsonContext.Default.DoctorDto);
+        var check = Assert.Single(report!.Checks, c => c.Category == "capability");
+        Assert.Equal(CheckStatus.Warn, check.Status);
+        Assert.Contains("unknown/malformed: 1", check.Detail);
+        Assert.Contains("Doctor never starts model probes", check.Detail);
+        Assert.Equal(content, File.ReadAllText(file));
+        Assert.Single(Directory.EnumerateFiles(directory));
+        Assert.False(Directory.Exists(Path.Combine(_hub.DataDir, "capability-scratch")));
+        Assert.Empty(_hub.Validators.Started);
+        Assert.Empty(_hub.Orchestrators.Started);
+    }
+
     [Fact]
     public async Task A_hub_with_nothing_configured_answers_anyone_with_only_what_it_knows_of_itself()
     {

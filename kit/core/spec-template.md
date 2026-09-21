@@ -38,7 +38,7 @@ in the frozen spec, for example `capabilities: shell, build, test, worktree-base
 union. Other keys: `headless-interaction`, `connector-interaction`, `platform:<name>`, `native-agent-tools`.
 Each requires recent evidence for the exact machine/harness/configuration/base/launch path; unknown or
 stale evidence refuses launch. Specs without this line retain current routing. See `docs/capabilities.md`.
-Production `capability probe` currently refuses until shared admission exists; do not invent evidence.
+Explicit `capability probe --task T-n` uses shared catalog/account/budget/capacity admission; do not invent evidence.
 
 Exact commands for the whole task, and what passing looks like:
 

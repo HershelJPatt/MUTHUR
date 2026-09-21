@@ -3,6 +3,7 @@ using Muthur.Contracts;
 
 namespace Muthur.Launch.Tests;
 
+[Collection("Capability environment")]
 public sealed class CapabilityProbeTests : IDisposable
 {
     private readonly string _root = Path.Combine(Path.GetTempPath(), "muthur-tests", "capability-probe-" + Guid.NewGuid().ToString("n"));
@@ -48,7 +49,7 @@ public sealed class CapabilityProbeTests : IDisposable
             .RunAsync("T-100", new("fixture", "fixture", "fixture"), request, TimeSpan.FromSeconds(90));
         Assert.Equal(1, admission.Count);
         Assert.Equal(1, admission.Releases);
-        Assert.Equal(1, result.ProbeStarts);
+        Assert.True(result.ProbeStarts == 1, $"{result.Code}: {result.Detail}");
         Assert.Equal(1, _runner.ModelInvocations);
         Assert.Equal(expectedBuild, Assert.Single(result.Observations, o => o.Capability == "build").State);
         Assert.DoesNotContain(result.Observations, o => o.Capability.Contains("interaction", StringComparison.Ordinal) || o.Capability == "native-agent-tools");
@@ -63,7 +64,7 @@ public sealed class CapabilityProbeTests : IDisposable
         if (mode == "denied-build")
         {
             Assert.Equal("available", Assert.Single(result.Observations, o => o.Capability == "shell").State);
-            Assert.Equal("available", Assert.Single(result.Observations, o => o.Capability == "test").State);
+            Assert.Equal("unavailable", Assert.Single(result.Observations, o => o.Capability == "test").State);
         }
         if (mode is "timeout" or "cancel") Assert.All(result.Observations, o => Assert.Equal(TimeSpan.FromMinutes(5), o.ExpiresAt - o.ObservedAt));
     }
@@ -110,6 +111,21 @@ public sealed class CapabilityProbeTests : IDisposable
         Assert.Equal(0, _runner.ModelInvocations);
     }
 
+    [Fact]
+    public async Task Cancellation_during_identity_setup_releases_without_start_or_cache()
+    {
+        var request = await Request();
+        _runner.Mode = "cancel-setup";
+        var admission = new Admission();
+        var result = await new CapabilityProbe(_runner, admission, resolve: Resolve, adapterFor: _ => _adapter)
+            .RunAsync("T-100", new("fixture", "fixture", "fixture"), request, TimeSpan.FromSeconds(90));
+        Assert.Equal(0, result.ProbeStarts);
+        Assert.Equal(0, _runner.ModelInvocations);
+        Assert.Equal(1, admission.Releases);
+        Assert.Empty(result.Observations);
+        Assert.False(Directory.Exists(request.Capabilities!.CacheDirectory));
+    }
+
     private sealed class Admission(Action? onRelease = null) : IProbeAdmissionClient
     {
         public int Count { get; private set; }
@@ -149,6 +165,7 @@ public sealed class CapabilityProbeTests : IDisposable
             string? stdin = null, TimeSpan? timeout = null, CancellationToken ct = default, IReadOnlyCollection<string>? scrubEnvironment = null,
             IReadOnlyDictionary<string, string>? environment = null)
         {
+            if (Mode == "cancel-setup" && arguments.Contains("--version")) throw new OperationCanceledException();
             var isolated = new Dictionary<string, string>(environment ?? new Dictionary<string, string>())
             {
                 ["GIT_CONFIG_GLOBAL"] = OperatingSystem.IsWindows() ? "NUL" : "/dev/null",

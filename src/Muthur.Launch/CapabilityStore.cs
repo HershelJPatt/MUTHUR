@@ -39,8 +39,11 @@ public sealed class CapabilityStore(string directory, TimeProvider? timeProvider
 
     private static bool Valid(CapabilityObservation? o) => o is not null && o.Identity is not null &&
         !string.IsNullOrWhiteSpace(o.Identity.Machine) && !string.IsNullOrWhiteSpace(o.Identity.Harness) &&
-        !string.IsNullOrWhiteSpace(o.Identity.HarnessVersion) && !string.IsNullOrWhiteSpace(o.Identity.ConfigurationHash) &&
-        !string.IsNullOrWhiteSpace(o.Identity.RepositoryRoot) && !string.IsNullOrWhiteSpace(o.Identity.BaseCommit) &&
+        o.Identity.HarnessVersion is { Length: > 0 and <= 256 } &&
+        o.Identity.ConfigurationHash is { Length: 64 } hash && hash.All(char.IsAsciiHexDigit) &&
+        o.Identity.RepositoryRoot is { Length: > 0 } root && Path.IsPathFullyQualified(root) &&
+        o.Identity.BaseCommit is { Length: 40 } basis && basis.All(char.IsAsciiHexDigit) &&
+        o.Identity.LaunchPath is "worker-run" or "conductor-validator" or "conductor-orchestrator" or "native-subagent" &&
         CapabilityRequirements.IsKey(o.Capability ?? "") && CapabilityStates.IsValid(o.State) &&
         o.Evidence is { Length: <= 2048 } && o.DurationMilliseconds >= 0 && o.ExpiresAt >= o.ObservedAt &&
         o.ExpiresAt - o.ObservedAt <= (o.State == CapabilityStates.TemporarilyFailing ? TimeSpan.FromMinutes(5) : TimeSpan.FromHours(24));
