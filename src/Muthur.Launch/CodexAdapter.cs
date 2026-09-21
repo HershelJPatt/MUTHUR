@@ -12,9 +12,28 @@ public sealed class CodexAdapter(string name, string? openSourceProvider) : IHar
 
     public string? CapabilityExecutable => "codex";
 
-    public string? CapabilitySettings(WorkerRequest request) => Launch.CapabilitySettings.HashFiles([
-        ("user", Path.Combine(Environment.GetEnvironmentVariable("CODEX_HOME") ?? Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), ".codex"), "config.toml")),
-        ("project", Path.Combine(request.WorkingDirectory, ".codex", "config.toml"))]);
+    public string? CapabilitySettings(WorkerRequest request)
+    {
+        var inherited = Launch.CapabilitySettings.HashFiles([
+            ("user", Path.Combine(Environment.GetEnvironmentVariable("CODEX_HOME") ?? Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), ".codex"), "config.toml")),
+            ("project", Path.Combine(request.WorkingDirectory, ".codex", "config.toml"))]);
+        if (inherited is null) return null;
+        var environment = new Dictionary<string, string>(request.GitEnvironment ?? new Dictionary<string, string>());
+        if (environment.TryGetValue("GIT_CONFIG_COUNT", out var count) && int.TryParse(count, out var number) && number > 0 &&
+            environment.GetValueOrDefault($"GIT_CONFIG_KEY_{number - 1}") == "safe.directory" &&
+            environment.GetValueOrDefault($"GIT_CONFIG_VALUE_{number - 1}") == Path.GetFullPath(request.WorkingDirectory).Replace('\\', '/'))
+            environment[$"GIT_CONFIG_VALUE_{number - 1}"] = "{allocated-worktree}";
+        var invocation = Build(request with { WorkingDirectory = "{allocated-worktree}", ScratchDirectory = "{adapter-scratch}", GitEnvironment = environment });
+        using var stream = new MemoryStream();
+        using (var json = new Utf8JsonWriter(stream))
+        {
+            json.WriteStartArray();
+            json.WriteStringValue(inherited);
+            foreach (var argument in invocation.Arguments) json.WriteStringValue(argument);
+            json.WriteEndArray();
+        }
+        return CapabilityHash.Of(System.Text.Encoding.UTF8.GetString(stream.ToArray()));
+    }
 
     /// <summary>The workspace-write sandbox keeps .git read-only, so a Codex worker cannot commit; the launcher does it.</summary>
     public string? WorkerNote =>

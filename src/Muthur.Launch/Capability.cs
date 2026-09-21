@@ -76,4 +76,6 @@ public static class CapabilityHash
 [JsonSerializable(typeof(CapabilityObservation[]))]
 [JsonSerializable(typeof(CapabilityInspection))]
 [JsonSerializable(typeof(CapabilityMatch))]
+[JsonSerializable(typeof(CapabilityProbeResult))]
+[JsonSerializable(typeof(IReadOnlyList<CapabilityProbeStep>))]
 public partial class CapabilityJsonContext : JsonSerializerContext;

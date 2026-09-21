@@ -233,6 +233,7 @@ public static class WorkerCommands
             var frozen = await Git(repo, "cat-file", "blob", assignment.SpecBlob)
                 ?? throw new WorkerDispatchException("spec_unreadable", "The pinned spec blob cannot be read.");
             requirements = CapabilityRequirements.Parse(frozen);
+            if (requirements.Count > 0) (verify, extraAllowed) = await ReadPinnedProjectAsync(processes, repo, assignment.BaseCommit, ct);
         }
         catch (WorkerDispatchException ex) { return Output.Error(ex.Code, ex.Message, ExitCodes.RuleViolation); }
         var added = await processes.RunAsync("git", ["worktree", "add", "-b", branchName, worktree, assignment.BaseCommit], repo, timeout: TimeSpan.FromMinutes(2), ct: ct);
@@ -370,6 +371,32 @@ public static class WorkerCommands
         }
         catch (JsonException) { }
         return (verify, allowed);
+    }
+
+    internal static async Task<(List<string> Verify, List<string> Allowed)> ReadPinnedProjectAsync(
+        IProcessRunner processes, string repo, string commit, CancellationToken ct)
+    {
+        var entry = await processes.RunAsync("git", ["ls-tree", "--name-only", commit, "--", ProjectContext.FileName], repo,
+            timeout: TimeSpan.FromSeconds(5), ct: ct);
+        if (!entry.Ok) throw new WorkerDispatchException("capability_identity_unknown", "Cannot resolve pinned project settings.");
+        if (string.IsNullOrWhiteSpace(entry.StdOut)) return ([], []);
+        var blob = await processes.RunAsync("git", ["show", commit + ":" + ProjectContext.FileName], repo,
+            timeout: TimeSpan.FromSeconds(5), ct: ct);
+        if (!blob.Ok || blob.StdOut.Length > 1_048_576)
+            throw new WorkerDispatchException("capability_identity_unknown", "Pinned project settings are unreadable or exceed the limit.");
+        try
+        {
+            using var document = JsonDocument.Parse(blob.StdOut);
+            var verify = new List<string>();
+            var allowed = new List<string>();
+            foreach (var name in new[] { "build", "test" })
+                if (document.RootElement.TryGetProperty(name, out var value) && value.GetString() is { Length: > 0 } command) verify.Add(command);
+            if (document.RootElement.TryGetProperty("workerAllowedCommands", out var commands))
+                foreach (var command in commands.EnumerateArray()) allowed.Add(command.GetString() ?? throw new JsonException());
+            return (verify, allowed);
+        }
+        catch (Exception ex) when (ex is JsonException or InvalidOperationException)
+        { throw new WorkerDispatchException("capability_identity_unknown", "Pinned project settings are malformed."); }
     }
 
     private static string Slug(string text)

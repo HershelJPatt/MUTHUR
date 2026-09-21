@@ -14,12 +14,14 @@ public sealed class CapabilityEvaluator(IProcessRunner processes, TimeProvider? 
             return Unknown("Unknown launch path.");
         if (adapter is null || adapter.CapabilityExecutable is not { } executableName)
             return Unknown("Harness adapter has no capability identity implementation.");
+        if (context.LaunchPath != "worker-run")
+            return Unknown("Exact conductor/native execution identity prediction is unsupported; no other launch path can satisfy it.");
         try
         {
             request = request with { GitEnvironment = request.RequireRepository ? SessionWorkspace.GitEnvironment(request.WorkingDirectory) : null };
             if (string.IsNullOrWhiteSpace(context.BaseCommit) || string.IsNullOrWhiteSpace(context.RepositoryRoot))
                 return Unknown("Repository and pinned base commit are required identity inputs.");
-            var executable = (resolve ?? ExecutableResolver.Resolve)(executableName);
+            var executable = CapabilityExecutable.Resolve(executableName, resolve ?? ExecutableResolver.Resolve);
             if (executable is null) return Unknown("Harness executable cannot be resolved.");
             var version = await processes.RunAsync(executable.Value.FileName, [.. executable.Value.Prefix, "--version"],
                 request.WorkingDirectory, timeout: TimeSpan.FromSeconds(5), ct: ct,
@@ -28,11 +30,14 @@ public sealed class CapabilityEvaluator(IProcessRunner processes, TimeProvider? 
                 return Unknown("Harness version discovery failed or exceeded the detail limit.");
             var settings = adapter.CapabilitySettings(request);
             if (settings is null) return Unknown("Harness settings identity is unreadable.");
+            var inputs = await CapabilityInputs.ReadAsync(processes, request, resolve ?? ExecutableResolver.Resolve, ct);
+            if (inputs is null) return Unknown("Pinned project, effective principal, Git or toolchain identity cannot be predicted exactly from this checkout.");
             using var stream = new MemoryStream();
             using (var json = new Utf8JsonWriter(stream))
             {
                 json.WriteStartArray();
-                json.WriteStringValue("capability-config-v1");
+                json.WriteStringValue("capability-config-v2");
+                json.WriteStringValue(inputs.Value.Hash);
                 json.WriteStringValue(Path.GetFullPath(executable.Value.FileName));
                 foreach (var prefix in executable.Value.Prefix) json.WriteStringValue(prefix);
                 json.WriteStringValue(context.LaunchPath);
@@ -67,12 +72,12 @@ public sealed class CapabilityEvaluator(IProcessRunner processes, TimeProvider? 
             }
             var identity = new CapabilityIdentity(Environment.MachineName, adapter.Name, version.StdOut.Trim(), context.LaunchPath,
                 CapabilityHash.Of(System.Text.Encoding.UTF8.GetString(stream.ToArray())),
-                Path.TrimEndingDirectorySeparator(Path.GetFullPath(context.RepositoryRoot)), context.BaseCommit);
+                Path.TrimEndingDirectorySeparator(inputs.Value.Common), context.BaseCommit);
             var store = new CapabilityStore(context.CacheDirectory, clock);
             var (observations, diagnostic) = store.Read(identity);
             return new(identity, context.Requirements, observations, store.Match(identity, context.Requirements, observations, diagnostic), diagnostic);
         }
-        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or ArgumentException or InvalidOperationException or System.ComponentModel.Win32Exception)
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or ArgumentException or InvalidOperationException or System.ComponentModel.Win32Exception or System.Security.SecurityException)
         {
             return Unknown("Capability identity input is missing or unreadable.");
         }

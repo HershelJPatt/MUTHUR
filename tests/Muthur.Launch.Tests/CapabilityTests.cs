@@ -1,4 +1,5 @@
 using System.Text.Json;
+using Muthur.Contracts;
 
 namespace Muthur.Launch.Tests;
 
@@ -142,13 +143,14 @@ public sealed class CapabilityTests : IDisposable
     [Fact]
     public async Task Production_admission_and_unsupported_paths_never_start_a_probe()
     {
-        var engine = new CapabilityProbe(_runner, new CapabilityProbeAdmissionUnavailable(), _clock, Resolve, _ => _adapter);
-        var result = await engine.RunAsync(Candidate, Request("build"), TimeSpan.FromSeconds(90));
-        Assert.Equal("capability_probe_admission_unavailable", result.Code);
-        Assert.Equal(0, result.ProbeStarts);
+        var admission = new RefusedAdmission();
+        var engine = new CapabilityProbe(_runner, admission, _clock, Resolve, _ => _adapter);
+        await Assert.ThrowsAsync<InvalidOperationException>(() => engine.RunAsync("T-100", Candidate, Request("build"), TimeSpan.FromSeconds(90)));
+        Assert.Equal(1, admission.Calls);
         var request = Request("build");
-        result = await engine.RunAsync(Candidate, request with { Capabilities = request.Capabilities! with { LaunchPath = "native-subagent" } }, TimeSpan.FromSeconds(90));
+        var result = await engine.RunAsync("T-100", Candidate, request with { Capabilities = request.Capabilities! with { LaunchPath = "native-subagent" } }, TimeSpan.FromSeconds(90));
         Assert.Equal("capability_probe_unsupported", result.Code);
+        Assert.Equal(1, admission.Calls);
         Assert.Equal(0, _runner.VersionReads);
         Assert.Equal(0, _runner.FullStarts);
         Assert.False(Directory.Exists(Path.Combine(_root, "cache")));
@@ -170,7 +172,15 @@ public sealed class CapabilityTests : IDisposable
         public WorkerOutcome Interpret(WorkerRequest request, ProcessResult result) => new(result.Ok, "STATUS: done", false);
     }
 
-    private sealed class Runner : IProcessRunner
+    private sealed class RefusedAdmission : IProbeAdmissionClient
+    {
+        public int Calls { get; private set; }
+        public Task<ProbeAdmissionDto> AdmitAsync(ProbeAdmissionRequest request, CancellationToken ct = default)
+        { Calls++; throw new InvalidOperationException("probe_budget_exhausted"); }
+        public Task ReleaseAsync(ProbeReleaseRequest request, CancellationToken ct = default) => throw new InvalidOperationException("No reservation owned.");
+    }
+
+    private sealed class Runner : ICapabilityProcessRunner
     {
         public string Version { get; set; } = "fixture 1";
         public int VersionReads { get; private set; }
@@ -180,6 +190,18 @@ public sealed class CapabilityTests : IDisposable
             IReadOnlyDictionary<string, string>? environment = null)
         {
             if (arguments.Contains("--version")) { VersionReads++; return Task.FromResult(new ProcessResult(0, Version, "")); }
+            if (fileName == "id") return Task.FromResult(new ProcessResult(0, "1000", ""));
+            if (fileName == "git")
+            {
+                var output = arguments[0] switch
+                {
+                    "rev-parse" when arguments[1] == "HEAD" => new string('a', 40),
+                    "rev-parse" => Path.Combine(workingDirectory, ".git"),
+                    "config" => "safe.directory\n" + Path.GetFullPath(workingDirectory).Replace('\\', '/') + "\0",
+                    _ => "",
+                };
+                return Task.FromResult(new ProcessResult(0, output, ""));
+            }
             FullStarts++;
             return Task.FromResult(new ProcessResult(0, "STATUS: done", ""));
         }

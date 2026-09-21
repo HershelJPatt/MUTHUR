@@ -64,7 +64,9 @@ public sealed class WorkerLauncher(IProcessRunner processes, Func<string, (strin
             var runId = Guid.NewGuid().ToString("n");
             var request = SessionWorkspace.ForAttempt(requested, runId);
             var invocation = adapter.Build(request);
-            if (_resolve(invocation.FileName) is not { } executable)
+            var resolved = requested.Capabilities is { Requirements.Count: > 0 }
+                ? CapabilityExecutable.Resolve(invocation.FileName, _resolve) : _resolve(invocation.FileName);
+            if (resolved is not { } executable)
             {
                 attempts.Add(new(candidate, new WorkerOutcome(false, $"'{invocation.FileName}' is not installed or not on PATH.", false), clock.Elapsed, Started: false));
                 continue;

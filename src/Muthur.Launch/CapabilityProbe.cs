@@ -1,48 +1,41 @@
 using System.Text.Json;
+using Muthur.Contracts;
 
 namespace Muthur.Launch;
-
-/// <summary>Admission must reserve the existing catalog/account/budget/capacity gates before returning a lease.</summary>
-public interface ICapabilityProbeAdmission
-{
-    Task<ICapabilityProbeLease?> AdmitAsync(HarnessCandidate candidate, WorkerRequest request, TimeSpan timeout, CancellationToken ct);
-}
-
-/// <summary>Disposal must stop and reap every probe descendant before releasing the reservation.</summary>
-public interface ICapabilityProbeLease : IAsyncDisposable
-{
-    IProcessRunner Processes { get; }
-}
-
-public sealed class CapabilityProbeAdmissionUnavailable : ICapabilityProbeAdmission
-{
-    public Task<ICapabilityProbeLease?> AdmitAsync(HarnessCandidate candidate, WorkerRequest request, TimeSpan timeout, CancellationToken ct) =>
-        Task.FromResult<ICapabilityProbeLease?>(null);
-}
 
 public sealed record CapabilityProbeResult(string? Code, int ProbeStarts, long DurationMilliseconds,
     IReadOnlyList<CapabilityObservation> Observations, string Detail);
 
-/// <summary>One explicit admitted experiment. It never retries or infers interaction/native capabilities.</summary>
-public sealed class CapabilityProbe(IProcessRunner processes, ICapabilityProbeAdmission admission, TimeProvider? timeProvider = null,
+/// <summary>One explicit admitted experiment. Cleanup completes inside the reservation callback.</summary>
+public sealed class CapabilityProbe(IProcessRunner processes, IProbeAdmissionClient admission, TimeProvider? timeProvider = null,
     Func<string, (string FileName, IReadOnlyList<string> Prefix)?>? resolve = null, Func<string, IHarnessAdapter?>? adapterFor = null)
 {
     private readonly TimeProvider _clock = timeProvider ?? TimeProvider.System;
     private static readonly string[] Tested = ["shell", "worktree-base", "build", "test", "commit"];
-    private const string Limitation = "Fixture v1: shell nonce; git rev-parse HEAD; dotnet msbuild fixture.proj /t:Build and /t:Test; isolated git commit. Proves tool execution and SDK route, not arbitrary project correctness.";
 
-    public async Task<CapabilityProbeResult> RunAsync(HarnessCandidate candidate, WorkerRequest request, TimeSpan timeout, CancellationToken ct = default)
+    public async Task<CapabilityProbeResult> RunAsync(string task, HarnessCandidate candidate, WorkerRequest request,
+        TimeSpan timeout, CancellationToken ct = default)
     {
-        var startedAt = _clock.GetTimestamp();
         var context = request.Capabilities ?? throw new ArgumentException("Capability context is required.", nameof(request));
-        if (timeout <= TimeSpan.Zero || timeout > TimeSpan.FromSeconds(120)) throw new ArgumentOutOfRangeException(nameof(timeout));
+        if (timeout < TimeSpan.FromSeconds(1) || timeout > TimeSpan.FromSeconds(120)) throw new ArgumentOutOfRangeException(nameof(timeout));
         if (context.LaunchPath != "worker-run") return new("capability_probe_unsupported", 0, 0, [], "Only worker-run has a bounded probe engine.");
+        if (processes is not ICapabilityProcessRunner)
+            return new("capability_probe_ownership_unavailable", 0, 0, [], "Probe process exit cannot be confirmed by this runner; no admission requested.");
+        if (string.IsNullOrWhiteSpace(task) || string.IsNullOrWhiteSpace(candidate.Account))
+            return new("capability_probe_candidate_unavailable", 0, 0, [], "An exact task and catalog account are required.");
         string[] redirected = ["GIT_DIR", "GIT_WORK_TREE", "GIT_COMMON_DIR", "GIT_INDEX_FILE", "GIT_OBJECT_DIRECTORY", "GIT_ALTERNATE_OBJECT_DIRECTORIES"];
         if (redirected.Any(k => Environment.GetEnvironmentVariable(k) is not null || request.GitEnvironment?.ContainsKey(k) == true))
             return new("capability_identity_unknown", 0, 0, [], "Git repository redirection prevents an isolated probe; no model started.");
-        var lease = await admission.AdmitAsync(candidate, request, timeout, ct);
-        if (lease is null) return new("capability_probe_admission_unavailable", 0, 0, [], "Shared worker budget/capacity admission is unavailable. No model started.");
+        var reservation = new ProbeAdmissionRequest(task, "implementer", candidate.Harness, candidate.Model, candidate.Account, Guid.NewGuid().ToString("N"));
+        // Admission/replay/release errors propagate intact. Only the shared runner's MayExecute callback can launch.
+        return await new ProbeReservationRunner(admission).RunAsync(reservation,
+            token => ExecuteAsync(candidate, request, timeout, token), ct);
+    }
 
+    private async Task<CapabilityProbeResult> ExecuteAsync(HarnessCandidate candidate, WorkerRequest request, TimeSpan timeout, CancellationToken ct)
+    {
+        var startedAt = _clock.GetTimestamp();
+        var context = request.Capabilities!;
         var probeRoot = Path.Combine(request.ScratchDirectory, "capability-" + Guid.NewGuid().ToString("n"));
         var worktree = Path.Combine(probeRoot, "worktree");
         var fixture = Path.Combine(worktree, ".muthur-capability");
@@ -51,8 +44,9 @@ public sealed class CapabilityProbe(IProcessRunner processes, ICapabilityProbeAd
         var observations = new List<CapabilityObservation>();
         var starts = 0;
         string? code = null;
-        var detail = Limitation;
+        var detail = CapabilityFixture.Limitation;
         var addAttempted = false;
+        var processCleanupUncertain = false;
         using var budget = new CancellationTokenSource(timeout, _clock);
         using var lifetime = CancellationTokenSource.CreateLinkedTokenSource(ct, budget.Token);
         try
@@ -68,39 +62,44 @@ public sealed class CapabilityProbe(IProcessRunner processes, ICapabilityProbeAd
                 context.RepositoryRoot, timeout: TimeSpan.FromSeconds(10), ct: lifetime.Token, environment: request.GitEnvironment);
             if (!add.Ok) throw new ProbeRefusal("capability_probe_setup_failed", "Disposable pinned worktree could not be created.");
             Directory.CreateDirectory(fixture);
-            File.WriteAllText(Path.Combine(fixture, "fixture.proj"), Project(nonce));
-            File.WriteAllText(Path.Combine(fixture, "probe.ps1"), Script(nonce, context.BaseCommit));
+            File.WriteAllText(Path.Combine(fixture, "fixture.proj"), CapabilityFixture.Project(nonce));
+            var steps = CapabilityFixture.Steps(fixture, nonce);
+            File.WriteAllText(Path.Combine(fixture, "commands.json"), JsonSerializer.Serialize(steps, CapabilityJsonContext.Default.IReadOnlyListCapabilityProbeStep));
+            await PrepareCommitAsync(fixture, nonce, lifetime.Token);
+            var immutable = new[] { "fixture.proj", "commands.json", "before.txt", Path.Combine("commit", "nonce.txt") }
+                .ToDictionary(file => file, file => CapabilityHash.Of(File.ReadAllText(Path.Combine(fixture, file))));
             var attempt = request with
             {
-                WorkingDirectory = worktree,
-                ScratchDirectory = fixture,
-                GitEnvironment = SessionWorkspace.GitEnvironment(worktree),
-                Prompt = "Execute exactly once through your shell tool: pwsh -NoProfile -File .muthur-capability/probe.ps1 . " +
-                    "Do not edit the script, project, receipts or outputs. Do not request new permissions. If denied, stop. " + Limitation,
+                WorkingDirectory = worktree, ScratchDirectory = fixture,
+                GitEnvironment = SessionWorkspace.GitEnvironment(worktree), Prompt = CapabilityFixture.Prompt(steps),
             };
             var actual = await new CapabilityEvaluator(processes, _clock, resolve).InspectAsync(adapter, attempt, lifetime.Token);
             if (actual.Identity != identity)
                 throw new ProbeRefusal("capability_identity_unknown", "Disposable worktree configuration differs from the requested route; no model started.");
             var invocation = adapter.Build(attempt);
-            var executable = (resolve ?? ExecutableResolver.Resolve)(invocation.FileName);
+            var executable = CapabilityExecutable.Resolve(invocation.FileName, resolve ?? ExecutableResolver.Resolve);
             if (executable is null) throw new ProbeRefusal("capability_identity_unknown", "Harness executable disappeared before launch.");
+            lifetime.Token.ThrowIfCancellationRequested();
             starts = 1;
-            var result = await lease.Processes.RunAsync(executable.Value.FileName, [.. executable.Value.Prefix, .. invocation.Arguments], worktree,
+            var result = await processes.RunAsync(executable.Value.FileName, [.. executable.Value.Prefix, .. invocation.Arguments], worktree,
                 invocation.Stdin, timeout, lifetime.Token, ["MUTHUR_AGENT", "MUTHUR_TOKEN"], attempt.GitEnvironment);
-            var receipts = ReadReceipts(Path.Combine(fixture, "receipts.json"), nonce);
+            var intact = immutable.All(pair => File.Exists(Path.Combine(fixture, pair.Key)) &&
+                new FileInfo(Path.Combine(fixture, pair.Key)).Length < 65_536 && CapabilityHash.Of(File.ReadAllText(Path.Combine(fixture, pair.Key))) == pair.Value);
             foreach (var key in Tested)
             {
                 var state = CapabilityStates.Unknown;
+                var exit = ReadReceipt(Path.Combine(fixture, key + ".receipt.json"), nonce);
                 if (result.ExitCode == 124) state = CapabilityStates.TemporarilyFailing;
-                else if (receipts.TryGetValue(key, out var exit))
+                else if (intact && exit is { } status)
                 {
-                    state = exit == 0 ? CapabilityStates.Available : CapabilityStates.Unavailable;
-                    if (exit == 0 && !await VerifyAsync(key, worktree, fixture, nonce, context.BaseCommit, lifetime.Token)) state = CapabilityStates.Unknown;
+                    state = status == 0 ? CapabilityStates.Available : CapabilityStates.Unavailable;
+                    if (status == 0 && !await VerifyAsync(key, worktree, fixture, nonce, context.BaseCommit, lifetime.Token)) state = CapabilityStates.Unknown;
                 }
                 else if (!result.Ok) state = CapabilityStates.TemporarilyFailing;
                 observations.Add(Observation(identity, key, state, startedAt));
             }
         }
+        catch (ProbeCleanupUncertainException) { processCleanupUncertain = true; throw; }
         catch (ProbeRefusal ex) { code = ex.Code; detail = ex.Message; }
         catch (OperationCanceledException)
         {
@@ -114,52 +113,61 @@ public sealed class CapabilityProbe(IProcessRunner processes, ICapabilityProbeAd
         }
         finally
         {
-            try { await lease.DisposeAsync(); }
-            catch (Exception ex) when (ex is IOException or InvalidOperationException or OperationCanceledException)
-            { code = "capability_probe_cleanup_failed"; detail += " Descendant cleanup failed."; }
-            finally
+            // An uncertain process may still be using the worktree. Preserve it and its reservation for recovery.
+            if (!processCleanupUncertain)
             {
-                if (addAttempted)
-                {
-                    try
-                    {
-                        var removed = await processes.RunAsync("git", ["worktree", "remove", "--force", worktree], context.RepositoryRoot,
-                            timeout: TimeSpan.FromSeconds(10), ct: CancellationToken.None, environment: request.GitEnvironment);
-                        if (!removed.Ok && Directory.Exists(worktree))
-                        { code = "capability_probe_cleanup_failed"; detail += " Disposable worktree cleanup failed: " + worktree; }
-                    }
-                    catch (Exception ex) when (ex is IOException or InvalidOperationException or OperationCanceledException)
-                    { code = "capability_probe_cleanup_failed"; detail += " Disposable worktree cleanup failed."; }
-                }
+                using var cleanup = new CancellationTokenSource(TimeSpan.FromSeconds(10));
                 try
                 {
-                    if (Directory.Exists(probeRoot) && !Directory.Exists(worktree)) Directory.Delete(probeRoot, recursive: true);
+                    if (addAttempted)
+                    {
+                        var removed = await processes.RunAsync("git", ["worktree", "remove", "--force", "--force", worktree], context.RepositoryRoot,
+                            timeout: TimeSpan.FromSeconds(8), ct: cleanup.Token, environment: request.GitEnvironment);
+                        if (!removed.Ok || Directory.Exists(worktree)) throw new IOException("Disposable worktree removal was not confirmed.");
+                    }
+                    if (Directory.Exists(probeRoot))
+                        await Task.Run(() => Directory.Delete(probeRoot, recursive: true), cleanup.Token).WaitAsync(cleanup.Token);
                 }
-                catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
-                { code = "capability_probe_cleanup_failed"; detail += " Scratch cleanup failed."; }
+                catch (Exception ex)
+                { throw new ProbeCleanupUncertainException("Probe worktree cleanup could not be confirmed. Preserve scratch and confirm process/worktree cleanup before reservation release.", ex); }
             }
         }
-        if (code == "capability_probe_cleanup_failed")
-            observations = observations.Select(o => o with { State = CapabilityStates.TemporarilyFailing, ExpiresAt = o.ObservedAt.AddMinutes(5) }).ToList();
-        if (identity is not null && observations.Count > 0)
-            new CapabilityStore(context.CacheDirectory, _clock).Write(identity, observations);
+        // Never publish success (or any cache update) after uncertain process/worktree cleanup.
+        if (identity is not null && observations.Count > 0) new CapabilityStore(context.CacheDirectory, _clock).Write(identity, observations);
         return new(code, starts, (long)_clock.GetElapsedTime(startedAt).TotalMilliseconds, observations, detail);
+    }
+
+    private async Task PrepareCommitAsync(string fixture, string nonce, CancellationToken ct)
+    {
+        var repository = Path.Combine(fixture, "commit");
+        Directory.CreateDirectory(repository);
+        var prefix = new[] { "-c", "core.hooksPath=" + Path.Combine(fixture, "no-hooks"), "-c", "user.name=CapabilityFixture",
+            "-c", "user.email=fixture@example.invalid", "-c", "commit.gpgsign=false" };
+        async Task<ProcessResult> Git(params string[] args) => await processes.RunAsync("git", [.. prefix, .. args], repository,
+            timeout: TimeSpan.FromSeconds(5), ct: ct, environment: SessionWorkspace.GitEnvironment(repository));
+        if (!(await Git("init", "--quiet")).Ok || !(await Git("commit", "--quiet", "--allow-empty", "-m", "fixture baseline")).Ok)
+            throw new ProbeRefusal("capability_probe_setup_failed", "Isolated commit fixture could not be initialized.");
+        var before = await Git("rev-parse", "HEAD");
+        if (!before.Ok) throw new ProbeRefusal("capability_probe_setup_failed", "Isolated baseline HEAD is unreadable.");
+        File.WriteAllText(Path.Combine(fixture, "before.txt"), before.StdOut.Trim());
+        File.WriteAllText(Path.Combine(repository, "nonce.txt"), nonce);
     }
 
     private CapabilityObservation Observation(CapabilityIdentity identity, string key, string state, long startedAt)
     {
         var now = _clock.GetUtcNow();
         return new(identity, key, state, now, now.Add(state == CapabilityStates.TemporarilyFailing ? TimeSpan.FromMinutes(5) : TimeSpan.FromHours(24)),
-            Limitation, (long)_clock.GetElapsedTime(startedAt).TotalMilliseconds);
+            CapabilityFixture.Limitation, (long)_clock.GetElapsedTime(startedAt).TotalMilliseconds);
     }
 
     private async Task<bool> VerifyAsync(string key, string worktree, string fixture, string nonce, string basis, CancellationToken ct)
     {
-        bool Output(string file) => File.Exists(Path.Combine(fixture, file)) && new FileInfo(Path.Combine(fixture, file)).Length <= 256 &&
-            File.ReadAllText(Path.Combine(fixture, file)).Trim() == nonce;
-        if (key == "shell") return Output("shell.txt");
-        if (key == "build") return Output("build.txt");
-        if (key == "test") return Output("test.txt");
+        bool Output(string file, string expected) => File.Exists(Path.Combine(fixture, file)) && new FileInfo(Path.Combine(fixture, file)).Length <= 256 &&
+            File.ReadAllText(Path.Combine(fixture, file)).Trim() == expected;
+        if (key == "shell") return Output("shell.txt", nonce);
+        if (key == "build") return Output("build.txt", nonce);
+        if (key == "test") return Output("test.txt", nonce);
+        if (key == "worktree-base" && !Output("head.txt", basis)) return false;
         var directory = key == "commit" ? Path.Combine(fixture, "commit") : worktree;
         var args = key == "commit" ? new[] { "show", "HEAD:nonce.txt" } : ["rev-parse", "HEAD"];
         var result = await processes.RunAsync("git", args, directory, timeout: TimeSpan.FromSeconds(5), ct: ct,
@@ -175,75 +183,20 @@ public sealed class CapabilityProbe(IProcessRunner processes, ICapabilityProbeAd
         return ancestor.Ok;
     }
 
-    private static Dictionary<string, int> ReadReceipts(string path, string nonce)
+    private static int? ReadReceipt(string path, string nonce)
     {
         try
         {
-            if (new FileInfo(path).Length > 8192) return [];
+            if (new FileInfo(path).Length > 8192) return null;
             using var document = JsonDocument.Parse(File.ReadAllText(path));
-            if (document.RootElement.GetProperty("nonce").GetString() != nonce) return [];
-            var result = new Dictionary<string, int>(StringComparer.Ordinal);
-            foreach (var property in document.RootElement.GetProperty("steps").EnumerateObject())
-                if (!Tested.Contains(property.Name, StringComparer.Ordinal) || !property.Value.TryGetInt32(out var exit) || !result.TryAdd(property.Name, exit)) return [];
-            return result;
+            if (document.RootElement.GetProperty("nonce").GetString() != nonce) return null;
+            return document.RootElement.GetProperty("exitCode").TryGetInt32(out var exit) ? exit : null;
         }
-        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or JsonException or InvalidOperationException or KeyNotFoundException) { return []; }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or JsonException or InvalidOperationException or KeyNotFoundException) { return null; }
     }
-
-    private static string Project(string nonce) => $$"""
-        <Project>
-          <Target Name="Build">
-            <WriteLinesToFile File="$(MSBuildThisFileDirectory)build.txt" Lines="{{nonce}}" Overwrite="true" />
-          </Target>
-          <Target Name="Test">
-            <Error Condition="!Exists('$(MSBuildThisFileDirectory)build.txt')" Text="Build output missing" />
-            <WriteLinesToFile File="$(MSBuildThisFileDirectory)test.txt" Lines="{{nonce}}" Overwrite="true" />
-          </Target>
-        </Project>
-        """;
 
     private sealed class ProbeRefusal(string code, string message) : Exception(message)
     {
         public string Code { get; } = code;
     }
-
-    private static string Script(string nonce, string basis) => $$"""
-        $ErrorActionPreference = 'Stop'
-        $PSNativeCommandUseErrorActionPreference = $false
-        $fixture = $PSScriptRoot
-        $steps = [ordered]@{}
-        function Step([string]$name, [scriptblock]$body) {
-            try { & $body; $steps[$name] = 0 } catch { $steps[$name] = 1 }
-            @{ nonce = '{{nonce}}'; steps = $steps } | ConvertTo-Json | Set-Content -LiteralPath (Join-Path $fixture 'receipts.json')
-        }
-        Step 'shell' { Set-Content -LiteralPath (Join-Path $fixture 'shell.txt') '{{nonce}}' }
-        Step 'worktree-base' {
-            $head = & git rev-parse HEAD
-            if ($LASTEXITCODE -ne 0 -or "$head".Trim() -ne '{{basis}}') { throw 'Base mismatch' }
-        }
-        Step 'build' {
-            & dotnet msbuild (Join-Path $fixture 'fixture.proj') /t:Build /nologo /noautoresponse
-            if ($LASTEXITCODE -ne 0) { throw 'Build failed' }
-        }
-        Step 'test' {
-            & dotnet msbuild (Join-Path $fixture 'fixture.proj') /t:Test /nologo /noautoresponse
-            if ($LASTEXITCODE -ne 0) { throw 'Test failed' }
-        }
-        Step 'commit' {
-            $commit = Join-Path $fixture 'commit'
-            New-Item -ItemType Directory -Path $commit | Out-Null
-            $gitArgs = @("--git-dir=$(Join-Path $commit '.git')", "--work-tree=$commit", '-c', "core.hooksPath=$(Join-Path $fixture 'no-hooks')", '-c', 'user.name=CapabilityFixture', '-c', 'user.email=fixture@example.invalid', '-c', 'commit.gpgsign=false')
-            & git @gitArgs init --quiet
-            if ($LASTEXITCODE -ne 0) { throw 'Init failed' }
-            & git @gitArgs commit --quiet --allow-empty -m 'fixture baseline'
-            if ($LASTEXITCODE -ne 0) { throw 'Baseline failed' }
-            & git @gitArgs rev-parse HEAD | Set-Content -LiteralPath (Join-Path $fixture 'before.txt')
-            if ($LASTEXITCODE -ne 0) { throw 'Baseline HEAD failed' }
-            Set-Content -LiteralPath (Join-Path $commit 'nonce.txt') '{{nonce}}'
-            & git @gitArgs add -- nonce.txt
-            if ($LASTEXITCODE -ne 0) { throw 'Add failed' }
-            & git @gitArgs commit --quiet -m 'capability fixture'
-            if ($LASTEXITCODE -ne 0) { throw 'Commit failed' }
-        }
-        """;
 }
