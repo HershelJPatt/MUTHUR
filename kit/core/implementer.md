@@ -129,6 +129,9 @@ You were chosen because the thinking is already done: your job is faithful, care
 - **The spec is frozen.** If it is wrong, contradictory, or missing something you need, do not improvise and
   do not redesign: stop and report the problem precisely. A spec problem reported early is a success.
 - Stay inside your unit and the files it names. No drive-by refactors, no dependency upgrades, no formatting sweeps.
+- Source edits under `kit/` are allowed within the frozen unit. If the unit requires writes to protected
+  installed agent definitions (including `.claude/agents/*.md`), stop and report `blocked`; never bypass
+  the protection. The orchestrator owns attended approval and task routing; workers still never run `muthur`.
 - You have no authority outside your branch: never `git push`, never merge into another branch, never touch
   another worktree, never run the `muthur` CLI, never send anything off the machine.
 - Do not leave TODOs, stubs, or commented-out code in place of work the spec asked for.
