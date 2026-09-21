@@ -72,7 +72,7 @@ public sealed partial class ConductorService
                 if (await m.Db.AccountLimits.AnyAsync(a => a.Account == request.Account && a.LimitedUntil > m.Now, token))
                     throw Fail.Rule("probe_account_limited", "The probe account is limited.");
                 var ceiling = (await CeilingAsync(m.Db, m.Now, token)).Sessions;
-                if (RunningCount + reservations.Count(r => !r.Released) >= ceiling)
+                if (RunningCount + reservations.Count(r => !r.Released) + (await WorkerReservationsAsync(m.Db, token)).Count(r => !r.Released) >= ceiling)
                     throw Fail.Rule("probe_capacity_exhausted", "The shared session ceiling is full.");
                 if ((await BudgetBlockedAsync(m.Db, m.Now, token)).Contains(OrchestratorKey(Wire.TaskId(task.Id))))
                     throw Fail.Rule("probe_budget_exhausted", "The task's daily orchestrator session budget is exhausted.");

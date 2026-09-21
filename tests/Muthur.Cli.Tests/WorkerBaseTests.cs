@@ -80,8 +80,8 @@ public sealed class WorkerBaseTests
         Globals.AddTo(root);
         WorkerCommands.AddTo(root, processes);
         string[] args = explicitBase
-            ? ["worker", "run", "--spec", "specs/example.md", "--base", "main"]
-            : ["worker", "run", "--spec", "specs/example.md"];
+            ? ["worker", "run", "--task", "T-1", "--spec", "specs/example.md", "--base", "main"]
+            : ["worker", "run", "--task", "T-1", "--spec", "specs/example.md"];
         var parse = root.Parse(args);
         Assert.Empty(parse.Errors);
         Assert.Equal(ExitCodes.NotRunning, await parse.InvokeAsync());

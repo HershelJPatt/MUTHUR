@@ -106,7 +106,7 @@ public sealed class ThroughputTests : IDisposable
         async Task<IReadOnlyList<WorkerAttempt>> Run() => agent
             ? await new AgentLauncher(runner, _ => ("fake", [])).RunAsync([new("codex", "test", null)], _ => request,
                 _ => Task.FromResult(new AgentIdentity("test", "token")), TimeSpan.FromMinutes(1), _ => Task.CompletedTask)
-            : await new WorkerLauncher(runner, _ => ("fake", [])).RunAsync([new("codex", "test", null)], _ => request,
+            : await new WorkerLauncher(runner, _ => ("fake", []), workerProcesses: new ContainedFixture(runner), admission: AdmittedFixture.Context(_root)).RunAsync([new("codex", "test", null)], _ => request,
                 TimeSpan.FromMinutes(1), _ => Task.CompletedTask);
         var first = Assert.Single(await Run());
         var second = Assert.Single(await Run());

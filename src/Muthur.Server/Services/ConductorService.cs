@@ -258,7 +258,7 @@ public sealed partial class ConductorService(
     {
         var since = now.AddDays(-1);
         var events = await db.Events.Where(e => e.Type == "task.implemented" || (e.At >= since &&
-            (e.Type == "conductor.staffing" || e.Type == "worker.probe_admitted" || e.Type == "conductor.on" ||
+            (e.Type == "conductor.staffing" || e.Type == "worker.probe_admitted" || e.Type == "worker.admitted" || e.Type == "conductor.on" ||
              e.Type == "request.answered" || e.Type == "task.dependencies_ready"))).OrderBy(e => e.Seq).ToListAsync(ct);
         var attempts = new Dictionary<string, List<DateTimeOffset>>();
         var heads = new Dictionary<int, string>();
@@ -268,7 +268,7 @@ public sealed partial class ConductorService(
             if (e.TaskId is not { } id) continue;
             var prefix = Wire.TaskId(id) + "/";
             using var payload = JsonDocument.Parse(e.PayloadJson);
-            if (e.Type is not ("conductor.staffing" or "worker.probe_admitted"))
+            if (e.Type is not ("conductor.staffing" or "worker.probe_admitted" or "worker.admitted"))
             {
                 if (e.Type == "task.implemented")
                 {
@@ -393,6 +393,8 @@ public sealed partial class ConductorService(
         try
         {
             sessions = Sessions();
+            sessions.AddRange(await ledger.ReadAsync(async (db, _) => (await WorkerReservationsAsync(db, ct))
+                .Where(r => !r.Released).Select(r => new ConductorSessionDto(r.Request.Task, "#full-worker:" + r.Id)).ToList(), ct));
             sessions.AddRange(await ledger.ReadAsync(async (db, _) => (await ProbeReservationsAsync(db, ct))
                 .Where(r => !r.Released).Select(r => new ConductorSessionDto(r.Request.Task, "#capability-probe:" + r.Id)).ToList(), ct));
         }
@@ -1105,7 +1107,7 @@ public sealed partial class ConductorService(
             // Read once per pass: the founder may move it mid-pass, and a ceiling that changes under the loop
             // would let a pass start more sessions than either number allows.
             var ceiling = (await CeilingAsync(ct)).Sessions - await ledger.ReadAsync(async (db, _) =>
-                (await ProbeReservationsAsync(db, ct)).Count(r => !r.Released), ct);
+                (await ProbeReservationsAsync(db, ct)).Count(r => !r.Released) + (await WorkerReservationsAsync(db, ct)).Count(r => !r.Released), ct);
 
             var started = 0;
             const string overseerKey = "organization/#overseer";

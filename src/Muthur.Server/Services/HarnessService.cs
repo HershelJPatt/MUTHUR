@@ -86,15 +86,25 @@ public sealed class HarnessService(Ledger ledger, MuthurOptions options)
             // every run came from somewhere, and a tree is only readable while that stays false.
             object payload = report.Parent is { Length: > 0 } parent
                 ? new { report.Tier, worker, report.Account, report.Branch, report.Unit, seconds, report.CostUsd, report.InputTokens, report.OutputTokens, parent,
-                    report.RunId, report.Status, report.FailureKind, report.BaseCommit, report.HeadCommit, report.SpecBlob, report.ExitCode }
+                    report.RunId, report.Status, report.FailureKind, report.BaseCommit, report.HeadCommit, report.SpecBlob, report.ExitCode, report.Attempts }
                 : new { report.Tier, worker, report.Account, report.Branch, report.Unit, seconds, report.CostUsd, report.InputTokens, report.OutputTokens,
-                    report.RunId, report.Status, report.FailureKind, report.BaseCommit, report.HeadCommit, report.SpecBlob, report.ExitCode };
+                    report.RunId, report.Status, report.FailureKind, report.BaseCommit, report.HeadCommit, report.SpecBlob, report.ExitCode, report.Attempts };
             m.Record(report.Success ? "worker.finished" : "worker.failed", taskId, payload);
         }, ct);
     }
 
     private sealed record CatalogTier(string Tier, List<HarnessCandidate> Candidates);
 
+    internal bool HasWorkerCandidate(WorkerAdmissionRequest request)
+    {
+        try
+        {
+            return ReadCatalog(create: false).Any(t => t.Tier == request.Tier && t.Candidates.Any(c =>
+                c.Harness == request.Harness && c.Model == request.Model && c.Account == request.Account));
+        }
+        catch (MuthurException ex) when (ex.Code is "catalog_unreadable" or "catalog_invalid")
+        { throw Fail.Rule("worker_candidate_unavailable", ex.Message); }
+    }
     internal bool HasProbeCandidate(ProbeAdmissionRequest request)
     {
         try
