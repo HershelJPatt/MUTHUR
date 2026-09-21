@@ -116,6 +116,7 @@ public sealed class IntegrationPersistenceTests
         RoundTrip(new IntegrationClaimRequest(), MuthurJsonContext.Default.IntegrationClaimRequest);
         RoundTrip(new IntegrationCandidateRequest(candidate.AssignmentId, candidate.SubjectId, "target", "implementation", "candidate", "tree"), MuthurJsonContext.Default.IntegrationCandidateRequest);
         RoundTrip(new IntegrationRenewRequest(candidate.AssignmentId, candidate.SubjectId), MuthurJsonContext.Default.IntegrationRenewRequest);
+        RoundTrip(new IntegrationStartRequest(candidate.AssignmentId, candidate.SubjectId, 123, At, candidate.OwnedWorktreePath!, candidate.ArtifactsDirectory!), MuthurJsonContext.Default.IntegrationStartRequest);
         RoundTrip(evidence, MuthurJsonContext.Default.IntegrationEvidenceDto);
         RoundTrip(new IntegrationFailureRequest(candidate.AssignmentId, candidate.SubjectId, "construction", "merge_conflict", "Conflict",
             "merge.log", "digest", ["file.cs"], ["T-1"]), MuthurJsonContext.Default.IntegrationFailureRequest);
@@ -153,6 +154,6 @@ public sealed class IntegrationPersistenceTests
         CandidateSha = "candidate", TreeSha = "tree", RequiredChecksJson = """{"build":"dotnet build","test":"dotnet test"}""",
         State = "passed", LeaseExpires = At.AddMinutes(10), Attempt = 2, CreatedAt = At, StartedAt = At.AddMinutes(1),
         CompletedAt = At.AddMinutes(2), PromotionIntentAt = At.AddMinutes(3), PromotedAt = At.AddMinutes(4),
-        AlreadyIncluded = true, EvidenceSha256 = "evidence-digest"
+        AlreadyIncluded = true, EvidenceSha256 = "evidence-digest", RunnerProcessId = 123, RunnerStartedAt = At.AddTicks(1), OwnedWorktreePath = "/repo/.worktrees/owned", ArtifactsDirectory = "/repo/.work/integration/owned"
     };
 }
