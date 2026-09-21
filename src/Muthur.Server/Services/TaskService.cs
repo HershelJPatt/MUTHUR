@@ -84,7 +84,8 @@ public sealed partial class TaskService(Ledger ledger, LeasePolicy leases, ITask
             var task = await LoadAsync(db, id, ct);
             var events = await db.Events.Where(e => e.TaskId == task.Id).OrderBy(e => e.Seq).ToListAsync(ct);
             var validations = await Validations.ForTasksAsync(db, [task.Id], ct);
-            return new TaskDetailDto(await Validations.MapAsync(db, task, validations.GetValueOrDefault(task.Id), ct), events.Select(e => e.ToDto()).ToList());
+            return new TaskDetailDto(await Validations.MapAsync(db, task, validations.GetValueOrDefault(task.Id), ct), events.Select(e => e.ToDto()).ToList(),
+                await IncidentService.ForTaskAsync(db, task.Id, ct));
         }, ct);
 
     /// <summary>Atomic: mutations are serialized, so of two racing claims exactly one sees a claimable task.</summary>
@@ -101,6 +102,9 @@ public sealed partial class TaskService(Ledger ledger, LeasePolicy leases, ITask
                 return await Validations.MapAsync(m.Db, task, null, ct);
             }
             var completed = await TaskDependencies.CompletedAsync(m.Db, ct);
+            var incident = (await IncidentService.EffectiveAsync(m.Db, ct)).FirstOrDefault(s => s.TaskId == Wire.TaskId(task.Id) && s.Assignment == "#orchestrator");
+            if (incident is not null)
+                throw Fail.Conflict("incident_wait", $"{incident.IncidentId}: {incident.Reason}. Recovery: {incident.RecoveryCondition}");
             var pending = task.DependsOn.Where(d => !completed.Contains(d)).ToList();
             if (pending.Count > 0)
                 throw Fail.Conflict("dependency_wait", "Waiting for " + string.Join(", ", pending) + " to land.");

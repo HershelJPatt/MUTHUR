@@ -64,7 +64,8 @@ public sealed record ConductorStatusDto(
     int StallProbeMinutes, DateTimeOffset? LastPass, string? LastAction, int Ceiling, string CeilingReason,
     bool Orchestrators,
     IReadOnlyList<ConductorSessionDto> Sessions, IReadOnlyList<ConductorStallDto> Stalls,
-    string? StaffingWait = null, IReadOnlyList<LandingWaitDto>? Landings = null);
+    string? StaffingWait = null, IReadOnlyList<LandingWaitDto>? Landings = null,
+    IReadOnlyList<IncidentSuppressionDto>? IncidentSuppressions = null);
 
 public sealed record LandingWaitDto(string Task, DateTimeOffset Since, string Reason);
 

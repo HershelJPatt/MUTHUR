@@ -84,7 +84,7 @@ public sealed record ValidationQueueDto(
     int Claimed,
     DateTimeOffset? OldestWaitingSince);
 
-public sealed record TaskDetailDto(TaskDto Task, IReadOnlyList<EventDto> Events);
+public sealed record TaskDetailDto(TaskDto Task, IReadOnlyList<EventDto> Events, IReadOnlyList<TaskIncidentDto>? Incidents = null);
 
 public sealed record EventDto(
     long Seq,
