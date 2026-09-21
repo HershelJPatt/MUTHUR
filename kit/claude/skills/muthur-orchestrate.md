@@ -43,3 +43,18 @@ Task requested: $ARGUMENTS (if empty or "next", take the most urgent backlog tas
   named local base branch, full commit SHA at dispatch, named default branch, verification commands, and
   the report format reminder. A moved base requires `STATUS: blocked` and an updated frozen redispatch.
 - Your identity comes from the `MUTHUR_AGENT` environment variable the session was started with.
+
+### Native Agent-tool permissions
+
+Native Agent-tool success depends on the initiating harness permission mode and approval availability.
+MUTHUR does not set, record or observe that native mode, or ship a native Agent-tool allowlist.
+An unattended denial is an observed configuration outcome, not proof that delegation universally fails.
+Read-only success and static settings inspection do not establish build, test or commit capability.
+When this gap occurs, record the commands actually attempted and their approval/denial outcomes, report
+blocked verification honestly, and preserve artifacts. Do not widen permissions to make a unit pass.
+The worker launcher is a separate path; its success does not prove native Agent-tool behavior.
+
+See [docs/claude-agent-permissions.md](../../../docs/claude-agent-permissions.md)
+(a repository-root path; installed skill paths differ) for the
+historical evidence and the deferred T-97 measurement after T-67 lands. T-67's own required Claude probe
+remains mandatory; documentation verification is not native Agent-tool measurement evidence.
