@@ -13,7 +13,8 @@ public sealed record WorkerRequest(
     string ScratchDirectory,
     /// <summary>Harness-specific reasoning effort, e.g. "high". Null means the harness's own default.</summary>
     string? ReasoningEffort = null,
-    bool RequireRepository = true);
+    bool RequireRepository = true,
+    IReadOnlyDictionary<string, string>? GitEnvironment = null);
 
 /// <summary>A process to start: executable, arguments, and the prompt on stdin.</summary>
 public sealed record HarnessInvocation(string FileName, IReadOnlyList<string> Arguments, string Stdin);

@@ -1,4 +1,5 @@
 using Muthur.Contracts;
+using System.Text.Json;
 
 namespace Muthur.Core;
 
@@ -36,12 +37,20 @@ public static class TaskStateTimeline
     /// Events for one task, in <c>Seq</c> order, oldest first. Consecutive events entering the same state
     /// extend the stay rather than starting a new one.
     /// </summary>
-    public static IReadOnlyList<Interval> Replay(IEnumerable<(string Type, DateTimeOffset At)> events)
+    public static IReadOnlyList<Interval> Replay(IEnumerable<(string Type, DateTimeOffset At)> events) =>
+        ReplayWithPayload(events.Select(e => (e.Type, e.At, (string?)null)));
+
+    /// <summary>Replays payload-dependent historical transitions as well as explicit state events.</summary>
+    public static IReadOnlyList<Interval> ReplayWithPayload(IEnumerable<(string Type, DateTimeOffset At, string? Payload)> events)
     {
         var intervals = new List<Interval>();
-        foreach (var (type, at) in events)
+        foreach (var (type, at, payload) in events)
         {
-            if (Enters(type) is not { } state)
+            var next = Enters(type);
+            // Before task.released was recorded alongside this mutation, the dependency event was its only evidence.
+            if (type == "task.dependencies_set" && intervals.Count > 0 &&
+                intervals[^1].State == TaskState.InProgress && HasDependencies(payload)) next = TaskState.Backlog;
+            if (next is not { } state)
                 continue; // an event that changes no state closes nothing: the stay it falls inside continues
             if (intervals.Count > 0)
             {
@@ -53,6 +62,19 @@ public static class TaskStateTimeline
             intervals.Add(new Interval(state, at, null));
         }
         return intervals;
+    }
+
+    private static bool HasDependencies(string? payload)
+    {
+        if (payload is null) return false;
+        try
+        {
+            using var doc = JsonDocument.Parse(payload);
+            return doc.RootElement.ValueKind == JsonValueKind.Object &&
+                doc.RootElement.TryGetProperty("tasks", out var tasks) &&
+                tasks.ValueKind == JsonValueKind.Array && tasks.GetArrayLength() > 0;
+        }
+        catch (JsonException) { return false; }
     }
 
     /// <summary>How long the intervals overlap [<paramref name="from"/>, <paramref name="to"/>], per state.</summary>

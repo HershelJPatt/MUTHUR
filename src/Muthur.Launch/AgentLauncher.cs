@@ -52,7 +52,8 @@ public sealed class AgentLauncher(IProcessRunner processes, Func<string, (string
                 continue;
             }
 
-            var request = requestFor(candidate);
+            var runId = Guid.NewGuid().ToString("n");
+            var request = SessionWorkspace.ForAttempt(requestFor(candidate), runId);
             var invocation = adapter.Build(request);
             if (_resolve(invocation.FileName) is not { } executable)
             {
@@ -63,6 +64,7 @@ public sealed class AgentLauncher(IProcessRunner processes, Func<string, (string
             var identity = await identityFor(candidate);
             using var lifetime = CancellationTokenSource.CreateLinkedTokenSource(ct);
             var environment = new Dictionary<string, string>(extraEnvironment ?? new Dictionary<string, string>());
+            foreach (var pair in request.GitEnvironment ?? new Dictionary<string, string>()) environment[pair.Key] = pair.Value;
             foreach (var pair in EnvironmentFor(identity)) environment[pair.Key] = pair.Value;
             var running = processes.RunAsync(executable.FileName, [.. executable.Prefix, .. invocation.Arguments],
                 request.WorkingDirectory, invocation.Stdin, timeout, lifetime.Token,
@@ -91,7 +93,8 @@ public sealed class AgentLauncher(IProcessRunner processes, Func<string, (string
                 if (exited is not null) await exited(identity, CancellationToken.None);
             }
             var outcome = adapter.Interpret(request, result);
-            attempts.Add(new(candidate, outcome, clock.Elapsed));
+            attempts.Add(new(candidate, outcome, clock.Elapsed, RunId: runId,
+                FailureKind: SessionWorkspace.FailureKind(result, outcome), ExitCode: result.ExitCode));
 
             // A session that ran and gave a verdict is finished, right or wrong. Only an account that could not
             // answer at all is worth trying elsewhere.

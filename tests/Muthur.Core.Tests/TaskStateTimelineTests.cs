@@ -11,6 +11,28 @@ public sealed class TaskStateTimelineTests
     private static DateTimeOffset At(int minutes) => T0.AddMinutes(minutes);
 
     [Theory]
+    [InlineData("task.claimed", "{\"tasks\":[\"T-67\"]}", TaskState.Backlog)]
+    [InlineData("task.claimed", "{\"tasks\":[]}", TaskState.InProgress)]
+    [InlineData("task.blocked", "{\"tasks\":[\"T-67\"]}", TaskState.Blocked)]
+    [InlineData("task.claimed", "invalid", TaskState.InProgress)]
+    [InlineData("task.claimed", "null", TaskState.InProgress)]
+    public void Historical_dependency_events_only_release_active_work(string initial, string payload, TaskState expected)
+    {
+        var intervals = TaskStateTimeline.ReplayWithPayload([(initial, At(0), null), ("task.dependencies_set", At(10), payload)]);
+        Assert.Equal(expected, intervals[^1].State);
+        var totals = TaskStateTimeline.Within(intervals, At(0), At(60));
+        Assert.Equal(TimeSpan.FromMinutes(expected == TaskState.Backlog ? 50 : 60), totals[expected]);
+    }
+
+    [Fact]
+    public void Explicit_dependency_release_and_legacy_replay_have_identical_times()
+    {
+        (string, DateTimeOffset, string?)[] old = [("task.claimed", At(0), null), ("task.dependencies_set", At(10), "{\"tasks\":[\"T-2\"]}")];
+        Assert.Equal(TaskStateTimeline.ReplayWithPayload(old),
+            TaskStateTimeline.ReplayWithPayload([old[0], ("task.released", At(10), null), old[1]]));
+    }
+
+    [Theory]
     [InlineData("task.added", TaskState.Backlog)]
     [InlineData("task.claimed", TaskState.InProgress)]
     [InlineData("task.released", TaskState.Backlog)]

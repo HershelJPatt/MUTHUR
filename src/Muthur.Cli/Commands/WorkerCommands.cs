@@ -34,16 +34,17 @@ public static class WorkerCommands
         var task = new Option<string?>("--task") { Description = "Task id, recorded in the ledger with the run." };
         var harness = new Option<string?>("--harness") { Description = "Only use this harness from the tier's candidates." };
         var baseRef = new Option<string?>("--base") { Description = "Branch the worker starts from (default: the current branch)." };
+        var defaultBranch = new Option<string?>("--default-branch") { Description = "Named local default branch (otherwise resolved from the task/project registration)." };
         var branch = new Option<string?>("--branch") { Description = "Branch to create for the worker (default: worker/<task>-<unit>-<id>)." };
         var note = new Option<string?>("--note") { Description = "One extra instruction for the worker." };
         var parent = new Option<string?>("--parent")
             { Description = "The worker run whose plan this unit came from. Recorded so a two-level fan-out is readable in the ledger." };
         var timeout = new Option<int>("--timeout-minutes") { DefaultValueFactory = _ => 60 };
         var run = new Command("run", "Run one worker in its own worktree and print its report. The worker gets no hub identity.")
-            { tier, spec, unit, task, harness, baseRef, branch, note, parent, timeout };
+            { tier, spec, unit, task, harness, baseRef, defaultBranch, branch, note, parent, timeout };
         run.SetAction((parse, ct) => RunAsync(parse, new RunOptions(
             parse.GetValue(tier)!, parse.GetValue(spec)!, parse.GetValue(unit), parse.GetValue(task), parse.GetValue(harness),
-            parse.GetValue(baseRef), parse.GetValue(branch), parse.GetValue(note), parse.GetValue(timeout), parse.GetValue(parent)), processes, ct));
+            parse.GetValue(baseRef), parse.GetValue(branch), parse.GetValue(note), parse.GetValue(timeout), parse.GetValue(parent), parse.GetValue(defaultBranch)), processes, ct));
         worker.Subcommands.Add(run);
     }
 
@@ -140,7 +141,7 @@ public static class WorkerCommands
     public static ConductorSessionsRequest UnattendedRequest(string? from, string? to, int? sessions, bool clear) =>
         new(null, from, to, sessions, clear);
 
-    private sealed record RunOptions(string Tier, string Spec, string? Unit, string? Task, string? Harness, string? Base, string? Branch, string? Note, int TimeoutMinutes, string? Parent = null);
+    private sealed record RunOptions(string Tier, string Spec, string? Unit, string? Task, string? Harness, string? Base, string? Branch, string? Note, int TimeoutMinutes, string? Parent = null, string? DefaultBranch = null);
 
     /// <summary>
     /// The contract this tier is handed. A mastermind is given a problem area, not a frozen unit, so handing it
@@ -204,20 +205,39 @@ public static class WorkerCommands
         var id = Guid.NewGuid().ToString("n")[..6];
         var branchName = o.Branch ?? $"worker/{Slug(o.Task ?? Path.GetFileNameWithoutExtension(o.Spec))}-{Slug(o.Unit ?? "all")}-{id}";
         var worktree = Path.Combine(repo, ".worktrees", branchName.Replace('/', '-'));
-        // Check the spec on the base ref before creating anything, so a refused run leaves no worktree or branch behind.
-        if (await Git(repo, "cat-file", "-e", $"{baseRef}:{o.Spec.Replace('\\', '/')}") is null)
-            return Output.Error("spec_not_committed", $"'{o.Spec}' does not exist on '{baseRef}'. Commit the frozen spec before delegating.", ExitCodes.RuleViolation);
-        var added = await processes.RunAsync("git", ["worktree", "add", "-b", branchName, worktree, baseRef], repo, timeout: TimeSpan.FromMinutes(2), ct: ct);
+        var defaultName = o.DefaultBranch;
+        if (defaultName is null)
+        {
+            var projectKey = ProjectContext.FindKey(repo);
+            if (o.Task is { } taskKey)
+            {
+                var detail = await hub.GetAsync(Routes.Task(taskKey), ct);
+                if (!detail.IsSuccess) return Output.Emit(parse, detail);
+                projectKey = JsonSerializer.Deserialize(detail.Body, MuthurJsonContext.Default.TaskDetailDto)?.Task.Project;
+            }
+            if (projectKey is { Length: > 0 })
+            {
+                var project = await hub.GetAsync(Routes.Project(projectKey), ct);
+                if (!project.IsSuccess) return Output.Emit(parse, project);
+                defaultName = JsonSerializer.Deserialize(project.Body, MuthurJsonContext.Default.ProjectDto)?.DefaultBranch;
+            }
+        }
+        if (string.IsNullOrWhiteSpace(defaultName))
+            return Output.Error("default_branch_required", "Register this project or provide --default-branch with its named local default branch.", ExitCodes.RuleViolation);
+        WorkerAssignment assignment;
+        try { assignment = await WorkerAssignment.ResolveAsync(processes, repo, baseRef, defaultName, o.Spec, branchName, worktree, ct); }
+        catch (WorkerDispatchException ex) { return Output.Error(ex.Code, ex.Message, ExitCodes.RuleViolation); }
+        var added = await processes.RunAsync("git", ["worktree", "add", "-b", branchName, worktree, assignment.BaseCommit], repo, timeout: TimeSpan.FromMinutes(2), ct: ct);
         if (!added.Ok) return Output.Error("worktree_failed", added.Message);
-        if (!File.Exists(Path.Combine(worktree, o.Spec)))
-            return Output.Error("spec_not_committed", $"'{o.Spec}' does not exist on '{baseRef}'. Commit the frozen spec before delegating.", ExitCodes.RuleViolation);
+        try { await assignment.VerifyCreatedAsync(processes, ct); }
+        catch (WorkerDispatchException ex) { return Output.Error(ex.Code, ex.Message + $" Created worktree retained at {worktree}.", ExitCodes.RuleViolation); }
 
         var scratch = Path.Combine(MuthurEnvironment.Home, "workers", id);
         Directory.CreateDirectory(scratch);
         string PromptFor(HarnessCandidate c)
         {
             var notes = string.Join(" ", new[] { o.Note, Harnesses.Find(c.Harness)?.WorkerNote }.Where(n => n is { Length: > 0 }));
-            return WorkerPrompt.Compose(contract, o.Spec.Replace('\\', '/'), o.Unit, branchName, verify, notes);
+            return WorkerPrompt.Compose(contract, assignment.SpecPath, o.Unit, branchName, verify, notes, assignment);
         }
 
         // 4. Run, falling through candidates whose account turns out to be exhausted.
@@ -247,16 +267,28 @@ public static class WorkerCommands
         // A harness that exits cleanly has not necessarily done the work: the report's own STATUS line decides.
         var status = WorkerReport.Status(final.Outcome.Report);
         var success = final.Outcome.Success && status is null or "done";
-        var commits = (await Git(worktree, "log", "--oneline", $"{baseRef}..HEAD") ?? "").Split('\n', StringSplitOptions.RemoveEmptyEntries);
+        var commits = (await Git(worktree, "log", "--oneline", $"{assignment.BaseCommit}..HEAD") ?? "").Split('\n', StringSplitOptions.RemoveEmptyEntries);
+        var headCommit = await Git(worktree, "rev-parse", "HEAD");
+        var failureKind = final.FailureKind ?? (!final.Started ? "launch_unavailable" : status is "blocked" ? "worker_blocked" :
+            status is "spec-problem" ? "spec_problem" : !success ? "worker_failed" : null);
 
         await hub.PostAsync(Routes.WorkerRuns, new WorkerRunReport(o.Task, o.Tier, final.Candidate.Harness, final.Candidate.Model, final.Candidate.Account,
-            branchName, o.Unit, success, (int)final.Duration.TotalSeconds, final.Outcome.CostUsd, o.Parent), MuthurJsonContext.Default.WorkerRunReport, ct);
+            branchName, o.Unit, success, (int)final.Duration.TotalSeconds, final.Outcome.CostUsd, o.Parent,
+            RunId: final.RunId, Status: status, FailureKind: failureKind, BaseCommit: assignment.BaseCommit, HeadCommit: headCommit,
+            SpecBlob: assignment.SpecBlob, ExitCode: final.ExitCode), MuthurJsonContext.Default.WorkerRunReport, ct);
 
         using var stream = new MemoryStream();
         using (var json = new Utf8JsonWriter(stream, new JsonWriterOptions { Encoder = System.Text.Encodings.Web.JavaScriptEncoder.UnsafeRelaxedJsonEscaping }))
         {
             json.WriteStartObject();
             json.WriteBoolean("success", success);
+            json.WriteString("runId", final.RunId);
+            json.WriteString("failureKind", failureKind);
+            json.WriteString("baseBranch", assignment.BaseBranch);
+            json.WriteString("baseCommit", assignment.BaseCommit);
+            json.WriteString("defaultBranch", assignment.DefaultBranch);
+            json.WriteString("specBlob", assignment.SpecBlob);
+            json.WriteString("headCommit", headCommit);
             if (status is not null) json.WriteString("status", status);
             if (committedByLauncher) json.WriteBoolean("committedByLauncher", true);
             json.WriteString("harness", final.Candidate.Harness);

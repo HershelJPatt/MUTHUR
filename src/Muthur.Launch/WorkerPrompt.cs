@@ -5,7 +5,8 @@ namespace Muthur.Launch;
 public static class WorkerPrompt
 {
     /// <summary>The implementer contract followed by the concrete assignment. Everything the worker knows is in here.</summary>
-    public static string Compose(string contractMarkdown, string specPath, string? unit, string branch, IReadOnlyList<string> verifyCommands, string? extra)
+    public static string Compose(string contractMarkdown, string specPath, string? unit, string branch, IReadOnlyList<string> verifyCommands, string? extra,
+        WorkerAssignment? assignment = null)
     {
         var prompt = new StringBuilder();
         prompt.AppendLine(contractMarkdown.Trim());
@@ -17,6 +18,15 @@ public static class WorkerPrompt
         prompt.AppendLine($"- Spec: `{specPath}` (read all of it, and the repository's CLAUDE.md / AGENTS.md if present).");
         prompt.AppendLine(unit is { Length: > 0 } ? $"- Your unit: **{unit}**. Only the files that unit names." : "- Your unit: the whole spec.");
         prompt.AppendLine($"- You are in your own git worktree, on branch `{branch}`. Work only here; commit here; never switch branches.");
+        if (assignment is { } a)
+        {
+            prompt.AppendLine($"- Exact worktree root: `{a.Worktree}`.");
+            prompt.AppendLine($"- Named local base branch: `{a.BaseBranch}`.");
+            prompt.AppendLine($"- Full base commit SHA at dispatch: `{a.BaseCommit}`.");
+            prompt.AppendLine($"- Named default branch: `{a.DefaultBranch}`.");
+            prompt.AppendLine($"- Frozen spec blob SHA: `{a.SpecBlob}` (path `{a.SpecPath}`).");
+            prompt.AppendLine("- Git trust is supplied only to this process for this worktree. Never change global safe.directory or sandbox permissions.");
+        }
         if (verifyCommands.Count > 0)
         {
             prompt.AppendLine("- Verification (run from the worktree root; all must pass):");

@@ -1,3 +1,5 @@
+using System.Text.Json;
+
 namespace Muthur.Launch;
 
 /// <summary>
@@ -28,6 +30,15 @@ public sealed class CodexAdapter(string name, string? openSourceProvider) : IHar
             "-c", "features.fast_mode=false",
         };
         if (!request.RequireRepository) arguments.Add("--skip-git-repo-check");
+        foreach (var (key, value) in request.GitEnvironment ?? new Dictionary<string, string>())
+        {
+            // Only the appended trust entry belongs on the command line. Inherited Git settings may contain
+            // credentials; they stay in the child environment and are never copied to arguments or logs.
+            var last = int.Parse(request.GitEnvironment!["GIT_CONFIG_COUNT"], System.Globalization.CultureInfo.InvariantCulture) - 1;
+            if (key != "GIT_CONFIG_COUNT" && key != $"GIT_CONFIG_KEY_{last}" && key != $"GIT_CONFIG_VALUE_{last}") continue;
+            arguments.Add("-c");
+            arguments.Add($"shell_environment_policy.set.{key}=\"{JsonEncodedText.Encode(value)}\"");
+        }
         if (request.GitCommonDirectory is { Length: > 0 } git)
         {
             // A worktree's index and refs live in the main repository's .git; without this the worker cannot commit.
@@ -60,7 +71,8 @@ public sealed class CodexAdapter(string name, string? openSourceProvider) : IHar
         var report = File.Exists(file) ? File.ReadAllText(file).Trim() : "";
         if (result.Ok && report.Length > 0) return new WorkerOutcome(true, report, RateLimited: false);
 
-        var text = report.Length > 0 ? report : result.Message;
+        var text = result.Ok ? result.Message : $"Process exited with code {result.ExitCode}: {result.Message}";
+        if (report.Length > 0) text += "\n\nFinal report from this attempt:\n" + report;
         return new WorkerOutcome(false, text, Harnesses.LooksRateLimited(result.StdErr + result.StdOut));
     }
 }

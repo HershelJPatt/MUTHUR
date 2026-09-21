@@ -17,6 +17,68 @@ public sealed class ReliabilityTests : IDisposable
     public void Dispose() { _hub.Dispose(); _repo.Dispose(); }
 
     [Theory]
+    [InlineData("exited")]
+    [InlineData("live")]
+    [InlineData("reregistered")]
+    public async Task Answered_work_recovers_on_next_pass_only_for_its_exited_session(string mode)
+    {
+        _hub.Settings["Muthur:ConductorEnabled"] = "true";
+        await _hub.AddProjectAsync(repoPath: _repo.Path);
+        var agents = _hub.Services.GetRequiredService<AgentService>();
+        var registration = await agents.RegisterConductorSessionAsync(new("child", "codex", "test"));
+        var owner = _hub.CreateClient(registration.Token);
+        var task = await owner.AddTaskAsync("Answered work");
+        (await owner.ClaimAsync(task.Id)).EnsureSuccessStatusCode();
+        (await owner.PostActionAsync(task.Id, "spec", new SetSpecRequest(_repo.WriteSpec(task.Id)))).EnsureSuccessStatusCode();
+        async Task<int> Ask(string question)
+        {
+            var response = await owner.PostAsJsonAsync(Routes.Requests, new AskRequest(question, task.Id));
+            response.EnsureSuccessStatusCode();
+            return (await response.Content.ReadFromJsonAsync<FounderRequestDto>())!.Id;
+        }
+        var first = await Ask("Scope?");
+        var second = await Ask("Prerequisite?");
+        if (mode != "live") await agents.ReleaseChildAsync(new("child", registration.Token), default);
+        if (mode == "reregistered") await agents.RegisterConductorSessionAsync(new("child", "codex", "replacement"));
+        var requests = _hub.Services.GetRequiredService<RequestService>();
+        var conductor = _hub.Services.GetRequiredService<ConductorService>();
+        await requests.AnswerAsync(Caller.Founder, first, new("Documentation may ship now."));
+        await conductor.RunPassAsync();
+        Assert.Equal(TaskState.Blocked, (await _hub.Founder().GetTaskAsync(task.Id)).Task.State);
+        await requests.AnswerAsync(Caller.Founder, second, new("Behavior still depends on T-67."));
+        var expires = (await _hub.Founder().GetTaskAsync(task.Id)).Task.ClaimExpires;
+        Assert.True(expires > _hub.Clock.GetUtcNow());
+        await conductor.RunPassAsync(); // No clock advance or claim expiry.
+        Assert.Equal(mode == "exited" ? TaskState.Backlog : TaskState.InProgress,
+            (await _hub.Founder().GetTaskAsync(task.Id)).Task.State);
+        if (mode == "exited")
+        {
+            await conductor.SetOrchestratorsAsync(Caller.Founder, true);
+            var plan = Assert.Single(await conductor.PlanOrchestratorsAsync());
+            Assert.Contains($"Request #{second}", plan.LatestDecisions);
+            Assert.Contains("Behavior still depends on T-67.", plan.LatestDecisions);
+            Assert.Contains("actor: founder", plan.LatestDecisions);
+        }
+    }
+
+    [Fact]
+    public async Task Dependency_wait_is_productive_and_records_the_return_to_backlog()
+    {
+        await _hub.AddProjectAsync(repoPath: _repo.Path);
+        var owner = await _hub.RegisterAgentAsync("owner");
+        var dependency = await owner.AddTaskAsync("Prerequisite");
+        var task = await owner.AddTaskAsync("Waiting work");
+        (await owner.ClaimAsync(task.Id)).EnsureSuccessStatusCode();
+        (await owner.PostActionAsync(task.Id, "dependencies", new DependenciesRequest([dependency.Id]))).EnsureSuccessStatusCode();
+        var detail = await owner.GetTaskAsync(task.Id);
+        Assert.Single(detail.Events, e => e.Type == "task.released");
+        var conductor = _hub.Services.GetRequiredService<ConductorService>();
+        Assert.False(await conductor.StillInBacklogAsync(int.Parse(task.Id.AsSpan(2))));
+        (await owner.PostActionAsync(task.Id, "dependencies", new DependenciesRequest([]))).EnsureSuccessStatusCode();
+        Assert.True(await conductor.StillInBacklogAsync(int.Parse(task.Id.AsSpan(2))));
+    }
+
+    [Theory]
     [InlineData(false)]
     [InlineData(true)]
     public async Task Account_exhaustion_stops_staffing_across_tasks_and_preserves_longer_limits(bool validator)

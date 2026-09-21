@@ -24,7 +24,9 @@ public sealed record WorkerRunReport(
     decimal? CostUsd,
     string? Parent = null,
     int? InputTokens = null,
-    int? OutputTokens = null);
+    int? OutputTokens = null,
+    string? RunId = null, string? Status = null, string? FailureKind = null,
+    string? BaseCommit = null, string? HeadCommit = null, string? SpecBlob = null, int? ExitCode = null);
 
 /// <summary>One validator session the conductor believes it has running.</summary>
 /// <param name="Task">"T-n".</param>
