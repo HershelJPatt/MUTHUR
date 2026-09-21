@@ -46,7 +46,8 @@ public static class Mapper
             c.AlreadyIncluded, c.PromotionIntentAt, c.PromotedAt,
             c.EvidenceJson is null ? null : JsonSerializer.Deserialize(c.EvidenceJson, MuthurJsonContext.Default.IntegrationEvidenceDto),
             c.EvidenceSha256, c.FailureCode, c.FailureMessage,
-            c.FailureJson is null ? null : JsonSerializer.Deserialize(c.FailureJson, MuthurJsonContext.Default.IntegrationFailureRequest));
+            c.FailureJson is null ? null : JsonSerializer.Deserialize(c.FailureJson, MuthurJsonContext.Default.IntegrationFailureRequest),
+            c.RunnerProcessId, c.RunnerStartedAt, c.OwnedWorktreePath, c.ArtifactsDirectory);
 
     public static EventDto ToDto(this LedgerEvent e)
     {

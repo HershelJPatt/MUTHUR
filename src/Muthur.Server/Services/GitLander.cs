@@ -82,7 +82,8 @@ public sealed partial class GitLander(IProcessRunner processes, IPullRequestOpen
     {
         if (!IsObjectId(sha)) return null;
         var result = await GitAsync(project.RepoPath, ct, "show", "--no-patch", "--format=%H%n%T%n%P", sha, "--");
-        var lines = result.StdOut.TrimEnd('\r', '\n').Split('\n');
+        var output = result.StdOut.Replace("\r\n", "\n", StringComparison.Ordinal);
+        var lines = (output.EndsWith('\n') ? output[..^1] : output).Split('\n');
         if (!result.Ok || lines.Length != 3 || lines[0].Trim() != sha) return null;
         return new GitCommitInspection(lines[0].Trim(), lines[1].Trim(),
             lines[2].Split(' ', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries));

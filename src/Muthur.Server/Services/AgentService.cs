@@ -46,7 +46,7 @@ public sealed partial class AgentService(Ledger ledger, LeasePolicy leases, Time
     private static partial Regex NamePattern();
 
     public Task<RegisterAgentResponse> RegisterAsync(Caller caller, RegisterAgentRequest request, CancellationToken ct = default) =>
-        RegisterCoreAsync(caller, request, conductorStaffed: false, ct);
+        RegisterCoreAsync(caller, request, conductorStaffed: false, integrationRunner: false, ct);
 
     /// <summary>
     /// Registration for a session the conductor is staffing. Separate from <see cref="RegisterAsync"/> rather
@@ -54,10 +54,15 @@ public sealed partial class AgentService(Ledger ledger, LeasePolicy leases, Time
     /// staffed the session, not anything a caller can send.
     /// </summary>
     internal Task<RegisterAgentResponse> RegisterConductorSessionAsync(RegisterAgentRequest request, CancellationToken ct = default) =>
-        RegisterCoreAsync(Caller.Founder, request, conductorStaffed: true, ct);
+        RegisterCoreAsync(Caller.Founder, request, conductorStaffed: true, integrationRunner: false, ct);
 
-    private async Task<RegisterAgentResponse> RegisterCoreAsync(Caller caller, RegisterAgentRequest request, bool conductorStaffed, CancellationToken ct)
+    internal Task<RegisterAgentResponse> RegisterIntegrationRunnerAsync(RegisterAgentRequest request, CancellationToken ct = default) =>
+        RegisterCoreAsync(Caller.System, request, conductorStaffed: true, integrationRunner: true, ct);
+
+    private async Task<RegisterAgentResponse> RegisterCoreAsync(Caller caller, RegisterAgentRequest request, bool conductorStaffed, bool integrationRunner, CancellationToken ct)
     {
+        if (caller.IntegrationRunner)
+            throw Fail.Rule("integration_runner_forbidden", "Integration runners cannot register identities.");
         var name = (request.Name ?? "").Trim().ToLowerInvariant();
         if (!NamePattern().IsMatch(name) || name is "founder" or "muthur" or "anonymous")
             throw Fail.Rule("invalid_name", "Agent names are 1-80 chars of a-z, 0-9, '.', '_' or '-', and may not be a reserved name.");
@@ -68,6 +73,8 @@ public sealed partial class AgentService(Ledger ledger, LeasePolicy leases, Time
         var agent = await ledger.MutateAsync(caller, async m =>
         {
             var existing = await m.Db.Agents.SingleOrDefaultAsync(a => a.Name == name, ct);
+            if (existing?.IntegrationRunner == true || (integrationRunner && existing is not null))
+                throw Fail.Rule("integration_runner_forbidden", "Integration runner identities cannot be re-registered or taken over.");
             if (existing is not null && !(caller.IsFounder || caller.AgentId == existing.Id))
                 throw Fail.Conflict("agent_exists", $"Agent '{name}' is already registered. Re-register as that agent, or with --founder to take the name over.");
 
@@ -81,6 +88,7 @@ public sealed partial class AgentService(Ledger ledger, LeasePolicy leases, Time
             // Sticky, never cleared. A conductor-staffed session that registers again through `muthur agent register`
             // — which the orchestrate procedure tells it to do if its token is gone — is still a staffed session.
             if (conductorStaffed) agent.ConductorStaffed = true;
+            if (integrationRunner) agent.IntegrationRunner = true;
             if (existing is null) m.Db.Agents.Add(agent);
 
             m.Record(existing is null ? "agent.registered" : "agent.reregistered",
@@ -98,7 +106,7 @@ public sealed partial class AgentService(Ledger ledger, LeasePolicy leases, Time
         var agent = await ledger.ReadAsync((db, _) => db.Agents.SingleOrDefaultAsync(a => a.TokenHash == hash, ct), ct);
         if (agent is null) return null;
 
-        var caller = new Caller(CallerKind.Agent, agent.Id, agent.Name, agent.ModelLabel);
+        var caller = new Caller(CallerKind.Agent, agent.Id, agent.Name, agent.ModelLabel, agent.IntegrationRunner);
         var now = clock.GetUtcNow();
         if (!_lastTouch.TryGetValue(agent.Id, out var last) || now - last >= TouchInterval)
         {

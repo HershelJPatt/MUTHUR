@@ -9,7 +9,7 @@ namespace Muthur.Server.Auth;
 public enum CallerKind { Anonymous, Agent, Founder }
 
 /// <summary>Who is making this request. Resolved once per request from the bearer token.</summary>
-public sealed record Caller(CallerKind Kind, Guid? AgentId = null, string Name = "anonymous", string? Model = null)
+public sealed record Caller(CallerKind Kind, Guid? AgentId = null, string Name = "anonymous", string? Model = null, bool IntegrationRunner = false)
 {
     public static readonly Caller Anonymous = new(CallerKind.Anonymous);
     public static readonly Caller Founder = new(CallerKind.Founder, null, "founder");
@@ -77,6 +77,9 @@ public sealed class CallerMiddleware(RequestDelegate next)
             else
                 throw Fail.Unauthorized("The bearer token is not recognized. Re-register the agent or check MUTHUR_AGENT.");
         }
+        if (http.GetCaller().IntegrationRunner)
+            await http.RequestServices.GetRequiredService<IntegrationService>()
+                .AuthorizeRequestAsync(http.GetCaller(), http.Request.Method, http.Request.Path.Value ?? "", http.RequestAborted);
         // The overseer is a technical delegate, never a general-purpose founder or outbound actor.
         if (http.GetCaller().Name == OverseerService.Identity && http.Request.Method != "GET")
         {

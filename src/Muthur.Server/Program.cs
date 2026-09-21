@@ -16,6 +16,7 @@ app.MapSystemEndpoints();
 app.MapAgentEndpoints();
 app.MapProjectEndpoints();
 app.MapTaskEndpoints();
+app.MapIntegrationEndpoints();
 app.MapRoleEndpoints();
 app.MapLifecycleEndpoints();
 app.MapMessageEndpoints();

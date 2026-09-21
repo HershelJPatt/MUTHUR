@@ -112,6 +112,9 @@ public sealed class MuthurDb(DbContextOptions<MuthurDb> options) : DbContext(opt
         modelBuilder.Entity<IntegrationCandidate>(e =>
         {
             e.ToTable("integration_candidates");
+            // OS process start identity must retain sub-millisecond precision for external recovery.
+            e.Property(x => x.RunnerStartedAt).HasConversion(new ValueConverter<DateTimeOffset, long>(
+                value => value.UtcTicks, value => new DateTimeOffset(value, TimeSpan.Zero)));
             e.HasOne(x => x.Task).WithMany().HasForeignKey(x => x.TaskId).OnDelete(DeleteBehavior.Restrict);
             e.HasOne(x => x.Project).WithMany().HasForeignKey(x => x.ProjectId).OnDelete(DeleteBehavior.Restrict);
             e.HasOne(x => x.Subject).WithMany().HasForeignKey(x => x.SubjectId).OnDelete(DeleteBehavior.Restrict);

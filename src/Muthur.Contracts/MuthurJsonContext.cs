@@ -65,6 +65,7 @@ namespace Muthur.Contracts;
 [JsonSerializable(typeof(IntegrationEvidenceDto))]
 [JsonSerializable(typeof(IntegrationFailureRequest))]
 [JsonSerializable(typeof(IntegrationRenewRequest))]
+[JsonSerializable(typeof(IntegrationStartRequest))]
 [JsonSerializable(typeof(ValidationChecksDto))]
 [JsonSerializable(typeof(ValidationEnvironmentDto))]
 [JsonSerializable(typeof(ValidationMetadataDto))]

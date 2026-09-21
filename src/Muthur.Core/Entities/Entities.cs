@@ -46,6 +46,7 @@ public sealed class Agent
     /// re-registers itself through the public API is still a session the conductor staffed.
     /// </summary>
     public bool ConductorStaffed { get; set; }
+    public bool IntegrationRunner { get; set; }
 
     public string ModelLabel => $"{Harness}/{Model}";
 }
