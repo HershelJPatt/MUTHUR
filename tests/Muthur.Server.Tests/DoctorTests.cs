@@ -18,13 +18,15 @@ public sealed class DoctorTests : IDisposable
         Assert.Equal(HttpStatusCode.OK, response.StatusCode);
 
         var report = await response.Content.ReadFromJsonAsync(MuthurJsonContext.Default.DoctorDto);
-        // Nothing is configured, so every check that reads the database has nothing to say. The hub's own log
-        // is not configuration — it exists from the moment the hub does — so that one line is the whole report.
-        var logging = Assert.Single(report!.Checks);
+        // The launch-side cache starts with unknown coverage; reading it never starts a model probe.
+        Assert.Equal(2, report!.Checks.Count);
+        var logging = Assert.Single(report.Checks, c => c.Category == "logging");
+        var capabilities = Assert.Single(report.Checks, c => c.Category == "capability");
+        Assert.Contains("Cached observations: 0", capabilities.Detail);
         Assert.Equal("logging", logging.Category);
         Assert.Equal(CheckStatus.Ok, logging.Status);
         Assert.Equal(1, report.Ok);
-        Assert.Equal(0, report.Warn);
+        Assert.Equal(1, report.Warn);
         Assert.Equal(0, report.Fail);
         Assert.Equal(_hub.Clock.GetUtcNow(), report.At);
     }

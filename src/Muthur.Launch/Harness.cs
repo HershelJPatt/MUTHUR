@@ -14,7 +14,8 @@ public sealed record WorkerRequest(
     /// <summary>Harness-specific reasoning effort, e.g. "high". Null means the harness's own default.</summary>
     string? ReasoningEffort = null,
     bool RequireRepository = true,
-    IReadOnlyDictionary<string, string>? GitEnvironment = null);
+    IReadOnlyDictionary<string, string>? GitEnvironment = null,
+    CapabilityContext? Capabilities = null);
 
 /// <summary>A process to start: executable, arguments, and the prompt on stdin.</summary>
 public sealed record HarnessInvocation(string FileName, IReadOnlyList<string> Arguments, string Stdin);
@@ -28,6 +29,10 @@ public interface IHarnessAdapter
 
     /// <summary>Harness-specific guidance appended to the worker's assignment, or null.</summary>
     string? WorkerNote { get; }
+
+    string? CapabilityExecutable => null;
+
+    string? CapabilitySettings(WorkerRequest request) => null;
 
     HarnessInvocation Build(WorkerRequest request);
 

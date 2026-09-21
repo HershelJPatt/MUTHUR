@@ -10,7 +10,7 @@ namespace Muthur.Cli.Commands;
 /// <summary>Harness-agnostic delegation: staff a tier, give the worker a worktree and a frozen spec, bring back its report.</summary>
 public static class WorkerCommands
 {
-    private static readonly string[] DefaultAllowed =
+    internal static readonly string[] DefaultAllowed =
     [
         "dotnet *", "npm *", "node *", "git status*", "git add *", "git commit *", "git diff*", "git log*", "git show*",
         "git branch --show-current", "ls*", "cat *",
@@ -227,6 +227,14 @@ public static class WorkerCommands
         WorkerAssignment assignment;
         try { assignment = await WorkerAssignment.ResolveAsync(processes, repo, baseRef, defaultName, o.Spec, branchName, worktree, ct); }
         catch (WorkerDispatchException ex) { return Output.Error(ex.Code, ex.Message, ExitCodes.RuleViolation); }
+        IReadOnlyList<string> requirements;
+        try
+        {
+            var frozen = await Git(repo, "cat-file", "blob", assignment.SpecBlob)
+                ?? throw new WorkerDispatchException("spec_unreadable", "The pinned spec blob cannot be read.");
+            requirements = CapabilityRequirements.Parse(frozen);
+        }
+        catch (WorkerDispatchException ex) { return Output.Error(ex.Code, ex.Message, ExitCodes.RuleViolation); }
         var added = await processes.RunAsync("git", ["worktree", "add", "-b", branchName, worktree, assignment.BaseCommit], repo, timeout: TimeSpan.FromMinutes(2), ct: ct);
         if (!added.Ok) return Output.Error("worktree_failed", added.Message);
         try { await assignment.VerifyCreatedAsync(processes, ct); }
@@ -243,7 +251,10 @@ public static class WorkerCommands
         // 4. Run, falling through candidates whose account turns out to be exhausted.
         var attempts = await new WorkerLauncher(processes).RunAsync(
             candidates,
-            c => RequestFor(c, worktree, PromptFor(c), gitCommon, [.. DefaultAllowed, .. extraAllowed], scratch),
+            c => RequestFor(c, worktree, PromptFor(c), gitCommon, [.. DefaultAllowed, .. extraAllowed], scratch) with
+            {
+                Capabilities = new(requirements, "worker-run", Path.Combine(MuthurEnvironment.Home, "capabilities"), assignment.BaseCommit, repo),
+            },
             TimeSpan.FromMinutes(local ? Math.Min(o.TimeoutMinutes, 10) : o.TimeoutMinutes),
             async c =>
             {
@@ -284,6 +295,21 @@ public static class WorkerCommands
             json.WriteBoolean("success", success);
             json.WriteString("runId", final.RunId);
             json.WriteString("failureKind", failureKind);
+            json.WriteNumber("probeStarts", attempts.Sum(a => a.ProbeStarts));
+            json.WriteNumber("fullStarts", attempts.Sum(a => a.FullStarts));
+            json.WriteNumber("fullSessionsAvoided", attempts.Sum(a => a.FullSessionsAvoided));
+            json.WriteStartArray("attempts");
+            foreach (var attempt in attempts)
+            {
+                json.WriteStartObject();
+                json.WriteString("harness", attempt.Candidate.Harness);
+                json.WriteBoolean("started", attempt.Started);
+                json.WriteString("failureKind", attempt.FailureKind);
+                json.WritePropertyName("capabilityMatch");
+                JsonSerializer.Serialize(json, attempt.CapabilityMatch, CapabilityJsonContext.Default.CapabilityMatch);
+                json.WriteEndObject();
+            }
+            json.WriteEndArray();
             json.WriteString("baseBranch", assignment.BaseBranch);
             json.WriteString("baseCommit", assignment.BaseCommit);
             json.WriteString("defaultBranch", assignment.DefaultBranch);
@@ -327,7 +353,7 @@ public static class WorkerCommands
         new(worktree, prompt, candidate.Model, gitCommon, allowed, Denied, scratch, candidate.ReasoningEffort);
 
     /// <summary>Build/test commands and extra allowed shell commands from muthur.project.json.</summary>
-    private static (List<string> Verify, List<string> Allowed) ReadProject(string repo)
+    internal static (List<string> Verify, List<string> Allowed) ReadProject(string repo)
     {
         var verify = new List<string>();
         var allowed = new List<string>();
