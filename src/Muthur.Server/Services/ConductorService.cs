@@ -34,7 +34,7 @@ public interface IValidatorSessionLauncher
 /// <param name="PreviousOwner">Who last held it, out of the ledger, since the sweep cleared the column. Null if nothing says.</param>
 public sealed record OrchestratorAssignment(
     int TaskId, string TaskKey, string TaskTitle, string Project, bool Resuming = false, string? PreviousOwner = null,
-    string? LatestDecisions = null);
+    string? LatestDecisions = null, string? WorkUnitContext = null);
 
 /// <summary>Starts one orchestrator session. Faked in tests; the real one launches a harness through <c>AgentLauncher</c>.</summary>
 public interface IOrchestratorSessionLauncher
@@ -853,9 +853,10 @@ public sealed partial class ConductorService(
                         continue;
 
                 var resuming = CarriesWork(task);
+                var unitPacket = await TaskUnitContext.ReadAsync(db, task, ct);
                 plan.Add(new OrchestratorAssignment(task.Id, Wire.TaskId(task.Id), task.Title, task.Project?.Key ?? "",
                     resuming, resuming ? owners.GetValueOrDefault(task.Id) : null,
-                    await DecisionContext.ReadAsync(db, task.Id, ct)));
+                    unitPacket.LatestDecisions, TaskUnitContext.Format(unitPacket)));
             }
             return plan;
         }, ct);
