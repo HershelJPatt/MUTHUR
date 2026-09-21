@@ -58,6 +58,8 @@ public sealed partial class ConductorService
                     return new WorkerAdmissionDto(previous.Id, previous.Request.Task, request.RunId, false);
                 }
                 var task = await TaskService.LoadAsync(m.Db, request.Task, token);
+                if (task.State != TaskState.InProgress)
+                    throw Fail.Rule("worker_request_invalid", "Full-worker admission requires an in-progress task, including for Founder.");
                 var agent = caller.IsAgent
                     ? await m.Db.Agents.SingleOrDefaultAsync(a => a.Id == caller.AgentId, token) : null;
                 if (!caller.IsFounder && (agent?.Tier != "mastermind" || task.OwnerAgentId != agent.Id || task.State != TaskState.InProgress))

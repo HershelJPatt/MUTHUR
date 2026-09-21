@@ -64,6 +64,27 @@ public sealed class WorkerAdmissionTests : IDisposable
         Assert.Equal(2, (await Conductor.StatusAsync()).Running);
     }
 
+    [Theory]
+    [InlineData(TaskState.Done)]
+    [InlineData(TaskState.Cancelled)]
+    [InlineData(TaskState.Blocked)]
+    [InlineData(TaskState.Backlog)]
+    public async Task Founder_cannot_start_new_workers_outside_an_in_progress_task(TaskState state)
+    {
+        var (client, request) = await Setup();
+        var grant = await Granted(client, request);
+        await Ledger.MutateAsync(Caller.Founder, async m =>
+        {
+            var task = await TaskService.LoadAsync(m.Db, request.Task, default);
+            task.State = state;
+            m.Record("fixture.state", task.Id);
+        });
+        Assert.False((await Granted(client, request)).MayExecute);
+        (await Release(client, grant.ReservationId)).EnsureSuccessStatusCode();
+        await Code(await Admit(_hub.Founder(), request with { RunId = Guid.NewGuid().ToString("N") }), "worker_request_invalid");
+        Assert.Equal(1, await Count("worker.admitted"));
+    }
+
     [Fact]
     public async Task Release_requires_cleanup_and_listing_is_owner_scoped()
     {

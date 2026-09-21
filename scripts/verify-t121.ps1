@@ -156,7 +156,7 @@ Write-Output '{"result":"STATUS: done","is_error":false}'
     Check (@($run.attempts | Where-Object cleanup -ne 'ExitedAndTreeEmpty').Count -eq 0) 'each fallback tree confirmed empty'
     $reservations = @(Invoke-T121Cli @('worker', 'reservations', '--as-agent', 'worker-owner'))
     Check ($reservations.Count -eq 0) 'successful CLI releases capacity'
-    $events = @(Invoke-T121Cli @('log', '--task', $id, '--limit', '2000'))
+    $events = @(Invoke-T121Cli @('log', '--limit', '2000'))
     Check (@($events | Where-Object type -eq 'worker.admitted').Count -eq 2) 'two admissions, no report double charge'
     Check (@($events | Where-Object type -eq 'worker.released').Count -eq 2) 'two cleanup releases'
 
@@ -171,6 +171,7 @@ Write-Output '{"result":"STATUS: done","is_error":false}'
     $grant = Api 'workers/admit' $request
     Check $grant.mayExecute 'last daily attempt admitted'
     $capacityTask = Invoke-T121Cli @('task', 'add', 'Synthetic capacity fixture', '--project', 'worker-fixture', '--as-agent', 'worker-owner')
+    $null = Invoke-T121Cli @('task', 'claim', $capacityTask.id, '--as-agent', 'worker-owner')
     $extra = $request.Clone(); $extra.task = $capacityTask.id; $extra.runId = [guid]::NewGuid().ToString('n')
     $extraGrant = Api 'workers/admit' $extra
     $excess = $extra.Clone(); $excess.runId = [guid]::NewGuid().ToString('n')
