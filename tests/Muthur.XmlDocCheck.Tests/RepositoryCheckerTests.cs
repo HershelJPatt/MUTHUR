@@ -107,13 +107,12 @@ public sealed class RepositoryCheckerTests
     public void Nonrepository_and_missing_directory_fail()
     {
         var root = Path.Combine(Path.GetTempPath(), "muthur-xml-" + Guid.NewGuid().ToString("N"));
-        try
+        RepositoryFixtureCleanup.Run(root, () =>
         {
             AssertRun(root, 2, "");
             Directory.CreateDirectory(root);
             AssertRun(root, 2, "");
-        }
-        finally { if (Directory.Exists(root)) Directory.Delete(root, recursive: true); }
+        });
     }
 
     [Fact]
@@ -145,20 +144,11 @@ public sealed class RepositoryCheckerTests
     private static void WithRepository(Action<string> test)
     {
         var root = Path.Combine(Path.GetTempPath(), "muthur xml ü " + Guid.NewGuid().ToString("N"));
-        try
+        RepositoryFixtureCleanup.Run(root, () =>
         {
             Directory.CreateDirectory(root);
             new GitRunner().Run(root, "init");
             test(root);
-        }
-        finally
-        {
-            if (Directory.Exists(root))
-            {
-                foreach (var file in Directory.EnumerateFiles(root, "*", SearchOption.AllDirectories))
-                    File.SetAttributes(file, FileAttributes.Normal);
-                Directory.Delete(root, recursive: true);
-            }
-        }
+        });
     }
 }
