@@ -8,6 +8,14 @@ public static class HarnessEndpoints
 {
     public static void MapHarnessEndpoints(this IEndpointRouteBuilder app)
     {
+        app.MapPost(Routes.ProbeAdmit, (HttpContext http, ProbeAdmissionRequest request, ConductorService conductor, CancellationToken ct) =>
+            conductor.AdmitProbeAsync(http.GetCaller(), request, ct));
+        app.MapPost(Routes.ProbeRelease, async (HttpContext http, ProbeReleaseRequest request, ConductorService conductor, CancellationToken ct) =>
+        {
+            await conductor.ReleaseProbeAsync(http.GetCaller(), request, ct);
+            return Results.NoContent();
+        });
+
         app.MapGet(Routes.Tiers, (string? tier, HarnessService harnesses, CancellationToken ct) => harnesses.TiersAsync(tier, ct));
 
         app.MapPost(Routes.AccountLimits, async (HttpContext http, AccountLimitRequest request, HarnessService harnesses, CancellationToken ct) =>

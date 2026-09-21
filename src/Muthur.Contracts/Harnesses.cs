@@ -1,5 +1,11 @@
 namespace Muthur.Contracts;
 
+public sealed record ProbeAdmissionRequest(string Task, string Tier, string Harness, string Model, string Account, string RunId);
+
+public sealed record ProbeAdmissionDto(string ReservationId, string Task, string RunId, bool MayExecute);
+
+public sealed record ProbeReleaseRequest(string ReservationId);
+
 public sealed record HarnessCandidateDto(string Harness, string Model, string? Account, bool Limited, DateTimeOffset? LimitedUntil, string? ReasoningEffort);
 
 public sealed record TierDto(string Tier, IReadOnlyList<HarnessCandidateDto> Candidates);
