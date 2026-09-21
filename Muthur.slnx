@@ -12,5 +12,9 @@
     <Project Path="tests/Muthur.Core.Tests/Muthur.Core.Tests.csproj" />
     <Project Path="tests/Muthur.Launch.Tests/Muthur.Launch.Tests.csproj" />
     <Project Path="tests/Muthur.Server.Tests/Muthur.Server.Tests.csproj" />
+    <Project Path="tests/Muthur.XmlDocCheck.Tests/Muthur.XmlDocCheck.Tests.csproj" />
+  </Folder>
+  <Folder Name="/tools/">
+    <Project Path="tools/Muthur.XmlDocCheck/Muthur.XmlDocCheck.csproj" />
   </Folder>
 </Solution>
