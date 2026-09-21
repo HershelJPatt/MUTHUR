@@ -41,6 +41,8 @@ Unit IDs are case-sensitive ASCII `[a-z][a-z0-9-]{0,39}`. A graph allows 50 unit
 
 Start records dispatch before the worker runs. The output branch may not exist yet, but must be a named non-default local branch distinct from integration. The full base commit must equal integration HEAD. Dependencies must already have current accepted and integrated proof. Replacing an attempt requires a new UUID and a reason, and invalidates transitive dependents while preserving independent outputs.
 
+Reserved branch names are compared using ordinal case-insensitive equality on every platform. The integration branch cannot be a case alias of the project default branch, and output branches cannot be case aliases of either the default or integration branch. For example, default `main` also reserves `MAIN`, and integration `integration` also reserves `INTEGRATION`. This conservative rule applies to the opt-in work-unit feature, including the integration guard before positive transitions.
+
 ## Report, review, integrate
 
 Read the latest revision before every mutation. Keep the dispatched attempt UUID; do not manufacture a new one to report or review an existing attempt.

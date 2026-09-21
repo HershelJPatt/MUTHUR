@@ -327,14 +327,29 @@ public sealed class TaskUnitTests
     }
 
     [Theory]
+    [InlineData("main")]
+    [InlineData("MAIN")]
+    public async Task Definitions_refuse_default_branch_and_case_aliases(string branch)
+    {
+        using var f = new Fixture();
+        await f.Initialize();
+        await Error(await f.Owner.PostAsJsonAsync(Routes.TaskUnits(f.Id) + "/define",
+            f.Definition(f.Graph.Revision) with { IntegrationBranch = branch }), "invalid_unit_branch");
+        Assert.Equal(f.Graph.Revision, (await Read(await f.Owner.GetAsync(Routes.TaskUnits(f.Id)))).Revision);
+    }
+
+    [Theory]
     [InlineData("--help")]
     [InlineData("main")]
+    [InlineData("MAIN")]
     [InlineData("integration")]
+    [InlineData("INTEGRATION")]
     [InlineData("bad..branch")]
     public async Task Dispatch_refuses_unsafe_or_reserved_output_branches(string branch)
     {
         using var f = new Fixture();
         await f.Initialize();
         await Error(await f.Post(f.Request("a", "start") with { BaseCommit = f.Base, OutputBranch = branch }), "invalid_unit_branch");
+        Assert.Equal(f.Graph.Revision, (await Read(await f.Owner.GetAsync(Routes.TaskUnits(f.Id)))).Revision);
     }
 }

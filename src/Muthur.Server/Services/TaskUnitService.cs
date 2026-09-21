@@ -38,7 +38,7 @@ public sealed partial class TaskUnitService(Ledger ledger, IProcessRunner runner
             ValidateDefinition(request.Units);
             var git = new TaskUnitGit(runner, task.Project!.RepoPath, ct);
             await git.BranchName(request.IntegrationBranch);
-            if (request.IntegrationBranch == task.Project.DefaultBranch)
+            if (string.Equals(request.IntegrationBranch, task.Project.DefaultBranch, StringComparison.OrdinalIgnoreCase))
                 throw Fail.Rule("invalid_unit_branch", "The integration branch must not be the default branch.");
             TaskUnitGit.PathName(task.SpecPath);
             var blob = TaskUnitGit.ObjectId(request.SpecBlob);
@@ -90,7 +90,8 @@ public sealed partial class TaskUnitService(Ledger ledger, IProcessRunner runner
                     var baseCommit = TaskUnitGit.ObjectId(request.BaseCommit);
                     if (baseCommit != head) throw Fail.Rule("unit_base_changed", "Dispatch base must equal the integration branch HEAD.");
                     await git.BranchName(request.OutputBranch);
-                    if (request.OutputBranch == graph.IntegrationBranch || request.OutputBranch == task.Project.DefaultBranch)
+                    if (string.Equals(request.OutputBranch, graph.IntegrationBranch, StringComparison.OrdinalIgnoreCase) ||
+                        string.Equals(request.OutputBranch, task.Project.DefaultBranch, StringComparison.OrdinalIgnoreCase))
                         throw Fail.Rule("invalid_unit_branch", "Output must be a separate non-default local branch.");
                     await Dependencies(git, task, graph, unit, head, false);
                     updated = unit with { InvalidationReason = null, Attempt = new TaskUnitAttempt(request.AttemptId,
@@ -263,7 +264,7 @@ public sealed partial class TaskUnitService(Ledger ledger, IProcessRunner runner
 
     private static async Task<string> Integration(TaskUnitGit git, WorkTask task, TaskUnitGraph graph, TaskUnitAttempt? a = null)
     {
-        if (task.SpecPath != graph.SpecPath || graph.IntegrationBranch == task.Project!.DefaultBranch)
+        if (task.SpecPath != graph.SpecPath || string.Equals(graph.IntegrationBranch, task.Project!.DefaultBranch, StringComparison.OrdinalIgnoreCase))
             throw Fail.Rule("unit_spec_changed", "Task spec or integration branch changed; redefine graph.");
         var head = await git.Head(graph.IntegrationBranch);
         if (await git.FileBlob(head, graph.SpecPath) != graph.SpecBlob)
