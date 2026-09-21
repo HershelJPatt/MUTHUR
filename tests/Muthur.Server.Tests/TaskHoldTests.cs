@@ -11,7 +11,7 @@ namespace Muthur.Server.Tests;
 public sealed class TaskHoldTests : IDisposable
 {
     private readonly HubFactory _hub = new();
-    private readonly TestRepo _repo = new();
+    private readonly TestRepo _repo = new(integrationChecks: true);
 
     public void Dispose()
     {
@@ -84,6 +84,7 @@ public sealed class TaskHoldTests : IDisposable
         (await HoldAsync(other, id, "it collides with T-23's migration")).EnsureSuccessStatusCode();
         _hub.Clock.Advance(TimeSpan.FromMinutes(20));
 
+        await _hub.PassIntegrationAsync(_repo, id);
         var landed = await (await owner.PostAsync(Routes.TaskAction(id, "land"), null)).ReadTaskAsync();
 
         Assert.Equal(TaskState.Done, landed.State);   // information, never a gate
@@ -111,6 +112,7 @@ public sealed class TaskHoldTests : IDisposable
         (await HoldAsync(other, id, "it collides with T-23's migration")).EnsureSuccessStatusCode();
         _hub.Clock.Advance(TimeSpan.FromMinutes(20));
 
+        await _hub.PassIntegrationAsync(_repo, id);
         (await owner.PostAsync(Routes.TaskAction(id, "land"), null)).EnsureSuccessStatusCode();
 
         const string Said = "owner landed T-1, which bottom-left held 20m ago: \"it collides with T-23's migration\".";
@@ -131,6 +133,7 @@ public sealed class TaskHoldTests : IDisposable
 
         Assert.DoesNotContain("<dt>Held</dt>", await _hub.CreateClient().GetStringAsync("/tasks/" + id));
 
+        await _hub.PassIntegrationAsync(_repo, id);
         (await owner.PostAsync(Routes.TaskAction(id, "land"), null)).EnsureSuccessStatusCode();
 
         Assert.DoesNotContain((await owner.GetTaskAsync(id)).Events, e => e.Type == "task.hold_overridden");

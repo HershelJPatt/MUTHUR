@@ -14,7 +14,7 @@ public sealed class LandConflictTests : IDisposable
     private static readonly string[] ManyFiles = [.. Enumerable.Range(1, 15).Select(i => $"file{i:00}.txt")];
 
     private readonly HubFactory _hub = new();
-    private readonly TestRepo _repo = new();
+    private readonly TestRepo _repo = new(integrationChecks: true);
     private int _owners;
 
     public void Dispose()
@@ -53,12 +53,13 @@ public sealed class LandConflictTests : IDisposable
         _repo.BranchWithFile("task/T-2-beta", "shared.txt", "beta\n");
         var (first, firstId) = await ReadyToLandAsync("Build alpha", "task/T-1-alpha");
         var (second, secondId) = await ReadyToLandAsync("Build beta", "task/T-2-beta");
+        await _hub.PassIntegrationAsync(_repo, firstId);
         Assert.Equal(TaskState.Done, (await (await first.PostAsync(Routes.TaskAction(firstId, "land"), null)).ReadTaskAsync()).State);
 
-        var land = await second.PostAsync(Routes.TaskAction(secondId, "land"), null);
+        var integration = await _hub.RunIntegrationAsync(secondId);
 
-        Assert.Equal(HttpStatusCode.Conflict, land.StatusCode);
-        Assert.Equal("merge_conflict", (await land.ReadErrorAsync()).Code);
+        Assert.False(integration.Passed);
+        Assert.StartsWith("merge_conflict:", integration.Failure);
         var payload = LandFailedPayload(await second.GetTaskAsync(secondId));
         Assert.Equal("merge_conflict", payload.GetProperty("code").GetString());
         Assert.Equal("task/T-2-beta", payload.GetProperty("branch").GetString());
@@ -80,21 +81,21 @@ public sealed class LandConflictTests : IDisposable
         _repo.Commit("main gets there first");
         var (owner, id) = await ReadyToLandAsync("Touch everything", "task/T-1-wide");
 
-        var land = await owner.PostAsync(Routes.TaskAction(id, "land"), null);
+        var integration = await _hub.RunIntegrationAsync(id);
 
-        Assert.Equal(HttpStatusCode.Conflict, land.StatusCode);
-        var message = (await land.ReadErrorAsync()).Message;
+        Assert.False(integration.Passed);
+        var message = integration.Failure!;
         Assert.Equal(12, ManyFiles.Count(message.Contains));           // the prose is still capped
         Assert.Equal(ManyFiles, Strings(LandFailedPayload(await owner.GetTaskAsync(id)), "files"));
     }
 
     /// <summary>
     /// `git merge-base` has no answer across unrelated histories, so `landedSince` cannot be computed. The land
-    /// must still bounce the task back with 409 and still record the event: the evidence is best effort, the
+    /// must still return the task to its owner and record the event: the evidence is best effort, the
     /// behaviour is not.
     /// </summary>
     [Fact]
-    public async Task A_conflict_whose_landed_since_cannot_be_computed_still_records_the_event_and_still_returns_409()
+    public async Task A_conflict_whose_landed_since_cannot_be_computed_still_records_the_event()
     {
         await _hub.AddProjectAsync(repoPath: _repo.Path);
         _repo.Git("checkout", "-q", "--orphan", "task/T-1-unrelated");
@@ -105,10 +106,10 @@ public sealed class LandConflictTests : IDisposable
         var mainBefore = _repo.Git("rev-parse", "main");
         var (owner, id) = await ReadyToLandAsync("Land from nowhere", "task/T-1-unrelated");
 
-        var land = await owner.PostAsync(Routes.TaskAction(id, "land"), null);
+        var integration = await _hub.RunIntegrationAsync(id);
 
-        Assert.Equal(HttpStatusCode.Conflict, land.StatusCode);
-        Assert.Equal("merge_conflict", (await land.ReadErrorAsync()).Code);
+        Assert.False(integration.Passed);
+        Assert.StartsWith("merge_conflict:", integration.Failure);
         var detail = await owner.GetTaskAsync(id);
         Assert.Equal(TaskState.InProgress, detail.Task.State);
         Assert.Empty(Strings(LandFailedPayload(detail), "landedSince"));
@@ -125,12 +126,13 @@ public sealed class LandConflictTests : IDisposable
         _repo.BranchWithFile("task/T-2-beta", "shared.txt", "beta\n");
         var (first, firstId) = await ReadyToLandAsync("Build alpha", "task/T-1-alpha");
         var (second, secondId) = await ReadyToLandAsync("Build beta", "task/T-2-beta");
+        await _hub.PassIntegrationAsync(_repo, firstId);
         (await first.PostAsync(Routes.TaskAction(firstId, "land"), null)).EnsureSuccessStatusCode();
         _repo.Git("checkout", "-q", "-b", "somewhere-else");   // main is now checked out nowhere
 
-        var land = await second.PostAsync(Routes.TaskAction(secondId, "land"), null);
+        var integration = await _hub.RunIntegrationAsync(secondId);
 
-        Assert.Equal(HttpStatusCode.Conflict, land.StatusCode);
+        Assert.False(integration.Passed);
         var payload = LandFailedPayload(await second.GetTaskAsync(secondId));
         Assert.Equal("task/T-2-beta", payload.GetProperty("branch").GetString());
         Assert.Equal("main", payload.GetProperty("target").GetString());
@@ -146,10 +148,11 @@ public sealed class LandConflictTests : IDisposable
         var (owner, id) = await ReadyToLandAsync("Build the feature", "task/T-1-feature");
         _repo.Write("README.md", "# uncommitted edit\n");
 
+        await _hub.PassIntegrationAsync(_repo, id, detach: false);
         var land = await owner.PostAsync(Routes.TaskAction(id, "land"), null);
 
         Assert.Equal(HttpStatusCode.UnprocessableEntity, land.StatusCode);
-        Assert.Equal("dirty_checkout", (await land.ReadErrorAsync()).Code);
+        Assert.Equal("integration_target_checked_out", (await land.ReadErrorAsync()).Code);
         var detail = await owner.GetTaskAsync(id);
         Assert.Equal(TaskState.Validated, detail.Task.State);
         var refused = Assert.Single(detail.Events, e => e.Type == "task.land_refused").Payload;

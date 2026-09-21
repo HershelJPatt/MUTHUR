@@ -20,7 +20,7 @@ namespace Muthur.Server.Tests;
 public sealed class ReceiptsTests : IDisposable
 {
     private readonly HubFactory _hub = new();
-    private readonly TestRepo _repo = new();
+    private readonly TestRepo _repo = new(integrationChecks: true);
 
     public ReceiptsTests() => _hub.Settings["Muthur:ConductorEnabled"] = "true";
 
@@ -155,6 +155,7 @@ public sealed class ReceiptsTests : IDisposable
         (await validator.PostActionAsync(task.Id, "pass", new VerdictRequest("win-validator", "Ran the application: expected output observed; reproduce with dotnet test.", SubjectId: (await validator.GetTaskAsync(task.Id)).Task.CurrentSubject!.Id))).EnsureSuccessStatusCode();
         await AssertReplayMatchesAsync(task.Id, "passed validation");
 
+        await _hub.PassIntegrationAsync(_repo, task.Id);
         (await owner.PostAsync(Routes.TaskAction(task.Id, "land"), null)).EnsureSuccessStatusCode();
         await AssertReplayMatchesAsync(task.Id, "landed");
 

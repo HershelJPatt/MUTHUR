@@ -7,7 +7,7 @@ namespace Muthur.Server.Tests;
 public sealed class LifecycleTests : IDisposable
 {
     private readonly HubFactory _hub = new();
-    private readonly TestRepo _repo = new();
+    private readonly TestRepo _repo = new(integrationChecks: true);
 
     public void Dispose()
     {
@@ -64,12 +64,14 @@ public sealed class LifecycleTests : IDisposable
         var afterTwo = await (await web.PostActionAsync(id, "pass", new VerdictRequest("web-validator", "Ran the application: expected output observed; reproduce with dotnet test.", SubjectId: (await web.GetTaskAsync(id)).Task.CurrentSubject!.Id))).ReadTaskAsync();
         Assert.Equal(TaskState.Validated, afterTwo.State);
 
+        var originalCheckout = _repo.Git("rev-parse", "HEAD");
+        await _hub.PassIntegrationAsync(_repo, id);
         var landed = await (await owner.PostAsync(Routes.TaskAction(id, "land"), null)).ReadTaskAsync();
         Assert.Equal(TaskState.Done, landed.State);
         Assert.NotNull(landed.DoneAt);
         Assert.Equal("feature", _repo.Git("show", "main:feature.txt"));
-        Assert.StartsWith("Land T-1: Build the feature", _repo.Git("log", "-1", "--format=%s", "main"));
-        Assert.True(File.Exists(Path.Combine(_repo.Path, "feature.txt")), "the main checkout's working tree follows the merge");
+        Assert.Equal(landed.CurrentIntegrationCandidate!.CandidateSha, _repo.Git("rev-parse", "main"));
+        Assert.Equal(originalCheckout, _repo.Git("rev-parse", "HEAD"));
     }
 
     [Fact]
@@ -317,12 +319,11 @@ public sealed class LifecycleTests : IDisposable
         var mainBefore = _repo.Git("rev-parse", "main");
         (await owner.PostActionAsync(id, "implemented", new ImplementedRequest("task/T-1-feature"))).EnsureSuccessStatusCode();
 
-        var land = await owner.PostAsync(Routes.TaskAction(id, "land"), null);
+        var integration = await _hub.RunIntegrationAsync(id);
 
-        Assert.Equal(HttpStatusCode.Conflict, land.StatusCode);
-        var error = await land.ReadErrorAsync();
-        Assert.Equal("merge_conflict", error.Code);
-        Assert.Contains("README.md", error.Message);
+        Assert.False(integration.Passed);
+        Assert.StartsWith("merge_conflict:", integration.Failure);
+        Assert.Contains("README.md", integration.Failure);
         Assert.Equal(mainBefore, _repo.Git("rev-parse", "main"));
         Assert.Equal("", _repo.Git("status", "--porcelain", "--untracked-files=no"));
         Assert.Equal(TaskState.InProgress, (await owner.GetTaskAsync(id)).Task.State);
@@ -336,10 +337,12 @@ public sealed class LifecycleTests : IDisposable
         (await owner.PostActionAsync(id, "implemented", new ImplementedRequest("task/T-1-feature"))).EnsureSuccessStatusCode();
         _repo.Write("README.md", "# uncommitted edit\n");
 
+        await _hub.PassIntegrationAsync(_repo, id, detach: false);
         var land = await owner.PostAsync(Routes.TaskAction(id, "land"), null);
 
         Assert.Equal(HttpStatusCode.UnprocessableEntity, land.StatusCode);
-        Assert.Equal("dirty_checkout", (await land.ReadErrorAsync()).Code);
+        Assert.Equal("integration_target_checked_out", (await land.ReadErrorAsync()).Code);
+        Assert.Equal("# uncommitted edit\n", File.ReadAllText(Path.Combine(_repo.Path, "README.md")));
         Assert.Equal(TaskState.Validated, (await owner.GetTaskAsync(id)).Task.State);
     }
 
@@ -352,6 +355,7 @@ public sealed class LifecycleTests : IDisposable
         var mainBefore = _repo.Git("rev-parse", "main");
         (await owner.PostActionAsync(id, "implemented", new ImplementedRequest("task/T-1-feature"))).EnsureSuccessStatusCode();
 
+        await _hub.PassIntegrationAsync(_repo, id);
         var landed = await (await owner.PostAsync(Routes.TaskAction(id, "land"), null)).ReadTaskAsync();
 
         Assert.Equal(TaskState.Done, landed.State);

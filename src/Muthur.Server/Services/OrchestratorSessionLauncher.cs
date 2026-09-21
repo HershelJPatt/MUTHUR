@@ -68,12 +68,12 @@ public sealed class OrchestratorSessionLauncher(
         // The same classifier, not a second one that says the same thing: "nothing ever reached a process" and
         // "something ran and produced nothing" send the founder to different places, and one fork is easier to keep
         // honest than two.
-        ValidatorSessionLauncher.EnsureSomethingRan(assignment.TaskKey, attempts);
 
         if (knowledge is not null)
             foreach (var attempt in attempts.Where(a => a.Started))
                 if (lessons.GetValueOrDefault(attempt.Candidate) is { Lessons.Count: > 0 } received)
                     await knowledge.DeliveredAsync(assignment.TaskId, "#orchestrator", attempt.Candidate.Harness, attempt.Candidate.Model ?? "default", received, ct);
+        ValidatorSessionLauncher.EnsureSomethingRan(assignment.TaskKey, attempts);
         var last = attempts[^1];
         logger.LogInformation("Orchestrator session for {Task} finished on {Harness}.",
             assignment.TaskKey, last.Candidate.Harness);

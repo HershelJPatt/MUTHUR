@@ -308,6 +308,7 @@ public sealed class LifecycleService(Ledger ledger, LeasePolicy leases, ITaskLan
                 throw Fail.Conflict("validation_claimed",
                     $"{Wire.TaskId(task.Id)} is being validated for '{validator}' by '{row.ClaimedBy?.Name}'.");
 
+            if (outcome == Verdict.Yes) await DesignService.RequireComparisonAsync(m.Db, task, caller.Name, ct);
             row.Verdict = outcome;
             row.Evidence = request.Evidence!.Trim();
             row.AgentId = caller.AgentId;

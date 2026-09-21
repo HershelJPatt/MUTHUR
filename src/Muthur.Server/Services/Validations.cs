@@ -82,7 +82,8 @@ public static class Validations
             InvalidatingEnvironmentJson = await EnvironmentAsync(m.Db, project, ct),
             DescriptiveMetadataJson = Serialize(new ValidationMetadataDto(RuntimeInformation.OSDescription,
                 RuntimeInformation.ProcessArchitecture.ToString(), RuntimeInformation.FrameworkDescription,
-                typeof(Validations).Assembly.GetCustomAttribute<AssemblyInformationalVersionAttribute>()?.InformationalVersion)), CreatedAt = m.Now,
+                typeof(Validations).Assembly.GetCustomAttribute<AssemblyInformationalVersionAttribute>()?.InformationalVersion,
+                await DesignService.ApprovedHashAsync(m.Db, task, spec, ct))), CreatedAt = m.Now,
         };
     }
 
@@ -92,7 +93,14 @@ public static class Validations
         var p = task.Project!;
         return s is not null && task.ValidationInvalidationReason is null && s.ProjectId == task.ProjectId && !string.IsNullOrWhiteSpace(p.RepoPath)
             && s.RepositoryPath == RepositoryPath(p) && s.SpecPath == task.SpecPath && s.SpecSha256 == task.SpecSha256
-            && s.RequiredValidatorsJson == Roles(p) && s.InvalidatingEnvironmentJson == await EnvironmentAsync(db, p, ct);
+            && s.RequiredValidatorsJson == Roles(p) && s.InvalidatingEnvironmentJson == await EnvironmentAsync(db, p, ct)
+            && await DesignCompatibleAsync(db, task, ct);
+    }
+
+    private static async Task<bool> DesignCompatibleAsync(MuthurDb db, WorkTask task, CancellationToken ct)
+    {
+        try { return task.CurrentSubject!.ToDto().DescriptiveMetadata.DesignSha256 == await DesignService.ApprovedHashAsync(db, task, null, ct); }
+        catch (MuthurException) { return false; }
     }
 
     public static async Task RequireCurrentAsync(MuthurDb db, WorkTask task, ITaskLander lander, CancellationToken ct)

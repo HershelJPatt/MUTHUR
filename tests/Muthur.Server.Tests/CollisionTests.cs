@@ -23,7 +23,7 @@ public sealed class CollisionTests(ITestOutputHelper output) : IDisposable
 {
     private static readonly TimeSpan HangDetector = TimeSpan.FromSeconds(30);
     private readonly HubFactory _hub = new();
-    private readonly TestRepo _repo = new();
+    private readonly TestRepo _repo = new(integrationChecks: true);
     private readonly CountingProcessRunner _processes = new(output);
 
     public void Dispose()
@@ -285,6 +285,7 @@ public sealed class CollisionTests(ITestOutputHelper output) : IDisposable
 
         var (owner, landed) = await InFlightAsync("first", "Rewrite the header", "task/T-1-left");
         Assert.Equal(TaskState.Validated, landed.State);
+        await _hub.PassIntegrationAsync(_repo, landed.Id);
         var done = await (await owner.PostAsync(Routes.TaskAction(landed.Id, "land"), null)).ReadTaskAsync();
         Assert.Equal(TaskState.Done, done.State);
         Assert.Equal("task/T-1-left", done.Branch);   // a done task keeps its branch, and must still be ignored

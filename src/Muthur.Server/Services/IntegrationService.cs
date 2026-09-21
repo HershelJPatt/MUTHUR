@@ -208,9 +208,10 @@ public sealed class IntegrationService(Ledger ledger, ITaskLander lander, Muthur
             try { await RequireInputsAsync(m, task, ct); }
             catch (MuthurException ex) { refusal = ex; }
         }
-        if (refusal is null && await lander.BranchHeadAsync(task.Project!, c.DefaultBranch, ct) is { } target && target != c.TargetSha)
+        var target = refusal is null ? await lander.BranchHeadAsync(task.Project!, c.DefaultBranch, ct) : null;
+        if (refusal is null && target != c.TargetSha)
         {
-            var recoveringPromotion = c.State == "passed" && c.PromotionIntentAt is not null && c.CandidateSha is not null
+            var recoveringPromotion = target is not null && c.State == "passed" && c.PromotionIntentAt is not null && c.CandidateSha is not null
                 && await lander.IsAncestorAsync(task.Project!, c.CandidateSha, target, ct);
             if (!recoveringPromotion) refusal = Fail.Conflict("integration_target_changed", "The default branch moved. Check a new candidate against its current revision.");
         }
@@ -405,6 +406,9 @@ public sealed class IntegrationService(Ledger ledger, ITaskLander lander, Muthur
             RequireActive(c);
             c.FailureJson = json;
             Complete(m, c, "failed", request.Code, request.Message);
+            if (request.Code == "merge_conflict")
+                m.Record("task.land_failed", task.Id, new { code = request.Code, request.Message, branch = task.Branch,
+                    target = c.DefaultBranch, files = request.Files ?? [], landedSince = request.LandedSince ?? [], phase = "integration_construction" });
             ReturnToOwner(m, task, request.Message + " " + Validations.Recovery);
             return Task.CompletedTask;
         }, ct);

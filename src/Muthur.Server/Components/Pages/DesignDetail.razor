@@ -1,0 +1,39 @@
+@page "/tasks/{Id}/design"
+@inherits LivePanel
+@inject DesignService Designs
+
+<PageTitle>MUTHUR · Design @Id</PageTitle>
+<div class="page">
+    <h1>Visual design · @Id</h1>
+    @if (_design is null) { <p>This task has no visual design attachment. Text-only validation applies.</p> }
+    else
+    {
+        <p>Revision @_design.Revision · @_design.ApprovalStatus</p>
+        @foreach (var revision in _design.Revisions.Reverse())
+        {
+            <section><h2>Revision @revision.Revision · @revision.Sha256</h2>
+            <p>@revision.Definition.Summary</p><h3>Constraints</h3><p>@revision.Definition.Constraints</p>
+            <h3>Accessibility</h3><p>@revision.Definition.Accessibility</p><h3>Acceptance</h3><p>@revision.Definition.Acceptance</p>
+            <table><thead><tr><th>Artifact</th><th>State</th><th>Committed path</th><th>Blob</th></tr></thead><tbody>
+            @foreach (var artifact in revision.Definition.Artifacts)
+            {
+                <tr><td>@artifact.Name · @artifact.Role</td><td>@artifact.State</td><td><code>@artifact.Commit:@artifact.Path</code></td><td>@artifact.Blob</td></tr>
+            }
+            </tbody></table><p>Retrieve these artifacts from the registered repository at their recorded commit; no external sharing occurs.</p></section>
+        }
+        <h2>Approval history</h2>
+        @foreach (var approval in _design.Approvals) { <p>Revision @approval.Revision · @(approval.Approved ? "approved" : "rejected") by @approval.Actor at @approval.At.ToString("u") · spec @approval.SpecSha256 · @approval.Reason</p> }
+        <h2>Independent visual and interaction checks</h2>
+        @foreach (var check in _design.Checks) { <p>Revision @check.Revision · @check.ImplementationSha · @(check.Matches ? "matches" : "mismatch") · @check.Actor · @check.VisualEvidence · @check.InteractionEvidence</p> }
+    }
+</div>
+@code {
+    [Parameter] public string Id { get; set; } = "";
+    private DesignDto? _design;
+    protected override async Task OnParametersSetAsync() => await LoadAsync();
+    protected override async Task LoadAsync()
+    {
+        try { _design = await Designs.GetAsync(Id); }
+        catch (Muthur.Core.MuthurException ex) when (ex.Code == "not_found") { _design = null; }
+    }
+}

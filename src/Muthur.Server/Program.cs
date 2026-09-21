@@ -20,6 +20,7 @@ app.MapIncidentEndpoints();
 app.MapObjectiveEndpoints();
 app.MapKnowledgeEndpoints();
 app.MapRoutingEndpoints();
+app.MapDesignEndpoints();
 app.MapIntegrationEndpoints();
 app.MapRoleEndpoints();
 app.MapLifecycleEndpoints();

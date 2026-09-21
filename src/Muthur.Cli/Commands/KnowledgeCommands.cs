@@ -25,7 +25,7 @@ public static class KnowledgeCommands
         Write(group, "retire", MuthurJsonContext.Default.LessonRetireRequest);
     }
 
-    private static void Write<T>(Command group, string name, JsonTypeInfo<T> json, bool existing = true) where T : class
+    internal static void Write<T>(Command group, string name, JsonTypeInfo<T> json, bool existing = true, string route = "/api/v1/knowledge") where T : class
     {
         var file = new Option<string>("--file") { Required = true };
         var id = new Argument<string>("id");
@@ -36,7 +36,7 @@ public static class KnowledgeCommands
             try
             {
                 var body = JsonSerializer.Deserialize(await File.ReadAllTextAsync(p.GetValue(file)!, ct), json) ?? throw new JsonException("A JSON request is required.");
-                return Output.Emit(p, await HubClient.For(p).PostAsync("/api/v1/knowledge" + (existing ? "/" + Uri.EscapeDataString(p.GetValue(id)!) + "/" + name : ""), body, json, ct));
+                return Output.Emit(p, await HubClient.For(p).PostAsync(route + (existing ? "/" + Uri.EscapeDataString(p.GetValue(id)!) + "/" + name : ""), body, json, ct));
             }
             catch (Exception ex) when (ex is IOException or JsonException) { return Output.Error("knowledge_input", ex.Message, 2); }
         });

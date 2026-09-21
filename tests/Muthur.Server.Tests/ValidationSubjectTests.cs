@@ -74,21 +74,20 @@ public sealed class ValidationSubjectTests : IDisposable
         var (owner, validator, task) = await RoundAsync();
         await PassAsync(validator, task);
         var before = _repo.Git("rev-parse", "main");
+        await _hub.PassIntegrationAsync(_repo, task.Id);
         _repo.Git("update-ref", $"refs/heads/{Branch}", CommitB());
         var refused = await owner.PostAsync(Routes.TaskAction(task.Id, "land"), null);
-        Assert.Equal("implementation_changed", (await refused.ReadErrorAsync()).Code);
+        Assert.Equal("stale_integration_candidate", (await refused.ReadErrorAsync()).Code);
         Assert.Equal(before, _repo.Git("rev-parse", "main"));
     }
 
-    [Theory]
-    [InlineData(true)]
-    [InlineData(false)]
-    public async Task Movement_after_the_head_check_integrates_only_A(bool checkout)
+    [Fact]
+    public async Task Movement_after_the_head_check_integrates_only_A()
     {
         var (owner, validator, task) = await RoundAsync();
         await PassAsync(validator, task);
         var b = CommitB();
-        if (!checkout) _repo.Git("checkout", "-q", "--detach", "main");
+        await _hub.PassIntegrationAsync(_repo, task.Id);
         _barrier.Armed = true;
         var landing = owner.PostAsync(Routes.TaskAction(task.Id, "land"), null);
         await _barrier.Reached.Task.WaitAsync(TimeSpan.FromSeconds(15));
@@ -253,6 +252,7 @@ public sealed class ValidationSubjectTests : IDisposable
         var (owner, _, task) = await RoundAsync(required: false);
         Assert.Equal(TaskState.Validated, task.State);
         Assert.Empty(task.CurrentSubject!.RequiredValidators);
+        await _hub.PassIntegrationAsync(_repo, task.Id);
         var landed = await (await owner.PostAsync(Routes.TaskAction(task.Id, "land"), null)).ReadTaskAsync();
         Assert.Equal(task.CurrentSubject.Id, landed.CurrentSubject!.Id);
         Assert.Equal(task.CurrentSubject.ImplementationSha, _repo.Git("rev-parse", "main^2"));
@@ -313,6 +313,7 @@ public sealed class ValidationSubjectTests : IDisposable
     {
         var (owner, validator, task) = await RoundAsync();
         await PassAsync(validator, task);
+        await _hub.PassIntegrationAsync(_repo, task.Id);
         var ownerId = await _hub.Services.GetRequiredService<Ledger>().ReadAsync(
             async (db, _) => (await db.Agents.SingleAsync(a => a.Name == "owner")).Id);
         var caller = new Caller(CallerKind.Agent, ownerId, "owner");
@@ -437,7 +438,7 @@ public sealed class ValidationSubjectTests : IDisposable
             string? stdin = null, TimeSpan? timeout = null, CancellationToken ct = default,
             IReadOnlyCollection<string>? scrubEnvironment = null, IReadOnlyDictionary<string, string>? environment = null)
         {
-            if (Armed && fileName == "git" && arguments.FirstOrDefault() == "merge-base")
+            if (Armed && fileName == "git" && arguments.FirstOrDefault() == "update-ref")
             {
                 Armed = false;
                 Reached.TrySetResult();

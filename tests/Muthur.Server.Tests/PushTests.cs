@@ -10,7 +10,7 @@ namespace Muthur.Server.Tests;
 public sealed class PushTests : IDisposable
 {
     private readonly HubFactory _hub = new();
-    private readonly TestRepo _repo = new();
+    private readonly TestRepo _repo = new(integrationChecks: true);
 
     public void Dispose()
     {
@@ -21,7 +21,7 @@ public sealed class PushTests : IDisposable
     [Fact]
     public async Task Landed_work_reaches_the_remote_on_the_next_pass()
     {
-        using var remote = new TestRepo();
+        using var remote = new TestRepo(integrationChecks: true);
         Connect(remote);
         await LandAsync();
         var local = _repo.Git("rev-parse", "main");
@@ -47,7 +47,7 @@ public sealed class PushTests : IDisposable
     [Fact]
     public async Task A_second_pass_with_nothing_ahead_does_nothing()
     {
-        using var remote = new TestRepo();
+        using var remote = new TestRepo(integrationChecks: true);
         Connect(remote);
         await LandAsync();
         Assert.Equal(1, (await PushAsync()).Pushed);
@@ -85,7 +85,7 @@ public sealed class PushTests : IDisposable
     [Fact]
     public async Task A_remote_that_moved_is_reported_and_never_forced()
     {
-        using var remote = new TestRepo();
+        using var remote = new TestRepo(integrationChecks: true);
         Connect(remote);
         AdvanceRemote(remote);
         var remoteBefore = remote.Git("rev-parse", "main");
@@ -109,7 +109,7 @@ public sealed class PushTests : IDisposable
     [Fact]
     public async Task A_failing_push_waits_out_the_backoff()
     {
-        using var remote = new TestRepo();
+        using var remote = new TestRepo(integrationChecks: true);
         Connect(remote);
         AdvanceRemote(remote);
         await LandAsync();
@@ -133,11 +133,12 @@ public sealed class PushTests : IDisposable
     [Fact]
     public async Task A_push_that_starts_working_again_says_so()
     {
-        using var remote = new TestRepo();
+        using var remote = new TestRepo(integrationChecks: true);
         Connect(remote);
         AdvanceRemote(remote);
         await LandAsync();
         Assert.Single((await PushAsync()).Errors);
+        _repo.Git("checkout", "-q", "main");
         _repo.Git("fetch", "origin");
         _repo.Git("merge", "--no-edit", "origin/main");
         _hub.Clock.Advance(PushService.RetryAfter);
@@ -161,7 +162,7 @@ public sealed class PushTests : IDisposable
     [Fact]
     public async Task Pr_mode_projects_are_left_to_their_humans()
     {
-        using var remote = new TestRepo();
+        using var remote = new TestRepo(integrationChecks: true);
         Connect(remote);
         var remoteBefore = remote.Git("rev-parse", "main");
         _repo.Write("feature.txt", "feature\n");
@@ -189,7 +190,7 @@ public sealed class PushTests : IDisposable
 
     private static void AdvanceRemote(TestRepo remote)
     {
-        using var other = new TestRepo();
+        using var other = new TestRepo(integrationChecks: true);
         var clone = Path.Combine(other.Path, "clone");
         other.Git("clone", "-q", remote.Path, clone);
         TestRepo.Run(clone, "config", "user.name", "Test");
@@ -212,6 +213,7 @@ public sealed class PushTests : IDisposable
         const string Branch = "task/T-1-feature";
         _repo.BranchWithFile(Branch, "feature.txt", "feature\n");
         (await owner.PostActionAsync(task.Id, "implemented", new ImplementedRequest(Branch))).EnsureSuccessStatusCode();
+        await _hub.PassIntegrationAsync(_repo, task.Id);
         var landed = await (await owner.PostAsync(Routes.TaskAction(task.Id, "land"), null)).ReadTaskAsync();
         Assert.Equal(TaskState.Done, landed.State);
     }

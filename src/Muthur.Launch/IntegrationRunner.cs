@@ -42,6 +42,8 @@ public sealed class IntegrationRunner(IProcessRunner processes, IIntegrationClie
         var cleanup = true;
         var created = false;
         var phase = "construction";
+        IReadOnlyList<string> conflictFiles = [];
+        IReadOnlyList<string> landedSince = [];
         var scrub = Environment.GetEnvironmentVariables().Keys.Cast<string>()
             .Where(k => k.StartsWith("MUTHUR", StringComparison.OrdinalIgnoreCase) || k.StartsWith("Muthur__", StringComparison.OrdinalIgnoreCase)
                 || k.StartsWith("OPENAI", StringComparison.OrdinalIgnoreCase) || k.StartsWith("ANTHROPIC", StringComparison.OrdinalIgnoreCase)).ToArray();
@@ -64,9 +66,22 @@ public sealed class IntegrationRunner(IProcessRunner processes, IIntegrationClie
             }
             else
             {
-                var merge = await Git("merge-tree", "--write-tree", c.TargetSha, c.ImplementationSha);
+                var merge = await Git("merge-tree", "--write-tree", "--name-only", c.TargetSha, c.ImplementationSha);
                 await File.WriteAllTextAsync(Path.Combine(artifacts, "merge.log"), merge.StdOut + "\n" + merge.StdErr, deadline.Token);
-                if (!merge.Ok) throw new IOException("merge_conflict: " + merge.Message);
+                if (!merge.Ok)
+                {
+                    if (merge.ExitCode == 1)
+                        conflictFiles = merge.StdOut.Split('\n').Skip(1).TakeWhile(l => l.Trim().Length > 0).Select(l => l.Trim()).ToArray();
+                    var common = await Git("merge-base", c.TargetSha, c.ImplementationSha);
+                    if (common.Ok)
+                    {
+                        var log = await Git("log", "--format=%s", common.StdOut.Trim() + ".." + c.TargetSha);
+                        if (log.Ok) landedSince = log.StdOut.Split('\n').Select(l => l.Split(' ', StringSplitOptions.RemoveEmptyEntries))
+                            .Where(words => words.Length > 1 && words[0] is "Land" or "Integration" && words[1].StartsWith("T-", StringComparison.Ordinal))
+                            .Select(words => words[1].TrimEnd(':')).Distinct().ToArray();
+                    }
+                    throw new IOException("merge_conflict: " + (conflictFiles.Count > 0 ? "conflicts: " + string.Join(", ", conflictFiles.Take(12)) : merge.Message));
+                }
                 tree = merge.StdOut.Split('\n')[0].Trim();
                 candidate = Output(await Git("-c", "user.name=MUTHUR Integration", "-c", "user.email=integration@localhost",
                     "-c", "commit.gpgsign=false", "commit-tree", tree, "-p", c.TargetSha, "-p", c.ImplementationSha, "-m", $"Integration {task} {c.Id:N}"));
@@ -126,7 +141,9 @@ public sealed class IntegrationRunner(IProcessRunner processes, IIntegrationClie
         }
         var code = deadline.IsCancellationRequested ? ct.IsCancellationRequested ? "runner_cancelled" : "runner_timeout"
             : failure?.StartsWith("merge_conflict:", StringComparison.Ordinal) == true ? "merge_conflict" : phase == "checkout" ? "checkout_failed" : "runner_failed";
-        var report = new IntegrationFailureRequest(c.AssignmentId, c.SubjectId, phase, code, failure ?? "Integration did not complete.");
+        var mergeLog = Path.Combine(artifacts, "merge.log");
+        var report = new IntegrationFailureRequest(c.AssignmentId, c.SubjectId, phase, code, failure ?? "Integration did not complete.",
+            File.Exists(mergeLog) ? mergeLog : null, File.Exists(mergeLog) ? VerificationFiles.HashFile(mergeLog) : null, conflictFiles, landedSince);
         await File.WriteAllTextAsync(evidencePath, JsonSerializer.Serialize(report, MuthurJsonContext.Default.IntegrationFailureRequest), reportDeadline.Token);
         await client.FailureAsync(task, report, reportDeadline.Token);
         return new(false, candidate, evidencePath, failure);

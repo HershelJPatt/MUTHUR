@@ -115,12 +115,12 @@ public sealed class ValidatorSessionLauncher(
             candidate => MarkLimitedAsync(candidate.Account, ct),
             ct);
 
-        EnsureSomethingRan(assignment.TaskKey, attempts);
 
         if (knowledge is not null)
             foreach (var attempt in attempts.Where(a => a.Started))
                 if (lessons.GetValueOrDefault(attempt.Candidate) is { Lessons.Count: > 0 } received)
                     await knowledge.DeliveredAsync(assignment.TaskId, assignment.RoleKey, attempt.Candidate.Harness, attempt.Candidate.Model ?? "default", received, ct);
+        EnsureSomethingRan(assignment.TaskKey, attempts);
         var last = attempts[^1];
         logger.LogInformation("Validator session for {Task}/{Role} finished on {Harness}.",
             assignment.TaskKey, assignment.RoleKey, last.Candidate.Harness);

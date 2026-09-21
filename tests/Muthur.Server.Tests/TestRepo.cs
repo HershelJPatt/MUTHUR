@@ -7,7 +7,7 @@ public sealed class TestRepo : IDisposable
 {
     public string Path { get; } = System.IO.Path.Combine(System.IO.Path.GetTempPath(), "muthur-tests", "repo-" + Guid.NewGuid().ToString("n"));
 
-    public TestRepo()
+    public TestRepo(bool integrationChecks = false)
     {
         Directory.CreateDirectory(Path);
         Git("init", "-q", "-b", "main");
@@ -16,6 +16,7 @@ public sealed class TestRepo : IDisposable
         Git("config", "commit.gpgsign", "false");
         Git("config", "core.autocrlf", "false");
         Write("README.md", "# test\n");
+        if (integrationChecks) Write("muthur.project.json", "{\"build\":\"echo fixture-build\",\"test\":\"echo fixture-test\"}");
         Commit("initial");
     }
 

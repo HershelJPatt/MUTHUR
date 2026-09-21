@@ -24,7 +24,7 @@ public sealed record ValidationChecksDto(string? Build, string? Test);
 public sealed record ValidatorBriefDigestDto(string Role, string Sha256);
 public sealed record ValidationEnvironmentDto(string ProjectKey, string DefaultBranch, string LandingMode,
     IReadOnlyList<ValidatorBriefDigestDto> Briefs);
-public sealed record ValidationMetadataDto(string OperatingSystem, string Architecture, string Runtime, string? HostRevision = null);
+public sealed record ValidationMetadataDto(string OperatingSystem, string Architecture, string Runtime, string? HostRevision = null, string? DesignSha256 = null);
 
 public sealed record SetPriorityRequest(int Priority);
 

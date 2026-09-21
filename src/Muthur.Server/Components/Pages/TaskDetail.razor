@@ -28,6 +28,7 @@
                 <dl class="kv" style="margin-top: 12px">
                     <dt>Project</dt><dd>@task.Project</dd>
                     <dt>Validation provenance</dt><dd>@task.ProvenanceStatus</dd>
+                    <dt>Visual design</dt><dd><a href="@($"/tasks/{task.Id}/design")">Artifacts, approvals and interaction evidence</a></dd>
                     @if (task.CurrentIntegrationCandidate is { } integration)
                     {
                         <dt>Integration</dt><dd>@integration.State · attempt @integration.Attempt</dd>

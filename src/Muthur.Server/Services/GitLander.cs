@@ -44,6 +44,7 @@ public sealed record GitCommitInspection(string Sha, string TreeSha, IReadOnlyLi
 
 public interface ITaskLander
 {
+    Task<string?> ArtifactBlobAsync(Project project, string commit, string path, CancellationToken ct = default) => Task.FromResult<string?>(null);
     Task<GitCommitInspection?> InspectCommitAsync(Project project, string sha, CancellationToken ct = default) =>
         Task.FromResult<GitCommitInspection?>(null);
     Task<bool> IsAncestorAsync(Project project, string ancestor, string descendant, CancellationToken ct = default) =>
@@ -74,6 +75,15 @@ public interface IPullRequestOpener
 /// </summary>
 public sealed partial class GitLander(IProcessRunner processes, IPullRequestOpener pullRequests) : ITaskLander
 {
+    public async Task<string?> ArtifactBlobAsync(Project project, string commit, string path, CancellationToken ct = default)
+    {
+        if (!IsObjectId(commit)) return null;
+        try { VerificationFiles.Relative(path); } catch (Exception ex) when (ex is IOException or ArgumentException) { return null; }
+        var type = await GitAsync(project.RepoPath, ct, "cat-file", "-t", commit + ":" + path);
+        if (!type.Ok || type.StdOut.Trim() != "blob") return null;
+        var blob = await GitAsync(project.RepoPath, ct, "rev-parse", "--verify", commit + ":" + path);
+        return blob.Ok && IsObjectId(blob.StdOut.Trim()) ? blob.StdOut.Trim() : null;
+    }
     private static readonly TimeSpan GitTimeout = TimeSpan.FromMinutes(2);
 
     private static bool IsObjectId(string sha) => sha is { Length: 40 or 64 } && sha.All(Uri.IsHexDigit);

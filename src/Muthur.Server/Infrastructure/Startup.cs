@@ -59,6 +59,7 @@ public static class Startup
         builder.Services.AddSingleton<ObjectiveService>();
         builder.Services.AddSingleton<KnowledgeService>();
         builder.Services.AddSingleton<RoutingService>();
+        builder.Services.AddSingleton<DesignService>();
         builder.Services.AddSingleton<TaskUnitService>();
         builder.Services.AddSingleton<EventService>();
         builder.Services.AddSingleton<RoleService>();

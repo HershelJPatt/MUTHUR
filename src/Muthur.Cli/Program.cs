@@ -15,6 +15,7 @@ IncidentCommands.AddTo(root);
 ObjectiveCommands.AddTo(root);
 KnowledgeCommands.AddTo(root);
 RoutingCommands.AddTo(root);
+DesignCommands.AddTo(root);
 IntegrationCommands.AddTo(root);
 RoleCommands.AddTo(root);
 MessageCommands.AddTo(root);
