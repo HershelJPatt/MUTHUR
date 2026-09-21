@@ -222,7 +222,16 @@ Write-Output '{"result":"STATUS: done","is_error":false}'
             Check ($crashed.WaitForExit(10000)) 'original CLI exited after forced death'
             Check ($modelProcess.WaitForExit(10000)) 'CLI death closed job and killed synthetic worker'
         }
-        finally { $modelProcess.Dispose() }
+        finally {
+            try {
+                # A failing containment assertion must still clean up the exact synthetic process handle.
+                if (-not $modelProcess.HasExited) {
+                    $modelProcess.Kill($true)
+                    if (-not $modelProcess.WaitForExit(10000)) { throw 'Synthetic worker cleanup failed after CLI death assertion' }
+                }
+            }
+            finally { $modelProcess.Dispose() }
+        }
         $retained=@(Invoke-T121Cli @('worker','reservations','--as-agent','worker-owner'))
         Check ($retained.Count -eq 1 -and $retained[0].request.task -eq $crashTask.id) 'CLI death retains durable reservation'
         $null = Invoke-T121Cli @('worker','release',$retained[0].reservationId,'--cleanup-confirmed','--as-agent','worker-owner')
