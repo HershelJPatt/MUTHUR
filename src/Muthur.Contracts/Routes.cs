@@ -42,6 +42,9 @@ public static class Routes
     public const string ConductorSessions = Api + "/conductor/sessions";
     public const string ConductorOrchestrators = Api + "/conductor/orchestrators";
     public const string AccountLimits = Api + "/harness/limits";
+    public const string WorkerAdmit = Api + "/workers/admit";
+    public const string WorkerRelease = Api + "/workers/release";
+    public const string WorkerReservations = Api + "/workers/reservations";
     public const string WorkerRuns = Api + "/workers/runs";
     public const string ProbeAdmit = Api + "/workers/probes/admit";
     public const string ProbeRelease = Api + "/workers/probes/release";

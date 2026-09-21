@@ -49,7 +49,7 @@ public sealed class CapabilityTests : IDisposable
         var request = Request("build");
         var identity = await Identity(request);
         Store.Write(identity, [Observation(identity, "build")]);
-        var attempt = Assert.Single(await new WorkerLauncher(_runner, Resolve, _clock, _ => _adapter)
+        var attempt = Assert.Single(await new WorkerLauncher(_runner, Resolve, _clock, _ => _adapter, new ContainedFixture(_runner), AdmittedFixture.Context(_root))
             .RunAsync([Candidate], _ => request, TimeSpan.FromSeconds(1), _ => Task.CompletedTask));
         Assert.True(attempt.Started);
         Assert.True(attempt.CapabilityMatch!.Allowed);
@@ -137,7 +137,7 @@ public sealed class CapabilityTests : IDisposable
     [Fact]
     public async Task Empty_requirements_preserve_launch_without_version_probe()
     {
-        var attempt = Assert.Single(await new WorkerLauncher(_runner, Resolve, _clock, _ => _adapter)
+        var attempt = Assert.Single(await new WorkerLauncher(_runner, Resolve, _clock, _ => _adapter, new ContainedFixture(_runner), AdmittedFixture.Context(_root))
             .RunAsync([Candidate], _ => Request(), TimeSpan.FromSeconds(1), _ => Task.CompletedTask));
         Assert.True(attempt.Started);
         Assert.Null(attempt.CapabilityMatch);

@@ -7,6 +7,12 @@ namespace Muthur.Contracts;
     PropertyNamingPolicy = JsonKnownNamingPolicy.CamelCase,
     DefaultIgnoreCondition = JsonIgnoreCondition.WhenWritingNull,
     UseStringEnumConverter = true)]
+[JsonSerializable(typeof(WorkerAttemptReport))]
+[JsonSerializable(typeof(WorkerAdmissionRequest))]
+[JsonSerializable(typeof(WorkerAdmissionDto))]
+[JsonSerializable(typeof(WorkerReleaseRequest))]
+[JsonSerializable(typeof(WorkerReservationDto))]
+[JsonSerializable(typeof(IReadOnlyList<WorkerReservationDto>))]
 [JsonSerializable(typeof(ErrorResponse))]
 [JsonSerializable(typeof(TaskUnitDefinition))]
 [JsonSerializable(typeof(DefineTaskUnitsRequest))]

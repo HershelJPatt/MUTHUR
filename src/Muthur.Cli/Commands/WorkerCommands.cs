@@ -46,6 +46,17 @@ public static class WorkerCommands
             parse.GetValue(tier)!, parse.GetValue(spec)!, parse.GetValue(unit), parse.GetValue(task), parse.GetValue(harness),
             parse.GetValue(baseRef), parse.GetValue(branch), parse.GetValue(note), parse.GetValue(timeout), parse.GetValue(parent), parse.GetValue(defaultBranch)), processes, ct));
         worker.Subcommands.Add(run);
+        var reservations = new Command("reservations", "List active full-worker reservations owned by this caller.");
+        reservations.SetAction(async (parse, ct) => Output.Emit(parse, await HubClient.For(parse).GetAsync(Routes.WorkerReservations, ct)));
+        worker.Subcommands.Add(reservations);
+        var reservationId = new Argument<string>("id");
+        var confirmed = new Option<bool>("--cleanup-confirmed") { Description = "Attest that the entire reserved process tree is gone." };
+        var release = new Command("release", "Recover a full-worker reservation only after verifying process cleanup.") { reservationId, confirmed };
+        release.SetAction(async (parse, ct) => !parse.GetValue(confirmed)
+            ? Output.Error("worker_cleanup_unconfirmed", "Explicit --cleanup-confirmed is required.", ExitCodes.RuleViolation)
+            : Output.Emit(parse, await HubClient.For(parse).PostAsync(Routes.WorkerRelease,
+                new WorkerReleaseRequest(parse.GetValue(reservationId)!, true), MuthurJsonContext.Default.WorkerReleaseRequest, ct)));
+        worker.Subcommands.Add(release);
     }
 
     private static void AddHarness(RootCommand root)
@@ -166,10 +177,17 @@ public static class WorkerCommands
 
     private static async Task<int> RunAsync(ParseResult parse, RunOptions o, IProcessRunner processes, CancellationToken ct)
     {
+        if (string.IsNullOrWhiteSpace(o.Task))
+            return Output.Error("worker_request_invalid", "Full-worker dispatch requires --task, including legacy specs.", ExitCodes.RuleViolation);
+        var reporting = false;
         async Task<string?> Git(string directory, params string[] arguments)
         {
-            var result = await processes.RunAsync("git", arguments, directory, timeout: TimeSpan.FromMinutes(1), ct: ct);
-            return result.Ok ? result.StdOut.Trim() : null;
+            try
+            {
+                var result = await processes.RunAsync("git", arguments, directory, timeout: TimeSpan.FromMinutes(1), ct: ct);
+                return result.Ok ? result.StdOut.Trim() : null;
+            }
+            catch (OperationCanceledException) when (reporting) { return null; }
         }
 
         if (await Git(Environment.CurrentDirectory, "rev-parse", "--show-toplevel") is not { } repo)
@@ -191,10 +209,7 @@ public static class WorkerCommands
             return Output.Error("no_candidates", $"No available candidate for tier '{o.Tier}'" + (o.Harness is null ? "" : $" on harness '{o.Harness}'") +
                 ". Every account may be limited: muthur harness tiers", ExitCodes.RuleViolation);
 
-        FileStream? lease;
-        try { lease = local ? LocalInferenceLease.Acquire(MuthurEnvironment.Home) : null; }
-        catch (IOException) { return Output.Error("local_busy", "Another local job is running. Wait for it; no cloud fallback was attempted.", ExitCodes.RuleViolation); }
-        using var localLease = lease;
+        using var localLease = new DeferredLocalLease(local);
 
         // 2. The contract and the project's verification commands.
         if (KitCommands.LocateKit() is not { } kit) return KitCommands.KitMissing();
@@ -236,13 +251,22 @@ public static class WorkerCommands
             if (requirements.Count > 0) (verify, extraAllowed) = await ReadPinnedProjectAsync(processes, repo, assignment.BaseCommit, ct);
         }
         catch (WorkerDispatchException ex) { return Output.Error(ex.Code, ex.Message, ExitCodes.RuleViolation); }
-        var added = await processes.RunAsync("git", ["worktree", "add", "-b", branchName, worktree, assignment.BaseCommit], repo, timeout: TimeSpan.FromMinutes(2), ct: ct);
-        if (!added.Ok) return Output.Error("worktree_failed", added.Message);
-        try { await assignment.VerifyCreatedAsync(processes, ct); }
-        catch (WorkerDispatchException ex) { return Output.Error(ex.Code, ex.Message + $" Created worktree retained at {worktree}.", ExitCodes.RuleViolation); }
-
         var scratch = Path.Combine(MuthurEnvironment.Home, "workers", id);
-        Directory.CreateDirectory(scratch);
+        var contained = new WorkerProcessRunner();
+        var setup = new WorkerSetupRunner(contained);
+        var prepared = false;
+        async Task Prepare(CancellationToken token)
+        {
+            if (prepared) return;
+            localLease.Acquire();
+            var git = ExecutableResolver.Resolve("git") ?? throw new WorkerDispatchException("worktree_failed", "Git is unavailable.");
+            var added = await setup.RunAsync(git.FileName, [.. git.Prefix, "worktree", "add", "-b", branchName, worktree, assignment.BaseCommit], repo,
+                timeout: TimeSpan.FromMinutes(2), ct: token, environment: SessionWorkspace.GitEnvironment(repo));
+            if (!added.Ok) throw new WorkerDispatchException("worktree_failed", added.Message);
+            await assignment.VerifyCreatedAsync(setup, token);
+            Directory.CreateDirectory(scratch);
+            prepared = true;
+        }
         string PromptFor(HarnessCandidate c)
         {
             var notes = string.Join(" ", new[] { o.Note, Harnesses.Find(c.Harness)?.WorkerNote }.Where(n => n is { Length: > 0 }));
@@ -250,7 +274,9 @@ public static class WorkerCommands
         }
 
         // 4. Run, falling through candidates whose account turns out to be exhausted.
-        var attempts = await new WorkerLauncher(processes).RunAsync(
+        var attempts = await new WorkerLauncher(processes, workerProcesses: contained,
+            admission: new(new WorkerAdmissionClient(hub), o.Task!, o.Tier, repo, assignment.BaseCommit, assignment.SpecBlob,
+                assignment.SpecPath, o.Unit, o.Parent, branchName), prepare: Prepare, setupCleanupConfirmed: () => setup.CleanupConfirmed).RunAsync(
             candidates,
             c => RequestFor(c, worktree, PromptFor(c), gitCommon, [.. DefaultAllowed, .. extraAllowed], scratch) with
             {
@@ -260,16 +286,24 @@ public static class WorkerCommands
             async c =>
             {
                 if (c.Account is { Length: > 0 } account)
-                    await hub.PostAsync(Routes.AccountLimits, new AccountLimitRequest(account, DateTimeOffset.UtcNow.AddHours(1)), MuthurJsonContext.Default.AccountLimitRequest, ct);
+                {
+                    var limited = await hub.PostAsync(Routes.AccountLimits, new AccountLimitRequest(account, DateTimeOffset.UtcNow.AddHours(1)), MuthurJsonContext.Default.AccountLimitRequest, ct);
+                    if (!limited.IsSuccess) throw new InvalidOperationException(limited.Body);
+                }
             },
             ct);
 
+        var executionCancelled = ct.IsCancellationRequested;
+        using var reportBudget = new CancellationTokenSource(TimeSpan.FromSeconds(30));
+        ct = reportBudget.Token;
+        reporting = true;
         var final = attempts[^1];
 
         // Some sandboxes keep .git read-only, and any worker can forget: whatever is left uncommitted is committed here,
         // so the orchestrator always reviews a branch, never a dirty directory.
         var committedByLauncher = false;
-        if ((await Git(worktree, "status", "--porcelain"))?.Length > 0)
+        var canInspect = prepared && !executionCancelled && final.Cleanup != WorkerCleanup.CleanupUncertain;
+        if (canInspect && (await Git(worktree, "status", "--porcelain"))?.Length > 0)
         {
             await Git(worktree, "add", "-A");
             var subject = $"{o.Task ?? Path.GetFileNameWithoutExtension(o.Spec)}{(o.Unit is null ? "" : " " + o.Unit)}";
@@ -279,15 +313,24 @@ public static class WorkerCommands
         // A harness that exits cleanly has not necessarily done the work: the report's own STATUS line decides.
         var status = WorkerReport.Status(final.Outcome.Report);
         var success = final.Outcome.Success && status is null or "done";
-        var commits = (await Git(worktree, "log", "--oneline", $"{assignment.BaseCommit}..HEAD") ?? "").Split('\n', StringSplitOptions.RemoveEmptyEntries);
-        var headCommit = await Git(worktree, "rev-parse", "HEAD");
+        var commits = ((canInspect ? await Git(worktree, "log", "--oneline", $"{assignment.BaseCommit}..HEAD") : null) ?? "").Split('\n', StringSplitOptions.RemoveEmptyEntries);
+        var headCommit = canInspect ? await Git(worktree, "rev-parse", "HEAD") : null;
         var failureKind = final.FailureKind ?? (!final.Started ? "launch_unavailable" : status is "blocked" ? "worker_blocked" :
             status is "spec-problem" ? "spec_problem" : !success ? "worker_failed" : null);
 
-        await hub.PostAsync(Routes.WorkerRuns, new WorkerRunReport(o.Task, o.Tier, final.Candidate.Harness, final.Candidate.Model, final.Candidate.Account,
+        string? reportError = null;
+        try
+        {
+            var reported = await hub.PostAsync(Routes.WorkerRuns, new WorkerRunReport(o.Task, o.Tier, final.Candidate.Harness, final.Candidate.Model, final.Candidate.Account,
             branchName, o.Unit, success, (int)final.Duration.TotalSeconds, final.Outcome.CostUsd, o.Parent,
             RunId: final.RunId, Status: status, FailureKind: failureKind, BaseCommit: assignment.BaseCommit, HeadCommit: headCommit,
-            SpecBlob: assignment.SpecBlob, ExitCode: final.ExitCode), MuthurJsonContext.Default.WorkerRunReport, ct);
+            SpecBlob: assignment.SpecBlob, ExitCode: final.ExitCode,
+            Attempts: attempts.Select(a => new WorkerAttemptReport(a.Candidate.Harness, a.Candidate.Model, a.Candidate.Account,
+                a.RunId, a.ReservationId, a.Started, a.FailureKind, a.Cleanup?.ToString())).ToArray()), MuthurJsonContext.Default.WorkerRunReport, ct);
+            if (!reported.IsSuccess) reportError = reported.Body;
+        }
+        catch (OperationCanceledException) { reportError = "Run reporting exceeded its separate deadline."; }
+        if (reportError is not null) { success = false; failureKind ??= "worker_report_failed"; }
 
         using var stream = new MemoryStream();
         using (var json = new Utf8JsonWriter(stream, new JsonWriterOptions { Encoder = System.Text.Encodings.Web.JavaScriptEncoder.UnsafeRelaxedJsonEscaping }))
@@ -296,6 +339,7 @@ public static class WorkerCommands
             json.WriteBoolean("success", success);
             json.WriteString("runId", final.RunId);
             json.WriteString("failureKind", failureKind);
+            json.WriteString("reportError", reportError);
             json.WriteNumber("probeStarts", attempts.Sum(a => a.ProbeStarts));
             json.WriteNumber("fullStarts", attempts.Sum(a => a.FullStarts));
             json.WriteNumber("fullSessionsAvoided", attempts.Sum(a => a.FullSessionsAvoided));
@@ -305,6 +349,9 @@ public static class WorkerCommands
                 json.WriteStartObject();
                 json.WriteString("harness", attempt.Candidate.Harness);
                 json.WriteBoolean("started", attempt.Started);
+                json.WriteString("runId", attempt.RunId);
+                json.WriteString("reservationId", attempt.ReservationId);
+                json.WriteString("cleanup", attempt.Cleanup?.ToString());
                 json.WriteString("failureKind", attempt.FailureKind);
                 json.WritePropertyName("capabilityMatch");
                 JsonSerializer.Serialize(json, attempt.CapabilityMatch, CapabilityJsonContext.Default.CapabilityMatch);
@@ -399,6 +446,12 @@ public static class WorkerCommands
         { throw new WorkerDispatchException("capability_identity_unknown", "Pinned project settings are malformed."); }
     }
 
+    private sealed class DeferredLocalLease(bool local) : IDisposable
+    {
+        private FileStream? _lease;
+        public void Acquire() { if (local && _lease is null) _lease = LocalInferenceLease.Acquire(MuthurEnvironment.Home); }
+        public void Dispose() => _lease?.Dispose();
+    }
     private static string Slug(string text)
     {
         var slug = new string(text.ToLowerInvariant().Select(ch => char.IsAsciiLetterOrDigit(ch) ? ch : '-').ToArray()).Trim('-');

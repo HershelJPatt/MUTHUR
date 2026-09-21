@@ -8,6 +8,15 @@ public static class HarnessEndpoints
 {
     public static void MapHarnessEndpoints(this IEndpointRouteBuilder app)
     {
+        app.MapPost(Routes.WorkerAdmit, (HttpContext http, WorkerAdmissionRequest request, ConductorService conductor, CancellationToken ct) =>
+            conductor.AdmitWorkerAsync(http.GetCaller(), request, ct));
+        app.MapPost(Routes.WorkerRelease, async (HttpContext http, WorkerReleaseRequest request, ConductorService conductor, CancellationToken ct) =>
+        {
+            await conductor.ReleaseWorkerAsync(http.GetCaller(), request, ct);
+            return Results.NoContent();
+        });
+        app.MapGet(Routes.WorkerReservations, (HttpContext http, ConductorService conductor, CancellationToken ct) =>
+            conductor.WorkerReservationsAsync(http.GetCaller(), ct));
         app.MapPost(Routes.ProbeAdmit, (HttpContext http, ProbeAdmissionRequest request, ConductorService conductor, CancellationToken ct) =>
             conductor.AdmitProbeAsync(http.GetCaller(), request, ct));
         app.MapPost(Routes.ProbeRelease, async (HttpContext http, ProbeReleaseRequest request, ConductorService conductor, CancellationToken ct) =>

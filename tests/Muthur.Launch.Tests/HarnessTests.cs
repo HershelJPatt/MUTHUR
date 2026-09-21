@@ -229,7 +229,7 @@ public sealed class WorkerLauncherTests : IDisposable
         processes.CodexReport = "STATUS: done";
         var limited = new List<string?>();
 
-        var attempts = await new WorkerLauncher(processes, Installed).RunAsync(
+        var attempts = await new WorkerLauncher(processes, Installed, workerProcesses: new ContainedFixture(processes), admission: AdmittedFixture.Context(_scratch)).RunAsync(
             [new("claude", "opus", "claude-sub"), new("codex", "", "chatgpt-sub")], RequestFor, TimeSpan.FromMinutes(1),
             c => { limited.Add(c.Account); return Task.CompletedTask; });
 
@@ -247,7 +247,7 @@ public sealed class WorkerLauncherTests : IDisposable
     {
         var processes = new ScriptedProcesses(new ProcessResult(1, """{"result":"tests fail","is_error":true}""", ""));
 
-        var attempts = await new WorkerLauncher(processes, Installed).RunAsync(
+        var attempts = await new WorkerLauncher(processes, Installed, workerProcesses: new ContainedFixture(processes), admission: AdmittedFixture.Context(_scratch)).RunAsync(
             [new("claude", "opus", "a"), new("codex", "", "b")], RequestFor, TimeSpan.FromMinutes(1), _ => Task.CompletedTask);
 
         Assert.Single(attempts);
@@ -259,7 +259,7 @@ public sealed class WorkerLauncherTests : IDisposable
     {
         var processes = new ScriptedProcesses(new ProcessResult(0, """{"result":"STATUS: done","is_error":false}""", ""));
 
-        var attempts = await new WorkerLauncher(processes, name => name == "codex" ? null : Installed(name)).RunAsync(
+        var attempts = await new WorkerLauncher(processes, name => name == "codex" ? null : Installed(name), workerProcesses: new ContainedFixture(processes), admission: AdmittedFixture.Context(_scratch)).RunAsync(
             [new("codex", "", "b"), new("claude", "opus", "a")], RequestFor, TimeSpan.FromMinutes(1), _ => Task.CompletedTask);
 
         Assert.Contains("not installed", attempts[0].Outcome.Report);

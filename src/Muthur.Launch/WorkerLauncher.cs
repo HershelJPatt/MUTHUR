@@ -11,7 +11,7 @@ public sealed record HarnessCandidate(string Harness, string Model, string? Acco
 /// different fault from one that never began, and callers must be able to tell them apart.
 /// </param>
 public sealed record WorkerAttempt(HarnessCandidate Candidate, WorkerOutcome Outcome, TimeSpan Duration, bool Started = true,
-    string? RunId = null, string? FailureKind = null, int? ExitCode = null, CapabilityMatch? CapabilityMatch = null)
+    string? RunId = null, string? FailureKind = null, int? ExitCode = null, CapabilityMatch? CapabilityMatch = null, string? ReservationId = null, WorkerCleanup? Cleanup = null)
 {
     public int FullStarts => Started ? 1 : 0;
     public int FullSessionsAvoided => !Started && FailureKind == "capability_mismatch" ? 1 : 0;
@@ -24,7 +24,9 @@ public sealed record WorkerAttempt(HarnessCandidate Candidate, WorkerOutcome Out
 /// elsewhere: its half-done work is in the worktree and needs the orchestrator's eyes.
 /// </summary>
 public sealed class WorkerLauncher(IProcessRunner processes, Func<string, (string FileName, IReadOnlyList<string> Prefix)?>? resolve = null,
-    TimeProvider? timeProvider = null, Func<string, IHarnessAdapter?>? adapterFor = null)
+    TimeProvider? timeProvider = null, Func<string, IHarnessAdapter?>? adapterFor = null,
+    IWorkerProcessRunner? workerProcesses = null, WorkerAdmissionContext? admission = null,
+    Func<CancellationToken, Task>? prepare = null, Func<bool>? setupCleanupConfirmed = null)
 {
     private readonly Func<string, (string FileName, IReadOnlyList<string> Prefix)?> _resolve = resolve ?? ExecutableResolver.Resolve;
 
@@ -46,8 +48,10 @@ public sealed class WorkerLauncher(IProcessRunner processes, Func<string, (strin
             CapabilityMatch? match = null;
             if (requested.Capabilities is { Requirements.Count: > 0 })
             {
+                var inspectionRequest = !Directory.Exists(requested.WorkingDirectory) && admission is not null
+                    ? requested with { WorkingDirectory = admission.Repository } : requested;
                 match = (await new CapabilityEvaluator(processes, timeProvider, _resolve)
-                    .InspectAsync((adapterFor ?? Harnesses.Find)(candidate.Harness), requested, ct)).Match;
+                    .InspectAsync((adapterFor ?? Harnesses.Find)(candidate.Harness), inspectionRequest, ct)).Match;
                 if (!match.Allowed)
                 {
                     attempts.Add(new(candidate, new(false, CapabilityEvaluator.Explain(match), false), clock.Elapsed,
@@ -61,25 +65,99 @@ public sealed class WorkerLauncher(IProcessRunner processes, Func<string, (strin
                 continue;
             }
 
-            var runId = Guid.NewGuid().ToString("n");
-            var request = SessionWorkspace.ForAttempt(requested, runId);
-            var invocation = adapter.Build(request);
-            var resolved = requested.Capabilities is { Requirements.Count: > 0 }
-                ? CapabilityExecutable.Resolve(invocation.FileName, _resolve) : _resolve(invocation.FileName);
-            if (resolved is not { } executable)
+            var contained = workerProcesses ?? new WorkerProcessRunner();
+            var executableName = adapter.CapabilityExecutable;
+            var resolved = executableName is null ? null : CapabilityExecutable.Resolve(executableName, _resolve);
+            if (resolved is not { } executable || !contained.Supported)
             {
-                attempts.Add(new(candidate, new WorkerOutcome(false, $"'{invocation.FileName}' is not installed or not on PATH.", false), clock.Elapsed, Started: false));
+                attempts.Add(new(candidate, new(false, "Worker executable is not installed or process containment is unavailable.", false), clock.Elapsed, Started: false));
                 continue;
             }
+            var runId = Guid.NewGuid().ToString("N");
+            Muthur.Contracts.WorkerAdmissionDto? reservation = null;
+            try
+            {
+                ct.ThrowIfCancellationRequested();
+                if (admission is null) throw new InvalidOperationException("A task-bound full-worker admission client is required.");
+                var binding = admission.Bind(candidate, requested, runId, timeout);
+                reservation = await admission.Client.AdmitAsync(binding, ct);
+                if (!Guid.TryParseExact(reservation.ReservationId, "N", out _) || reservation.Task != binding.Task || reservation.RunId != runId)
+                    throw new InvalidOperationException("Malformed or mismatched full-worker admission response; execution refused.");
+                if (!reservation.MayExecute)
+                    throw new InvalidOperationException("Admission replay does not grant execution or release permission.");
+            }
+            catch (Exception ex)
+            {
+                attempts.Add(new(candidate, new(false, ex.Message, false), clock.Elapsed, Started: false, RunId: runId,
+                    FailureKind: "worker_admission_failed", ReservationId: reservation?.ReservationId));
+                break;
+            }
 
-            var result = await processes.RunAsync(executable.FileName, [.. executable.Prefix, .. invocation.Arguments],
-                request.WorkingDirectory, invocation.Stdin, timeout, ct, Scrubbed, request.GitEnvironment);
-            var outcome = adapter.Interpret(request, result);
-            attempts.Add(new(candidate, outcome, clock.Elapsed, RunId: runId,
-                FailureKind: SessionWorkspace.FailureKind(result, outcome), ExitCode: result.ExitCode, CapabilityMatch: match));
-
+            var cleanup = WorkerCleanup.NotStarted;
+            var started = false;
+            var outcome = new WorkerOutcome(false, "Worker did not execute.", false);
+            string? failure = null;
+            int? exitCode = null;
+            var preparing = false;
+            var verification = new WorkerSetupRunner(contained);
+            try
+            {
+                ct.ThrowIfCancellationRequested();
+                preparing = true;
+                if (prepare is not null) await prepare(ct);
+                preparing = false;
+                ct.ThrowIfCancellationRequested();
+                if (requested.Capabilities is { Requirements.Count: > 0 } && prepare is not null)
+                {
+                    match = (await new CapabilityEvaluator(verification, timeProvider, _resolve).InspectAsync(adapter, requested, ct)).Match;
+                    if (!verification.CleanupConfirmed) throw new InvalidOperationException("Capability identity subprocess cleanup is uncertain.");
+                    if (!match.Allowed) throw new WorkerDispatchException("capability_mismatch", CapabilityEvaluator.Explain(match));
+                }
+                var request = SessionWorkspace.ForAttempt(requested, runId);
+                var invocation = adapter.Build(request);
+                // Build is intentionally after reservation: adapters may write settings files.
+                cleanup = WorkerCleanup.CleanupUncertain;
+                var result = await contained.RunAsync(executable.FileName, [.. executable.Prefix, .. invocation.Arguments],
+                    request.WorkingDirectory, invocation.Stdin, timeout, ct, Scrubbed, request.GitEnvironment);
+                started = result.Started; cleanup = result.Cleanup; exitCode = result.Result.ExitCode;
+                outcome = adapter.Interpret(request, result.Result);
+                failure = SessionWorkspace.FailureKind(result.Result, outcome);
+            }
+            catch (Exception ex)
+            {
+                if (preparing && setupCleanupConfirmed?.Invoke() != true) cleanup = WorkerCleanup.CleanupUncertain;
+                if (!verification.CleanupConfirmed) cleanup = WorkerCleanup.CleanupUncertain;
+                outcome = new(false, ex.Message, false);
+                failure = ex is OperationCanceledException ? "cancelled" : ex is WorkerDispatchException dispatch ? dispatch.Code : "worker_setup_failed";
+            }
+            if (cleanup == WorkerCleanup.CleanupUncertain)
+            {
+                failure = "worker_cleanup_uncertain";
+                outcome = new(false, outcome.Report + $" Cleanup unconfirmed; reservation {reservation.ReservationId} retained.", false);
+            }
+            else
+            {
+                using var releaseBudget = new CancellationTokenSource(TimeSpan.FromSeconds(10));
+                try { await admission!.Client.ReleaseAsync(new(reservation.ReservationId, true), releaseBudget.Token); }
+                catch (Exception ex)
+                {
+                    outcome = new(false, outcome.Report + $" Release failed for {reservation.ReservationId}: {ex.Message}", false);
+                    failure = "worker_release_failed";
+                }
+            }
+            attempts.Add(new(candidate, outcome, clock.Elapsed, Started: started, RunId: runId,
+                FailureKind: failure, ExitCode: exitCode, CapabilityMatch: match, ReservationId: reservation.ReservationId, Cleanup: cleanup));
             if (!outcome.RateLimited) break;
-            await onRateLimited(candidate);
+            try { await onRateLimited(candidate); }
+            catch (Exception ex)
+            {
+                attempts[^1] = attempts[^1] with
+                {
+                    Outcome = new(false, outcome.Report + " Account update failed: " + ex.Message, false),
+                    FailureKind = "worker_account_update_failed",
+                };
+                break;
+            }
         }
         return attempts;
     }
