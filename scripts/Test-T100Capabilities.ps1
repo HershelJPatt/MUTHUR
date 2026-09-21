@@ -217,6 +217,19 @@ exit 0
     $worker = Invoke-T100Cli @('worker','run','--spec','specs/T-1.md','--task','T-1','--base','task/T-1','--default-branch','main','--harness','codex','--branch','worker/T-1-smoke','--founder')
     Check ($worker.success -and $worker.fullStarts -eq 1 -and $worker.fullSessionsAvoided -eq 0 -and (Starts) -eq 2) 'simulated supported assignment end to end'
     $evidence.fullStarts = $worker.fullStarts
+    $startsBeforeDoctor = Starts
+    $doctorHelp = Run-Process $cli @('doctor','--help') $repo
+    Check ($doctorHelp.Exit -eq 0 -and $doctorHelp.Out.Contains('--offline') -and -not $doctorHelp.Out.Contains('--probe')) 'doctor help documents supported offline option only'
+    $doctorResult = Run-Process $cli @('doctor','--offline') $repo
+    Check ($doctorResult.Exit -in @(0,1)) 'offline doctor returns a health report'
+    $doctor = $doctorResult.Out | ConvertFrom-Json -AsHashtable
+    Check (-not $doctor.probed) 'offline doctor skips network probes'
+    $capabilityChecks = @($doctor.checks | Where-Object category -eq 'capability')
+    Check ($capabilityChecks.Count -eq 1) 'offline doctor includes capability cache check'
+    $capabilityDetail = $capabilityChecks[0].detail
+    Check ($capabilityDetail.Contains('Cached observations: 5; stale: 0; unknown/malformed: 0.') -and $capabilityDetail.Contains('Unobserved identities have unknown coverage.')) 'offline doctor reports cached capability coverage'
+    Check ($capabilityDetail.Contains('capability probe --task') -and $capabilityDetail.EndsWith('Doctor never starts capability model probes.') -and -not $capabilityDetail.Contains('--probe')) 'offline doctor retains explicit admission guidance without unsupported probe option'
+    Check ((Starts) -eq $startsBeforeDoctor) 'doctor help and offline checks start no simulated processes'
     Check ((Git @('rev-parse','task/T-1')) -eq $base -and (Git @('rev-parse','main')) -eq $base) 'probe preserved task and default refs'
     Check (@(Get-ChildItem -LiteralPath (Join-Path $scratchHome 'capability-scratch') -Directory).Count -eq 0) 'probe scratch cleaned before release'
     $conductor = Invoke-T100Cli @('conductor','status')

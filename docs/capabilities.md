@@ -32,8 +32,9 @@ make it match. Missing, unreadable, oversized or malformed identity inputs fail 
 Observations live under the selected `MUTHUR_HOME/capabilities` as atomic per-identity JSON files.
 No cross-home cache exists. Maximum lifetime is 24 hours, or five minutes for transient failures.
 Unknown, stale, unavailable and temporarily-failing evidence all refuse explicit requirements.
-Doctor reports observation/stale/unknown counts and unobserved coverage without launching models,
-even with `doctor --probe`. Cache observations are not authoritative task state.
+`muthur doctor` and `muthur doctor --offline` both report cached observation/stale/unknown counts
+and unobserved coverage for capability checks without starting capability model probes.
+`--offline` also skips checks that touch the network. Cache observations are not authoritative task state.
 
 `muthur capability probe` takes the inspect options plus required `--task T-n` and optional
 `--timeout-seconds` (default 90, range 1..120). T-113 shared admission checks the exact catalog candidate,

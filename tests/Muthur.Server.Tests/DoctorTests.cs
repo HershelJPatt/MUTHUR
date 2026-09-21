@@ -25,7 +25,8 @@ public sealed class DoctorTests : IDisposable
         var check = Assert.Single(report!.Checks, c => c.Category == "capability");
         Assert.Equal(CheckStatus.Warn, check.Status);
         Assert.Contains("unknown/malformed: 1", check.Detail);
-        Assert.Contains("Doctor never starts model probes", check.Detail);
+        Assert.DoesNotContain("--probe", check.Detail);
+        Assert.EndsWith("Doctor never starts capability model probes.", check.Detail);
         Assert.Equal(content, File.ReadAllText(file));
         Assert.Single(Directory.EnumerateFiles(directory));
         Assert.False(Directory.Exists(Path.Combine(_hub.DataDir, "capability-scratch")));
