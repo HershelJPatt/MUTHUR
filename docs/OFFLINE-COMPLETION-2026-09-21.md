@@ -22,6 +22,8 @@ Logs are retained in the root workspace's `artifacts/direct-*.log`, outside this
 - Design/knowledge/routing run: 3 passed (`direct-design-tests.log`).
 - Real Git integration runner: 3 passed (`direct-runner-tests.log`), covering exact checkout, build failure/skipped tests, conflict evidence and checkout cleanup.
 - Downstream fixtures are being migrated to explicit integration evidence. Simulated fixture receipts are labeled as such and are not product verification evidence. Later `direct-landing-tests*.log` files record the evolving results.
+- Latest targeted conflict, push and validation-subject run: 44 passed (`direct-landing-tests3.log`). The earlier failures in those classes were corrected. Conductor and workflow benchmark regressions remain outstanding.
+- After testing, the installed CLI returned `not_running`; the process scan found no live MUTHUR server. No scratch test run was left active.
 
 Outstanding before release or task completion:
 
