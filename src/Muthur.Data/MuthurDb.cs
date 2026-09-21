@@ -17,6 +17,7 @@ public sealed class MuthurDb(DbContextOptions<MuthurDb> options) : DbContext(opt
     public DbSet<Role> Roles => Set<Role>();
     public DbSet<RoleHold> RoleHolds => Set<RoleHold>();
     public DbSet<TaskValidation> TaskValidations => Set<TaskValidation>();
+    public DbSet<ValidationSubject> ValidationSubjects => Set<ValidationSubject>();
     public DbSet<Message> Messages => Set<Message>();
     public DbSet<FounderRequest> FounderRequests => Set<FounderRequest>();
     public DbSet<AccountLimit> AccountLimits => Set<AccountLimit>();
@@ -60,6 +61,8 @@ public sealed class MuthurDb(DbContextOptions<MuthurDb> options) : DbContext(opt
         modelBuilder.Entity<WorkTask>(e =>
         {
             e.ToTable("tasks");
+            e.HasOne(x => x.CurrentSubject).WithMany().HasForeignKey(x => x.CurrentSubjectId).OnDelete(DeleteBehavior.Restrict);
+            e.Navigation(x => x.CurrentSubject).AutoInclude();
             e.Property(x => x.DependsOn).HasConversion(StringListConverter.Instance, StringListConverter.Comparer);
             e.HasOne(x => x.Project).WithMany().HasForeignKey(x => x.ProjectId).OnDelete(DeleteBehavior.Restrict);
             e.HasOne(x => x.Owner).WithMany().HasForeignKey(x => x.OwnerAgentId).OnDelete(DeleteBehavior.Restrict);
@@ -95,6 +98,12 @@ public sealed class MuthurDb(DbContextOptions<MuthurDb> options) : DbContext(opt
             e.HasOne<WorkTask>().WithMany().HasForeignKey(x => x.TaskId).OnDelete(DeleteBehavior.Cascade);
             e.HasOne(x => x.Agent).WithMany().HasForeignKey(x => x.AgentId).OnDelete(DeleteBehavior.SetNull);
             e.HasOne(x => x.ClaimedBy).WithMany().HasForeignKey(x => x.ClaimedByAgentId).OnDelete(DeleteBehavior.SetNull);
+        });
+
+        modelBuilder.Entity<ValidationSubject>(e =>
+        {
+            e.ToTable("validation_subjects");
+            e.HasIndex(x => x.TaskId);
         });
 
         modelBuilder.Entity<Message>(e =>

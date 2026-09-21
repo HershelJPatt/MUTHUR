@@ -173,6 +173,13 @@ public static class TaskCommands
             Routes.TaskAction(parse.GetValue(implementedId)!, "implemented"), new ImplementedRequest(parse.GetValue(branch)!), MuthurJsonContext.Default.ImplementedRequest, ct)));
         task.Subcommands.Add(implemented);
 
+        var revalidateId = Id();
+        var revalidateReason = new Option<string>("--reason") { Required = true };
+        var revalidate = new Command("revalidate", "Return to in progress for explicit spec attachment and a fresh validation round.") { revalidateId, revalidateReason };
+        revalidate.SetAction(async (parse, ct) => Output.Emit(parse, await HubClient.For(parse).PostAsync(
+            Routes.TaskAction(parse.GetValue(revalidateId)!, "revalidate"), new RevalidateRequest(parse.GetValue(revalidateReason)!), MuthurJsonContext.Default.RevalidateRequest, ct)));
+        task.Subcommands.Add(revalidate);
+
         var landId = Id();
         var land = new Command("land", "Land a validated task: MUTHUR merges the branch (or opens the pull request). Exit 3 on merge conflict.") { landId };
         land.SetAction(async (parse, ct) =>

@@ -11,6 +11,21 @@ public sealed record DependenciesRequest(IReadOnlyList<string> Tasks, string? Re
 
 public sealed record SetSpecRequest(string Path, string? Branch = null);
 
+public sealed record RevalidateRequest(string Reason);
+
+/// <summary>The immutable implementation and policy reviewed in one validation round.</summary>
+public sealed record ValidationSubjectDto(
+    Guid Id, string TaskId, Guid ProjectId, string RepositoryPath, string ImplementationSha,
+    string SpecPath, string SpecSha256, IReadOnlyList<string> RequiredValidators,
+    ValidationChecksDto RequiredChecks, ValidationEnvironmentDto InvalidatingEnvironment,
+    ValidationMetadataDto DescriptiveMetadata, DateTimeOffset CreatedAt);
+
+public sealed record ValidationChecksDto(string? Build, string? Test);
+public sealed record ValidatorBriefDigestDto(string Role, string Sha256);
+public sealed record ValidationEnvironmentDto(string ProjectKey, string DefaultBranch, string LandingMode,
+    IReadOnlyList<ValidatorBriefDigestDto> Briefs);
+public sealed record ValidationMetadataDto(string OperatingSystem, string Architecture, string Runtime, string? HostRevision = null);
+
 public sealed record SetPriorityRequest(int Priority);
 
 public sealed record CancelTaskRequest(string? Reason = null);
@@ -40,7 +55,9 @@ public sealed record TaskDto(
     string? HoldBy = null,
     DateTimeOffset? HoldExpires = null,
     IReadOnlyList<string>? DependsOn = null,
-    string? DependencyReason = null);
+    string? DependencyReason = null,
+    ValidationSubjectDto? CurrentSubject = null,
+    string ProvenanceStatus = "unknown");
 
 /// <summary>A reason that is null or blank is the clear, the same convention <c>attended</c> uses.</summary>
 public sealed record HoldRequest(string? Reason);
@@ -53,7 +70,9 @@ public sealed record ValidationDto(
     DateTimeOffset? At,
     DateTimeOffset WaitingSince,
     string? ClaimedBy,
-    DateTimeOffset? ClaimExpires);
+    DateTimeOffset? ClaimExpires,
+    Guid? SubjectId = null,
+    string EvidenceStatus = "unknown");
 
 /// <param name="Waiting">Tasks in 'validating' with a pending verdict for this role.</param>
 /// <param name="Claimed">How many of those a validator has taken.</param>

@@ -95,12 +95,26 @@ public sealed class HarnessService(Ledger ledger, MuthurOptions options)
 
     private sealed record CatalogTier(string Tier, List<HarnessCandidate> Candidates);
 
-    /// <summary>Throws MuthurException and nothing else when the catalog cannot be used.</summary>
-    private List<CatalogTier> ReadCatalog()
+    internal bool HasProbeCandidate(ProbeAdmissionRequest request)
     {
         try
         {
-            EnsureCatalogExists();
+            return ReadCatalog(create: false).Any(t => t.Tier == request.Tier && t.Candidates.Any(c =>
+                c.Harness == request.Harness && c.Model == request.Model && c.Account == request.Account));
+        }
+        catch (MuthurException ex) when (ex.Code is "catalog_unreadable" or "catalog_invalid")
+        {
+            throw Fail.Rule("probe_candidate_unavailable", ex.Message);
+        }
+    }
+
+    /// <summary>Throws MuthurException and nothing else when the catalog cannot be used.</summary>
+    private List<CatalogTier> ReadCatalog(bool create = true)
+    {
+        try
+        {
+            if (create) EnsureCatalogExists();
+            else if (!File.Exists(CatalogPath)) return [];
             using var doc = JsonDocument.Parse(File.ReadAllText(CatalogPath),
                 new JsonDocumentOptions { CommentHandling = JsonCommentHandling.Skip, AllowTrailingCommas = true });
             var tiers = new List<CatalogTier>();

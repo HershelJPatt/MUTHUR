@@ -219,7 +219,7 @@ public sealed class MessagingTests : IDisposable
         Assert.Contains("ready for validation", forValidator.Body);
         Assert.Equal("T-1", forValidator.Task);
 
-        (await validator.PostActionAsync(task.Id, "fail", new VerdictRequest("win-validator", "does not start"))).EnsureSuccessStatusCode();
+        (await validator.PostActionAsync(task.Id, "fail", new VerdictRequest("win-validator", "does not start: reproduce by launching the application", SubjectId: (await validator.GetTaskAsync(task.Id)).Task.CurrentSubject!.Id))).EnsureSuccessStatusCode();
         Assert.Contains("failed validation", Assert.Single((await InboxAsync(owner)).Messages).Body);
     }
 }
