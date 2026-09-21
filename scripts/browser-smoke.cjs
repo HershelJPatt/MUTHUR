@@ -15,6 +15,8 @@ async function smoke(context, value, agentName, timeout = 30000) {
   const origin = validateSmoke(value, agentName);
   const deadline = performance.now() + timeout;
   const errors = [];
+  let signalConnected;
+  const connected = new Promise(resolve => { signalConnected = resolve; });
   // Guard before following redirects, including subresources. Never send a request to a second origin.
   await context.route('**/*', async route => {
     try {
@@ -30,7 +32,14 @@ async function smoke(context, value, agentName, timeout = 30000) {
           if (response.status() >= 300 && response.status() < 400) {
             errors.push('HTTP redirect refused: smoke does not support redirects.');
             await route.abort();
-          } else await route.fulfill({ response });
+          } else {
+            const render = response.status() >= 200 && response.status() < 300
+              && new URL(route.request().url()).pathname === '/_blazor'
+              && route.request().method() === 'GET'
+              && (await response.body()).includes(Buffer.from('JS.RenderBatch'));
+            await route.fulfill({ response });
+            if (render) signalConnected('long-polling');
+          }
         } finally { await response.dispose(); }
       }
     } catch (error) {
@@ -40,13 +49,11 @@ async function smoke(context, value, agentName, timeout = 30000) {
   });
   const page = await context.newPage();
   page.on('pageerror', error => errors.push(error.message));
-  let signalConnected;
-  const connected = new Promise(resolve => { signalConnected = resolve; });
   page.on('websocket', socket => {
     const socketUrl = new URL(socket.url());
     if (socketUrl.host !== new URL(origin).host || socketUrl.pathname !== '/_blazor') return;
     socket.on('framereceived', ({ payload }) => {
-      if (payload.toString().includes('JS.RenderBatch')) signalConnected();
+      if (payload.toString().includes('JS.RenderBatch')) signalConnected('websocket');
     });
   });
   try { await page.goto(`${origin}/console`); }
@@ -54,9 +61,10 @@ async function smoke(context, value, agentName, timeout = 30000) {
   if (errors.length) throw new Error(errors.join(' '));
   // The first server render batch proves the interactive circuit has started, unlike prerendered inputs.
   let timer;
+  let transport;
   try {
-    await Promise.race([connected, new Promise((_, reject) => {
-      timer = setTimeout(() => reject(new Error('Blazor connection timed out.')), timeout);
+    transport = await Promise.race([connected, new Promise((_, reject) => {
+      timer = setTimeout(() => reject(new Error(['Blazor connection timed out.', ...errors].join(' '))), timeout);
     })]);
   } finally { clearTimeout(timer); }
   for (const [field, text] of [['name', agentName], ['harness', 'fixture'], ['model', 'fixture'], ['tier', 'mastermind']])
@@ -72,7 +80,7 @@ async function smoke(context, value, agentName, timeout = 30000) {
   if (!roster.agents?.some(agent => agent.name === agentName && agent.harness === 'fixture'
       && agent.model === 'fixture' && agent.tier === 'mastermind')) throw new Error('Registration absent from scratch /api/agents.');
   if (errors.length) throw new Error(errors.join(' '));
-  return { smoke: 'passed', origin, agentName, evidence: ['Blazor connected', 'Filled four agent fields',
+  return { smoke: 'passed', origin, agentName, transport, evidence: [`Blazor connected via ${transport}`, 'Filled four agent fields',
     'Clicked Register', feedback, 'Verified scratch /api/agents'] };
 }
 

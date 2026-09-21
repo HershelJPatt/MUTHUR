@@ -124,6 +124,7 @@ test('smoke waits for Blazor, fills exact fields, checks UI and API without expo
   const context = { route: async (_, handler) => { routeHandler = handler; }, newPage: async () => page };
   const outcome = await smoke(context, 'http://127.0.0.1:7494', 'sample');
   assert.equal(outcome.smoke, 'passed');
+  assert.equal(outcome.transport, 'websocket');
   assert.equal(clicked, true);
   assert.deepEqual(filled, [['#agent-name', 'sample'], ['#agent-harness', 'fixture'], ['#agent-model', 'fixture'], ['#agent-tier', 'mastermind']]);
   let aborted = false;
@@ -134,6 +135,64 @@ test('smoke waits for Blazor, fills exact fields, checks UI and API without expo
 });
 
 const runner = path.resolve(__dirname, '../scripts/browser-capability.ps1');
+test('smoke requires a fulfilled successful Blazor GET render batch for long-poll readiness', async () => {
+  const { EventEmitter } = require('node:events');
+  for (const scenario of ['render', 'non-render', 'negotiate', 'initializers', 'post', 'failed', 'fulfill-error', 'request-error', 'roster']) {
+    const page = new EventEmitter();
+    const calls = [];
+    let handler;
+    const context = { route: async (_, callback) => { handler = callback; }, newPage: async () => page };
+    page.goto = async () => {
+      await handler({
+        request: () => ({ url: () => `http://localhost:7494/_blazor${scenario === 'negotiate' ? '/negotiate' : scenario === 'initializers' ? '/initializers' : ''}?id=test`,
+          method: () => scenario === 'post' ? 'POST' : 'GET' }),
+        fetch: async options => {
+          assert.equal(options.maxRedirects, 0);
+          assert.ok(options.timeout > 0 && options.timeout <= 100);
+          if (scenario === 'request-error') throw new Error('poll request failed');
+          return { status: () => scenario === 'failed' ? 500 : 200,
+            body: async () => Buffer.concat([Buffer.from([0, 128]), Buffer.from(scenario === 'non-render' ? 'keepalive' : 'JS.RenderBatch'), Buffer.from([255])]),
+            dispose: async () => calls.push('dispose') };
+        },
+        fulfill: async () => {
+          if (scenario === 'fulfill-error') throw new Error('poll fulfillment failed');
+          calls.push('fulfill');
+        },
+        abort: async () => calls.push('abort'),
+        continue: async () => assert.fail('HTTP requests must never continue unchecked')
+      });
+    };
+    page.locator = selector => ({ fill: async text => calls.push([selector, text]) });
+    page.getByRole = (role, options) => ({ click: async () => {
+      assert.equal(role, 'button');
+      assert.deepEqual(options, { name: 'Register', exact: true });
+      calls.push('click');
+    } });
+    page.getByText = (text, options) => ({ waitFor: async () => {
+      assert.equal(text, 'Registered sample (fixture/fixture, mastermind).');
+      assert.deepEqual(options, { exact: true });
+      calls.push('feedback');
+    } });
+    page.evaluate = async () => {
+      calls.push('api');
+      return { agents: scenario === 'roster' ? [] : [{ name: 'sample', harness: 'fixture', model: 'fixture', tier: 'mastermind' }] };
+    };
+    if (scenario === 'render') {
+      const outcome = await smoke(context, 'http://localhost:7494', 'sample', 100);
+      assert.equal(outcome.smoke, 'passed');
+      assert.equal(outcome.transport, 'long-polling');
+      assert.ok(outcome.evidence.includes('Blazor connected via long-polling'));
+      assert.deepEqual(calls, ['fulfill', 'dispose', ['#agent-name', 'sample'], ['#agent-harness', 'fixture'],
+        ['#agent-model', 'fixture'], ['#agent-tier', 'mastermind'], 'click', 'feedback', 'api']);
+    } else {
+      await assert.rejects(smoke(context, 'http://localhost:7494', 'sample', 100),
+        scenario === 'fulfill-error' ? /poll fulfillment failed/ : scenario === 'request-error' ? /poll request failed/
+          : scenario === 'roster' ? /Registration absent/ : /Blazor connection timed out/);
+      if (scenario !== 'roster') assert.ok(!calls.includes('click'));
+    }
+  }
+});
+
 test('smoke rejects redirect origins before following and fails on page errors or missing API evidence', async () => {
   const { EventEmitter } = require('node:events');
   for (const failure of ['redirect', 'same-origin-redirect', 'success', 'pageerror', 'roster']) {
