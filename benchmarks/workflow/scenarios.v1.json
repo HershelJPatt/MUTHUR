@@ -1,0 +1,221 @@
+{
+  "version": 1,
+  "scenarios": [
+    {
+      "id": "stale-spec",
+      "cohort": "historical",
+      "sourceIncident": "T-50",
+      "initialState": "Claimed task; no valid spec",
+      "scriptedEvents": [
+        "attach absent spec",
+        "attach wrong-task spec",
+        "commit and attach valid task-branch spec",
+        "implement, validate, land"
+      ],
+      "expectedOutcomes": [
+        "absent-spec-rejected",
+        "wrong-task-rejected",
+        "committed-spec-attached",
+        "landed"
+      ],
+      "failureConditions": [
+        "Any expected outcome absent",
+        "Missing or invalid evidence",
+        "Resource bound exceeded",
+        "Terminal state not Done or main:result.txt not exactly 42 after one terminal newline"
+      ],
+      "resources": {
+        "paidSessions": 0,
+        "modelCalls": 0,
+        "maxScriptedStarts": 0,
+        "maxFakeSeconds": 0
+      }
+    },
+    {
+      "id": "interrupted-owner",
+      "cohort": "historical",
+      "sourceIncident": "T-95/task lease",
+      "initialState": "Claimed task; owner goes quiet",
+      "scriptedEvents": [
+        "advance fake time 31 minutes",
+        "sweep lease",
+        "replacement claims same task",
+        "implement, validate, land"
+      ],
+      "expectedOutcomes": [
+        "owner-expired",
+        "replacement-claimed",
+        "landed",
+        "no-duplicate-completion"
+      ],
+      "failureConditions": [
+        "Any expected outcome absent",
+        "Missing or invalid evidence",
+        "Resource bound exceeded",
+        "Terminal state not Done or main:result.txt not exactly 42 after one terminal newline"
+      ],
+      "resources": {
+        "paidSessions": 0,
+        "modelCalls": 0,
+        "maxScriptedStarts": 0,
+        "maxFakeSeconds": 1860
+      }
+    },
+    {
+      "id": "late-verdict",
+      "cohort": "historical",
+      "sourceIncident": "validation claims",
+      "initialState": "Task ready for validation",
+      "scriptedEvents": [
+        "first claims",
+        "advance fake time with second heartbeat",
+        "sweep",
+        "second claims",
+        "first verdict refused",
+        "second passes and lands"
+      ],
+      "expectedOutcomes": [
+        "first-claim-expired",
+        "stale-verdict-refused",
+        "landed",
+        "current-verdict"
+      ],
+      "failureConditions": [
+        "Any expected outcome absent",
+        "Missing or invalid evidence",
+        "Resource bound exceeded",
+        "Terminal state not Done or main:result.txt not exactly 42 after one terminal newline"
+      ],
+      "resources": {
+        "paidSessions": 0,
+        "modelCalls": 0,
+        "maxScriptedStarts": 0,
+        "maxFakeSeconds": 1980
+      }
+    },
+    {
+      "id": "dependency-wait",
+      "cohort": "historical",
+      "sourceIncident": "T-95",
+      "initialState": "Dependent requires an incomplete prerequisite",
+      "scriptedEvents": [
+        "set dependency",
+        "claim refused",
+        "advance blocked clock 10 minutes",
+        "complete prerequisite",
+        "resume and complete dependent"
+      ],
+      "expectedOutcomes": [
+        "dependent-refused",
+        "prerequisite-done",
+        "dependent-resumed",
+        "landed"
+      ],
+      "failureConditions": [
+        "Any expected outcome absent",
+        "Missing or invalid evidence",
+        "Resource bound exceeded",
+        "Terminal state not Done or main:result.txt not exactly 42 after one terminal newline"
+      ],
+      "resources": {
+        "paidSessions": 0,
+        "modelCalls": 0,
+        "maxScriptedStarts": 0,
+        "maxFakeSeconds": 600
+      }
+    },
+    {
+      "id": "conflicting-branches",
+      "cohort": "historical",
+      "sourceIncident": "land conflict",
+      "initialState": "Competing updates to result.txt",
+      "scriptedEvents": [
+        "validate branch",
+        "update main",
+        "land conflict",
+        "correct via rebase",
+        "resubmit",
+        "require fresh validation",
+        "land"
+      ],
+      "expectedOutcomes": [
+        "conflict-preserves-main",
+        "conflict-not-done",
+        "fresh-validation-required",
+        "landed"
+      ],
+      "failureConditions": [
+        "Any expected outcome absent",
+        "Missing or invalid evidence",
+        "Resource bound exceeded",
+        "Terminal state not Done or main:result.txt not exactly 42 after one terminal newline"
+      ],
+      "resources": {
+        "paidSessions": 0,
+        "modelCalls": 0,
+        "maxScriptedStarts": 0,
+        "maxFakeSeconds": 0
+      }
+    },
+    {
+      "id": "false-green",
+      "cohort": "historical",
+      "sourceIncident": "historical wrong implementation",
+      "initialState": "Scripted worker will claim success for incorrect result",
+      "scriptedEvents": [
+        "write result.txt=41",
+        "report implemented",
+        "false validator approval",
+        "land in scratch",
+        "external grader detects"
+      ],
+      "expectedOutcomes": [
+        "landed",
+        "false-approval-recorded"
+      ],
+      "failureConditions": [
+        "Any expected outcome absent",
+        "Missing or invalid evidence",
+        "Resource bound exceeded",
+        "False approval not detected or credited as product success"
+      ],
+      "resources": {
+        "paidSessions": 0,
+        "modelCalls": 0,
+        "maxScriptedStarts": 0,
+        "maxFakeSeconds": 0
+      }
+    },
+    {
+      "id": "no-verdict-loop",
+      "cohort": "historical",
+      "sourceIncident": "conductor no-verdict retry incident",
+      "initialState": "Validating task and fake session launcher",
+      "scriptedEvents": [
+        "real conductor attempts three sessions",
+        "observe no-verdict events",
+        "stop at cap",
+        "advance 29 minute cooldown",
+        "one escalation"
+      ],
+      "expectedOutcomes": [
+        "stopped-at-cap",
+        "cooldown-held",
+        "attempts-observed",
+        "one-escalation"
+      ],
+      "failureConditions": [
+        "Any expected outcome absent",
+        "Missing or invalid evidence",
+        "Resource bound exceeded",
+        "Unexpected completion or extra launcher invocation"
+      ],
+      "resources": {
+        "paidSessions": 0,
+        "modelCalls": 0,
+        "maxScriptedStarts": 3,
+        "maxFakeSeconds": 1740
+      }
+    }
+  ]
+}

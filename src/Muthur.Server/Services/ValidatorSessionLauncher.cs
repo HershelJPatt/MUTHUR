@@ -29,6 +29,31 @@ internal static class SessionCommands
     internal static readonly string[] Allowed = ["muthur*", "git*", "dotnet*", "pwsh*", "powershell*"];
 
     internal static readonly string[] Denied = ["git push*", "git merge*", "git rebase*", "git checkout main*", "git switch main*", "gh*"];
+
+    internal static async Task<CapabilityContext?> CapabilitiesAsync(Ledger ledger, ITaskLander? lander,
+        int taskId, string path, string home, bool optional, CancellationToken ct)
+    {
+        var task = await ledger.ReadAsync((db, _) => db.Tasks.Include(t => t.Project)
+            .SingleAsync(t => t.Id == taskId, ct), ct);
+        if (task.SpecPath is not { Length: > 0 }) return null;
+        if (task.Branch is not { Length: > 0 } || lander is null)
+        {
+            if (optional) return null;
+            throw new ValidatorLaunchException("capability_mismatch: committed spec/branch is unavailable; capability requirements are unknown.");
+        }
+        var head = await lander.BranchHeadAsync(task.Project!, task.Branch, ct);
+        var spec = head is null ? null : await lander.ReadFileAsync(task.Project!, head, task.SpecPath, ct);
+        if (spec is null)
+        {
+            if (optional) return null;
+            throw new ValidatorLaunchException("capability_mismatch: cannot read the task's committed spec; no dirty working file was used.");
+        }
+        try
+        {
+            return new(CapabilityRequirements.Parse(spec), path, Path.Combine(home, "capabilities"), head!, task.Project!.RepoPath);
+        }
+        catch (WorkerDispatchException ex) { throw new ValidatorLaunchException(ex.Code + ": " + ex.Message); }
+    }
 }
 
 /// <summary>
@@ -46,7 +71,7 @@ public sealed class ValidatorSessionLauncher(
     AgentService agents,
     HarnessService harnesses,
     IProcessRunner processes,
-    ILogger<ValidatorSessionLauncher> logger, TimeProvider? clock = null) : IValidatorSessionLauncher
+    ILogger<ValidatorSessionLauncher> logger, TimeProvider? clock = null, ITaskLander? lander = null) : IValidatorSessionLauncher
 {
     private const string Tier = "mastermind";
 
@@ -59,6 +84,9 @@ public sealed class ValidatorSessionLauncher(
         var candidates = await CandidatesAsync(assignment.AvoidHarness, ct);
         if (candidates.Count == 0)
             throw new ValidatorLaunchException($"No available {Tier} candidate to validate {assignment.TaskKey}.");
+
+        var capabilities = await SessionCommands.CapabilitiesAsync(ledger, lander, assignment.TaskId,
+            "conductor-validator", options.DataDir, optional: false, ct);
 
         var scratch = Path.Combine(options.DataDir, "conductor", $"{assignment.TaskKey}-{assignment.RoleKey}");
         Directory.CreateDirectory(scratch);
@@ -74,7 +102,8 @@ public sealed class ValidatorSessionLauncher(
                 AllowedCommands: SessionCommands.Allowed,
                 DeniedCommands: SessionCommands.Denied,
                 ScratchDirectory: scratch,
-                ReasoningEffort: candidate.ReasoningEffort),
+                ReasoningEffort: candidate.ReasoningEffort,
+                Capabilities: capabilities),
             candidate => IdentityFor(assignment, candidate, ct),
             TimeSpan.FromMinutes(options.ConductorSessionMinutes),
             candidate => MarkLimitedAsync(candidate.Account, ct),

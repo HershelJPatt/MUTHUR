@@ -109,12 +109,14 @@ public sealed class DashboardOperationsTests : IDisposable
     }
 
     [Fact]
-    public async Task The_doctor_panel_shows_the_one_check_every_hub_can_always_make_of_itself()
+    public async Task The_doctor_panel_shows_logging_and_unknown_capability_coverage()
     {
         var page = await _hub.CreateClient().GetStringAsync("/operations");
 
         Assert.Contains(">Doctor<", page);
-        Assert.Contains("all ok", page);
+        Assert.Contains("Cached observations: 0", page);
+        Assert.Contains("unknown coverage", page);
+        Assert.DoesNotContain("all ok", page);
         Assert.Contains(MuthurEnvironment.LogFile, page);
         Assert.DoesNotContain("nothing to check", page);
     }
