@@ -21,6 +21,7 @@ public sealed class MuthurDb(DbContextOptions<MuthurDb> options) : DbContext(opt
     public DbSet<RoleHold> RoleHolds => Set<RoleHold>();
     public DbSet<TaskValidation> TaskValidations => Set<TaskValidation>();
     public DbSet<ValidationSubject> ValidationSubjects => Set<ValidationSubject>();
+    public DbSet<IntegrationCandidate> IntegrationCandidates => Set<IntegrationCandidate>();
     public DbSet<Message> Messages => Set<Message>();
     public DbSet<FounderRequest> FounderRequests => Set<FounderRequest>();
     public DbSet<AccountLimit> AccountLimits => Set<AccountLimit>();
@@ -86,6 +87,8 @@ public sealed class MuthurDb(DbContextOptions<MuthurDb> options) : DbContext(opt
             e.ToTable("tasks");
             e.HasOne(x => x.CurrentSubject).WithMany().HasForeignKey(x => x.CurrentSubjectId).OnDelete(DeleteBehavior.Restrict);
             e.Navigation(x => x.CurrentSubject).AutoInclude();
+            e.HasOne(x => x.CurrentIntegrationCandidate).WithMany().HasForeignKey(x => x.CurrentIntegrationCandidateId).OnDelete(DeleteBehavior.Restrict);
+            e.Navigation(x => x.CurrentIntegrationCandidate).AutoInclude();
             e.Property(x => x.DependsOn).HasConversion(StringListConverter.Instance, StringListConverter.Comparer);
             e.HasOne(x => x.Project).WithMany().HasForeignKey(x => x.ProjectId).OnDelete(DeleteBehavior.Restrict);
             e.HasOne(x => x.Owner).WithMany().HasForeignKey(x => x.OwnerAgentId).OnDelete(DeleteBehavior.Restrict);
@@ -127,6 +130,22 @@ public sealed class MuthurDb(DbContextOptions<MuthurDb> options) : DbContext(opt
         {
             e.ToTable("validation_subjects");
             e.HasIndex(x => x.TaskId);
+        });
+
+        modelBuilder.Entity<IntegrationCandidate>(e =>
+        {
+            e.ToTable("integration_candidates");
+            // OS process start identity must retain sub-millisecond precision for external recovery.
+            e.Property(x => x.RunnerStartedAt).HasConversion(new ValueConverter<DateTimeOffset, long>(
+                value => value.UtcTicks, value => new DateTimeOffset(value, TimeSpan.Zero)));
+            e.HasOne(x => x.Task).WithMany().HasForeignKey(x => x.TaskId).OnDelete(DeleteBehavior.Restrict);
+            e.HasOne(x => x.Project).WithMany().HasForeignKey(x => x.ProjectId).OnDelete(DeleteBehavior.Restrict);
+            e.HasOne(x => x.Subject).WithMany().HasForeignKey(x => x.SubjectId).OnDelete(DeleteBehavior.Restrict);
+            e.HasOne(x => x.AssignedAgent).WithMany().HasForeignKey(x => x.AssignedAgentId).OnDelete(DeleteBehavior.Restrict);
+            e.HasIndex(x => new { x.TaskId, x.CreatedAt });
+            e.HasIndex(x => new { x.SubjectId, x.Attempt }).IsUnique();
+            e.HasIndex(x => x.State);
+            e.HasIndex(x => x.AssignmentId).IsUnique();
         });
 
         modelBuilder.Entity<Message>(e =>

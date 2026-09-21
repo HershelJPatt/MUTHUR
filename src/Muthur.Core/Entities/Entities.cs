@@ -46,6 +46,7 @@ public sealed class Agent
     /// re-registers itself through the public API is still a session the conductor staffed.
     /// </summary>
     public bool ConductorStaffed { get; set; }
+    public bool IntegrationRunner { get; set; }
 
     public string ModelLabel => $"{Harness}/{Model}";
 }
@@ -68,6 +69,8 @@ public sealed class WorkTask
     public string? SpecSha256 { get; set; }
     public Guid? CurrentSubjectId { get; set; }
     public ValidationSubject? CurrentSubject { get; set; }
+    public Guid? CurrentIntegrationCandidateId { get; set; }
+    public IntegrationCandidate? CurrentIntegrationCandidate { get; set; }
     public string? ValidationInvalidationReason { get; set; }
     public string? Branch { get; set; }
     public string? PrUrl { get; set; }

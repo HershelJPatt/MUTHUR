@@ -61,6 +61,7 @@ public static class Startup
         builder.Services.AddSingleton<RoleService>();
         builder.Services.AddSingleton<BriefFileReader>();
         builder.Services.AddSingleton<LifecycleService>();
+        builder.Services.AddSingleton<IntegrationService>();
         builder.Services.AddSingleton<MessageService>();
         builder.Services.AddSingleton<RequestService>();
         builder.Services.AddSingleton<FounderAttention>();

@@ -2,6 +2,7 @@
 using System;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Infrastructure;
+using Microsoft.EntityFrameworkCore.Migrations;
 using Microsoft.EntityFrameworkCore.Storage.ValueConversion;
 using Muthur.Data;
 
@@ -10,9 +11,11 @@ using Muthur.Data;
 namespace Muthur.Data.Migrations
 {
     [DbContext(typeof(MuthurDb))]
-    partial class MuthurDbModelSnapshot : ModelSnapshot
+    [Migration("20260921151526_IntegrationRunnerMetadata")]
+    partial class IntegrationRunnerMetadata
     {
-        protected override void BuildModel(ModelBuilder modelBuilder)
+        /// <inheritdoc />
+        protected override void BuildTargetModel(ModelBuilder modelBuilder)
         {
 #pragma warning disable 612, 618
             modelBuilder.HasAnnotation("ProductVersion", "10.0.12");
@@ -60,6 +63,10 @@ namespace Muthur.Data.Migrations
                         .IsRequired()
                         .HasColumnType("TEXT")
                         .HasColumnName("harness");
+
+                    b.Property<bool>("IntegrationRunner")
+                        .HasColumnType("INTEGER")
+                        .HasColumnName("integration_runner");
 
                     b.Property<long>("LastHeartbeat")
                         .HasColumnType("INTEGER")
@@ -239,212 +246,6 @@ namespace Muthur.Data.Migrations
                     b.ToTable("inbound", (string)null);
                 });
 
-            modelBuilder.Entity("Muthur.Core.Entities.Incident", b =>
-                {
-                    b.Property<int>("Id")
-                        .ValueGeneratedOnAdd()
-                        .HasColumnType("INTEGER")
-                        .HasColumnName("id");
-
-                    b.Property<string>("AuthorizationReference")
-                        .IsRequired()
-                        .HasColumnType("TEXT")
-                        .HasColumnName("authorization_reference");
-
-                    b.Property<int>("ConditionVersion")
-                        .HasColumnType("INTEGER")
-                        .HasColumnName("condition_version");
-
-                    b.Property<string>("Configuration")
-                        .IsRequired()
-                        .HasColumnType("TEXT")
-                        .HasColumnName("configuration");
-
-                    b.Property<long>("CreatedAt")
-                        .HasColumnType("INTEGER")
-                        .HasColumnName("created_at");
-
-                    b.Property<string>("Diagnosis")
-                        .IsRequired()
-                        .HasColumnType("TEXT")
-                        .HasColumnName("diagnosis");
-
-                    b.Property<string>("ExecutionPath")
-                        .IsRequired()
-                        .HasColumnType("TEXT")
-                        .HasColumnName("execution_path");
-
-                    b.Property<Guid>("ProjectId")
-                        .HasColumnType("TEXT")
-                        .HasColumnName("project_id");
-
-                    b.Property<string>("RecoveryCondition")
-                        .IsRequired()
-                        .HasColumnType("TEXT")
-                        .HasColumnName("recovery_condition");
-
-                    b.Property<string>("Signature")
-                        .IsRequired()
-                        .HasColumnType("TEXT")
-                        .HasColumnName("signature");
-
-                    b.Property<string>("State")
-                        .IsRequired()
-                        .HasColumnType("TEXT")
-                        .HasColumnName("state");
-
-                    b.Property<string>("Title")
-                        .IsRequired()
-                        .HasColumnType("TEXT")
-                        .HasColumnName("title");
-
-                    b.Property<long>("UpdatedAt")
-                        .HasColumnType("INTEGER")
-                        .HasColumnName("updated_at");
-
-                    b.Property<string>("Workaround")
-                        .IsRequired()
-                        .HasColumnType("TEXT")
-                        .HasColumnName("workaround");
-
-                    b.HasKey("Id");
-
-                    b.HasIndex("ProjectId");
-
-                    b.ToTable("incidents", (string)null);
-                });
-
-            modelBuilder.Entity("Muthur.Core.Entities.IncidentObservation", b =>
-                {
-                    b.Property<int>("Id")
-                        .ValueGeneratedOnAdd()
-                        .HasColumnType("INTEGER")
-                        .HasColumnName("id");
-
-                    b.Property<bool>("Active")
-                        .HasColumnType("INTEGER")
-                        .HasColumnName("active");
-
-                    b.Property<string>("Actor")
-                        .IsRequired()
-                        .HasColumnType("TEXT")
-                        .HasColumnName("actor");
-
-                    b.Property<int>("ConditionVersion")
-                        .HasColumnType("INTEGER")
-                        .HasColumnName("condition_version");
-
-                    b.Property<string>("Configuration")
-                        .IsRequired()
-                        .HasColumnType("TEXT")
-                        .HasColumnName("configuration");
-
-                    b.Property<long>("CreatedAt")
-                        .HasColumnType("INTEGER")
-                        .HasColumnName("created_at");
-
-                    b.Property<string>("Evidence")
-                        .IsRequired()
-                        .HasColumnType("TEXT")
-                        .HasColumnName("evidence");
-
-                    b.Property<string>("ExecutionPath")
-                        .IsRequired()
-                        .HasColumnType("TEXT")
-                        .HasColumnName("execution_path");
-
-                    b.Property<int>("IncidentId")
-                        .HasColumnType("INTEGER")
-                        .HasColumnName("incident_id");
-
-                    b.Property<string>("RunId")
-                        .HasColumnType("TEXT")
-                        .HasColumnName("run_id");
-
-                    b.Property<string>("Signature")
-                        .IsRequired()
-                        .HasColumnType("TEXT")
-                        .HasColumnName("signature");
-
-                    b.Property<int>("TaskId")
-                        .HasColumnType("INTEGER")
-                        .HasColumnName("task_id");
-
-                    b.Property<string>("UnlinkReason")
-                        .HasColumnType("TEXT")
-                        .HasColumnName("unlink_reason");
-
-                    b.HasKey("Id");
-
-                    b.HasIndex("IncidentId");
-
-                    b.HasIndex("TaskId");
-
-                    b.ToTable("incident_observations", (string)null);
-                });
-
-            modelBuilder.Entity("Muthur.Core.Entities.IncidentSuppression", b =>
-                {
-                    b.Property<int>("Id")
-                        .ValueGeneratedOnAdd()
-                        .HasColumnType("INTEGER")
-                        .HasColumnName("id");
-
-                    b.Property<bool>("Active")
-                        .HasColumnType("INTEGER")
-                        .HasColumnName("active");
-
-                    b.Property<string>("Assignment")
-                        .IsRequired()
-                        .HasColumnType("TEXT")
-                        .HasColumnName("assignment");
-
-                    b.Property<int>("ConditionVersion")
-                        .HasColumnType("INTEGER")
-                        .HasColumnName("condition_version");
-
-                    b.Property<long>("CreatedAt")
-                        .HasColumnType("INTEGER")
-                        .HasColumnName("created_at");
-
-                    b.Property<int>("EvidenceObservationId")
-                        .HasColumnType("INTEGER")
-                        .HasColumnName("evidence_observation_id");
-
-                    b.Property<int>("IncidentId")
-                        .HasColumnType("INTEGER")
-                        .HasColumnName("incident_id");
-
-                    b.Property<string>("Reason")
-                        .IsRequired()
-                        .HasColumnType("TEXT")
-                        .HasColumnName("reason");
-
-                    b.Property<string>("ReleaseReason")
-                        .HasColumnType("TEXT")
-                        .HasColumnName("release_reason");
-
-                    b.Property<long?>("ReleasedAt")
-                        .HasColumnType("INTEGER")
-                        .HasColumnName("released_at");
-
-                    b.Property<int>("TaskId")
-                        .HasColumnType("INTEGER")
-                        .HasColumnName("task_id");
-
-                    b.HasKey("Id");
-
-                    b.HasIndex("EvidenceObservationId");
-
-                    b.HasIndex("TaskId");
-
-                    b.HasIndex("IncidentId", "TaskId", "Assignment", "ConditionVersion")
-                        .IsUnique()
-                        .HasFilter("active = 1");
-
-                    b.ToTable("incident_suppressions", (string)null);
-                });
-
             modelBuilder.Entity("Muthur.Core.Entities.IngestCursor", b =>
                 {
                     b.Property<string>("Source")
@@ -470,6 +271,158 @@ namespace Muthur.Data.Migrations
                     b.HasKey("Source");
 
                     b.ToTable("ingest_cursors", (string)null);
+                });
+
+            modelBuilder.Entity("Muthur.Core.Entities.IntegrationCandidate", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("TEXT")
+                        .HasColumnName("id");
+
+                    b.Property<bool>("AlreadyIncluded")
+                        .HasColumnType("INTEGER")
+                        .HasColumnName("already_included");
+
+                    b.Property<string>("ArtifactsDirectory")
+                        .HasColumnType("TEXT")
+                        .HasColumnName("artifacts_directory");
+
+                    b.Property<Guid?>("AssignedAgentId")
+                        .HasColumnType("TEXT")
+                        .HasColumnName("assigned_agent_id");
+
+                    b.Property<Guid>("AssignmentId")
+                        .HasColumnType("TEXT")
+                        .HasColumnName("assignment_id");
+
+                    b.Property<int>("Attempt")
+                        .HasColumnType("INTEGER")
+                        .HasColumnName("attempt");
+
+                    b.Property<string>("CandidateSha")
+                        .HasColumnType("TEXT")
+                        .HasColumnName("candidate_sha");
+
+                    b.Property<long?>("CompletedAt")
+                        .HasColumnType("INTEGER")
+                        .HasColumnName("completed_at");
+
+                    b.Property<long>("CreatedAt")
+                        .HasColumnType("INTEGER")
+                        .HasColumnName("created_at");
+
+                    b.Property<string>("DefaultBranch")
+                        .IsRequired()
+                        .HasColumnType("TEXT")
+                        .HasColumnName("default_branch");
+
+                    b.Property<string>("EvidenceJson")
+                        .HasColumnType("TEXT")
+                        .HasColumnName("evidence_json");
+
+                    b.Property<string>("EvidenceSha256")
+                        .HasColumnType("TEXT")
+                        .HasColumnName("evidence_sha256");
+
+                    b.Property<string>("FailureCode")
+                        .HasColumnType("TEXT")
+                        .HasColumnName("failure_code");
+
+                    b.Property<string>("FailureJson")
+                        .HasColumnType("TEXT")
+                        .HasColumnName("failure_json");
+
+                    b.Property<string>("FailureMessage")
+                        .HasColumnType("TEXT")
+                        .HasColumnName("failure_message");
+
+                    b.Property<string>("ImplementationSha")
+                        .IsRequired()
+                        .HasColumnType("TEXT")
+                        .HasColumnName("implementation_sha");
+
+                    b.Property<long>("LeaseExpires")
+                        .HasColumnType("INTEGER")
+                        .HasColumnName("lease_expires");
+
+                    b.Property<string>("OwnedWorktreePath")
+                        .HasColumnType("TEXT")
+                        .HasColumnName("owned_worktree_path");
+
+                    b.Property<Guid>("ProjectId")
+                        .HasColumnType("TEXT")
+                        .HasColumnName("project_id");
+
+                    b.Property<long?>("PromotedAt")
+                        .HasColumnType("INTEGER")
+                        .HasColumnName("promoted_at");
+
+                    b.Property<long?>("PromotionIntentAt")
+                        .HasColumnType("INTEGER")
+                        .HasColumnName("promotion_intent_at");
+
+                    b.Property<string>("RepositoryPath")
+                        .IsRequired()
+                        .HasColumnType("TEXT")
+                        .HasColumnName("repository_path");
+
+                    b.Property<string>("RequiredChecksJson")
+                        .IsRequired()
+                        .HasColumnType("TEXT")
+                        .HasColumnName("required_checks_json");
+
+                    b.Property<int?>("RunnerProcessId")
+                        .HasColumnType("INTEGER")
+                        .HasColumnName("runner_process_id");
+
+                    b.Property<long?>("RunnerStartedAt")
+                        .HasColumnType("INTEGER")
+                        .HasColumnName("runner_started_at");
+
+                    b.Property<long?>("StartedAt")
+                        .HasColumnType("INTEGER")
+                        .HasColumnName("started_at");
+
+                    b.Property<string>("State")
+                        .IsRequired()
+                        .HasColumnType("TEXT")
+                        .HasColumnName("state");
+
+                    b.Property<Guid>("SubjectId")
+                        .HasColumnType("TEXT")
+                        .HasColumnName("subject_id");
+
+                    b.Property<string>("TargetSha")
+                        .IsRequired()
+                        .HasColumnType("TEXT")
+                        .HasColumnName("target_sha");
+
+                    b.Property<int>("TaskId")
+                        .HasColumnType("INTEGER")
+                        .HasColumnName("task_id");
+
+                    b.Property<string>("TreeSha")
+                        .HasColumnType("TEXT")
+                        .HasColumnName("tree_sha");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("AssignedAgentId");
+
+                    b.HasIndex("AssignmentId")
+                        .IsUnique();
+
+                    b.HasIndex("ProjectId");
+
+                    b.HasIndex("State");
+
+                    b.HasIndex("SubjectId", "Attempt")
+                        .IsUnique();
+
+                    b.HasIndex("TaskId", "CreatedAt");
+
+                    b.ToTable("integration_candidates", (string)null);
                 });
 
             modelBuilder.Entity("Muthur.Core.Entities.LedgerEvent", b =>
@@ -999,6 +952,10 @@ namespace Muthur.Data.Migrations
                         .HasColumnType("INTEGER")
                         .HasColumnName("created_at");
 
+                    b.Property<Guid?>("CurrentIntegrationCandidateId")
+                        .HasColumnType("TEXT")
+                        .HasColumnName("current_integration_candidate_id");
+
                     b.Property<Guid?>("CurrentSubjectId")
                         .HasColumnType("TEXT")
                         .HasColumnName("current_subject_id");
@@ -1076,6 +1033,8 @@ namespace Muthur.Data.Migrations
 
                     b.HasKey("Id");
 
+                    b.HasIndex("CurrentIntegrationCandidateId");
+
                     b.HasIndex("CurrentSubjectId");
 
                     b.HasIndex("OwnerAgentId");
@@ -1104,43 +1063,22 @@ namespace Muthur.Data.Migrations
                     b.Navigation("Project");
                 });
 
-            modelBuilder.Entity("Muthur.Core.Entities.Incident", b =>
+            modelBuilder.Entity("Muthur.Core.Entities.IntegrationCandidate", b =>
                 {
+                    b.HasOne("Muthur.Core.Entities.Agent", "AssignedAgent")
+                        .WithMany()
+                        .HasForeignKey("AssignedAgentId")
+                        .OnDelete(DeleteBehavior.Restrict);
+
                     b.HasOne("Muthur.Core.Entities.Project", "Project")
                         .WithMany()
                         .HasForeignKey("ProjectId")
                         .OnDelete(DeleteBehavior.Restrict)
                         .IsRequired();
 
-                    b.Navigation("Project");
-                });
-
-            modelBuilder.Entity("Muthur.Core.Entities.IncidentObservation", b =>
-                {
-                    b.HasOne("Muthur.Core.Entities.Incident", null)
+                    b.HasOne("Muthur.Core.Entities.ValidationSubject", "Subject")
                         .WithMany()
-                        .HasForeignKey("IncidentId")
-                        .OnDelete(DeleteBehavior.Restrict)
-                        .IsRequired();
-
-                    b.HasOne("Muthur.Core.Entities.WorkTask", null)
-                        .WithMany()
-                        .HasForeignKey("TaskId")
-                        .OnDelete(DeleteBehavior.Restrict)
-                        .IsRequired();
-                });
-
-            modelBuilder.Entity("Muthur.Core.Entities.IncidentSuppression", b =>
-                {
-                    b.HasOne("Muthur.Core.Entities.IncidentObservation", "EvidenceObservation")
-                        .WithMany()
-                        .HasForeignKey("EvidenceObservationId")
-                        .OnDelete(DeleteBehavior.Restrict)
-                        .IsRequired();
-
-                    b.HasOne("Muthur.Core.Entities.Incident", "Incident")
-                        .WithMany()
-                        .HasForeignKey("IncidentId")
+                        .HasForeignKey("SubjectId")
                         .OnDelete(DeleteBehavior.Restrict)
                         .IsRequired();
 
@@ -1150,9 +1088,11 @@ namespace Muthur.Data.Migrations
                         .OnDelete(DeleteBehavior.Restrict)
                         .IsRequired();
 
-                    b.Navigation("EvidenceObservation");
+                    b.Navigation("AssignedAgent");
 
-                    b.Navigation("Incident");
+                    b.Navigation("Project");
+
+                    b.Navigation("Subject");
 
                     b.Navigation("Task");
                 });
@@ -1210,6 +1150,11 @@ namespace Muthur.Data.Migrations
 
             modelBuilder.Entity("Muthur.Core.Entities.WorkTask", b =>
                 {
+                    b.HasOne("Muthur.Core.Entities.IntegrationCandidate", "CurrentIntegrationCandidate")
+                        .WithMany()
+                        .HasForeignKey("CurrentIntegrationCandidateId")
+                        .OnDelete(DeleteBehavior.Restrict);
+
                     b.HasOne("Muthur.Core.Entities.ValidationSubject", "CurrentSubject")
                         .WithMany()
                         .HasForeignKey("CurrentSubjectId")
@@ -1226,196 +1171,13 @@ namespace Muthur.Data.Migrations
                         .OnDelete(DeleteBehavior.Restrict)
                         .IsRequired();
 
+                    b.Navigation("CurrentIntegrationCandidate");
+
                     b.Navigation("CurrentSubject");
 
                     b.Navigation("Owner");
 
                     b.Navigation("Project");
-                });
-            modelBuilder.Entity("Muthur.Core.Entities.IntegrationCandidate", b =>
-                {
-                    b.Property<Guid>("Id")
-                        .ValueGeneratedOnAdd()
-                        .HasColumnType("TEXT")
-                        .HasColumnName("id");
-
-                    b.Property<bool>("AlreadyIncluded")
-                        .HasColumnType("INTEGER")
-                        .HasColumnName("already_included");
-
-                    b.Property<string>("ArtifactsDirectory")
-                        .HasColumnType("TEXT")
-                        .HasColumnName("artifacts_directory");
-
-                    b.Property<Guid?>("AssignedAgentId")
-                        .HasColumnType("TEXT")
-                        .HasColumnName("assigned_agent_id");
-
-                    b.Property<Guid>("AssignmentId")
-                        .HasColumnType("TEXT")
-                        .HasColumnName("assignment_id");
-
-                    b.Property<int>("Attempt")
-                        .HasColumnType("INTEGER")
-                        .HasColumnName("attempt");
-
-                    b.Property<string>("CandidateSha")
-                        .HasColumnType("TEXT")
-                        .HasColumnName("candidate_sha");
-
-                    b.Property<long?>("CompletedAt")
-                        .HasColumnType("INTEGER")
-                        .HasColumnName("completed_at");
-
-                    b.Property<long>("CreatedAt")
-                        .HasColumnType("INTEGER")
-                        .HasColumnName("created_at");
-
-                    b.Property<string>("DefaultBranch")
-                        .IsRequired()
-                        .HasColumnType("TEXT")
-                        .HasColumnName("default_branch");
-
-                    b.Property<string>("EvidenceJson")
-                        .HasColumnType("TEXT")
-                        .HasColumnName("evidence_json");
-
-                    b.Property<string>("EvidenceSha256")
-                        .HasColumnType("TEXT")
-                        .HasColumnName("evidence_sha256");
-
-                    b.Property<string>("FailureCode")
-                        .HasColumnType("TEXT")
-                        .HasColumnName("failure_code");
-
-                    b.Property<string>("FailureJson")
-                        .HasColumnType("TEXT")
-                        .HasColumnName("failure_json");
-
-                    b.Property<string>("FailureMessage")
-                        .HasColumnType("TEXT")
-                        .HasColumnName("failure_message");
-
-                    b.Property<string>("ImplementationSha")
-                        .IsRequired()
-                        .HasColumnType("TEXT")
-                        .HasColumnName("implementation_sha");
-
-                    b.Property<long>("LeaseExpires")
-                        .HasColumnType("INTEGER")
-                        .HasColumnName("lease_expires");
-
-                    b.Property<string>("OwnedWorktreePath")
-                        .HasColumnType("TEXT")
-                        .HasColumnName("owned_worktree_path");
-
-                    b.Property<Guid>("ProjectId")
-                        .HasColumnType("TEXT")
-                        .HasColumnName("project_id");
-
-                    b.Property<long?>("PromotedAt")
-                        .HasColumnType("INTEGER")
-                        .HasColumnName("promoted_at");
-
-                    b.Property<long?>("PromotionIntentAt")
-                        .HasColumnType("INTEGER")
-                        .HasColumnName("promotion_intent_at");
-
-                    b.Property<string>("RepositoryPath")
-                        .IsRequired()
-                        .HasColumnType("TEXT")
-                        .HasColumnName("repository_path");
-
-                    b.Property<string>("RequiredChecksJson")
-                        .IsRequired()
-                        .HasColumnType("TEXT")
-                        .HasColumnName("required_checks_json");
-
-                    b.Property<int?>("RunnerProcessId")
-                        .HasColumnType("INTEGER")
-                        .HasColumnName("runner_process_id");
-
-                    b.Property<long?>("RunnerStartedAt")
-                        .HasColumnType("INTEGER")
-                        .HasColumnName("runner_started_at");
-
-                    b.Property<long?>("StartedAt")
-                        .HasColumnType("INTEGER")
-                        .HasColumnName("started_at");
-
-                    b.Property<string>("State")
-                        .IsRequired()
-                        .HasColumnType("TEXT")
-                        .HasColumnName("state");
-
-                    b.Property<Guid>("SubjectId")
-                        .HasColumnType("TEXT")
-                        .HasColumnName("subject_id");
-
-                    b.Property<string>("TargetSha")
-                        .IsRequired()
-                        .HasColumnType("TEXT")
-                        .HasColumnName("target_sha");
-
-                    b.Property<int>("TaskId")
-                        .HasColumnType("INTEGER")
-                        .HasColumnName("task_id");
-
-                    b.Property<string>("TreeSha")
-                        .HasColumnType("TEXT")
-                        .HasColumnName("tree_sha");
-
-                    b.HasKey("Id");
-
-                    b.HasIndex("AssignedAgentId");
-
-                    b.HasIndex("AssignmentId")
-                        .IsUnique();
-
-                    b.HasIndex("ProjectId");
-
-                    b.HasIndex("State");
-
-                    b.HasIndex("SubjectId", "Attempt")
-                        .IsUnique();
-
-                    b.HasIndex("TaskId", "CreatedAt");
-
-                    b.ToTable("integration_candidates", (string)null);
-                });
-
-            modelBuilder.Entity("Muthur.Core.Entities.IntegrationCandidate", b =>
-                {
-                    b.HasOne("Muthur.Core.Entities.Agent", "AssignedAgent")
-                        .WithMany()
-                        .HasForeignKey("AssignedAgentId")
-                        .OnDelete(DeleteBehavior.Restrict);
-
-                    b.HasOne("Muthur.Core.Entities.Project", "Project")
-                        .WithMany()
-                        .HasForeignKey("ProjectId")
-                        .OnDelete(DeleteBehavior.Restrict)
-                        .IsRequired();
-
-                    b.HasOne("Muthur.Core.Entities.ValidationSubject", "Subject")
-                        .WithMany()
-                        .HasForeignKey("SubjectId")
-                        .OnDelete(DeleteBehavior.Restrict)
-                        .IsRequired();
-
-                    b.HasOne("Muthur.Core.Entities.WorkTask", "Task")
-                        .WithMany()
-                        .HasForeignKey("TaskId")
-                        .OnDelete(DeleteBehavior.Restrict)
-                        .IsRequired();
-
-                    b.Navigation("AssignedAgent");
-
-                    b.Navigation("Project");
-
-                    b.Navigation("Subject");
-
-                    b.Navigation("Task");
                 });
 #pragma warning restore 612, 618
         }

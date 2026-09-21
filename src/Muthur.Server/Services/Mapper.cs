@@ -35,7 +35,19 @@ public static class Mapper
             t.HoldReason,
             t.HoldBy,
             t.HoldExpires, t.DependsOn, t.DependencyReason, t.CurrentSubject?.ToDto(),
-            t.ValidationInvalidationReason is not null ? "stale" : t.CurrentSubject is null ? "unknown" : "current");
+            t.ValidationInvalidationReason is not null ? "stale" : t.CurrentSubject is null ? "unknown" : "current",
+            t.CurrentIntegrationCandidate?.ToDto());
+
+    public static IntegrationCandidateDto ToDto(this IntegrationCandidate c) =>
+        new(c.Id, c.AssignmentId, c.ProjectId, Wire.TaskId(c.TaskId), c.SubjectId,
+            c.RepositoryPath, c.DefaultBranch, c.TargetSha, c.ImplementationSha, c.CandidateSha, c.TreeSha,
+            JsonSerializer.Deserialize(c.RequiredChecksJson, MuthurJsonContext.Default.ValidationChecksDto)!,
+            c.State, c.AssignedAgentId, c.LeaseExpires, c.Attempt, c.CreatedAt, c.StartedAt, c.CompletedAt,
+            c.AlreadyIncluded, c.PromotionIntentAt, c.PromotedAt,
+            c.EvidenceJson is null ? null : JsonSerializer.Deserialize(c.EvidenceJson, MuthurJsonContext.Default.IntegrationEvidenceDto),
+            c.EvidenceSha256, c.FailureCode, c.FailureMessage,
+            c.FailureJson is null ? null : JsonSerializer.Deserialize(c.FailureJson, MuthurJsonContext.Default.IntegrationFailureRequest),
+            c.RunnerProcessId, c.RunnerStartedAt, c.OwnedWorktreePath, c.ArtifactsDirectory);
 
     public static EventDto ToDto(this LedgerEvent e)
     {
