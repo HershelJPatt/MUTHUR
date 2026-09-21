@@ -46,6 +46,10 @@ public sealed class CollisionTests(ITestOutputHelper output) : IDisposable
         var task = await owner.AddTaskAsync(title);
         (await owner.ClaimAsync(task.Id)).EnsureSuccessStatusCode();
         (await owner.PostActionAsync(task.Id, "spec", new SetSpecRequest(_repo.WriteSpec(task.Id)))).EnsureSuccessStatusCode();
+        var standing = _repo.Git("rev-parse", "--abbrev-ref", "HEAD");
+        _repo.Git("checkout", "-q", branch);
+        _repo.Commit("attach frozen spec to implementation");
+        _repo.Git("checkout", "-q", standing);
         return (owner, await (await owner.PostActionAsync(task.Id, "implemented", new ImplementedRequest(branch))).ReadTaskAsync());
     }
 

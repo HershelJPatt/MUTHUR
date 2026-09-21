@@ -144,17 +144,17 @@ public sealed class TaskAttendedTests : IDisposable
         async Task BlockOnceAsync(string evidence)
         {
             (await validator.PostAsync(Routes.RoleAction("win-validator", "take"), null)).EnsureSuccessStatusCode();
-            (await validator.PostActionAsync(id, "blocked", new VerdictRequest("win-validator", evidence))).EnsureSuccessStatusCode();
+            (await validator.PostActionAsync(id, "blocked", new VerdictRequest("win-validator", evidence, SubjectId: (await validator.GetTaskAsync(id)).Task.CurrentSubject!.Id))).EnsureSuccessStatusCode();
             (await validator.PostAsync(Routes.RoleAction("win-validator", "release"), null)).EnsureSuccessStatusCode();
             (await owner.PostActionAsync(id, "implemented", new ImplementedRequest("task/T-1-export"))).EnsureSuccessStatusCode();
         }
 
         // One block, and the conductor still staffs it: the owner may have fixed what stopped the first session.
-        await BlockOnceAsync("No browser here.");
+        await BlockOnceAsync("No browser here. Tried opening the dashboard URL.");
         Assert.Equal(id, Assert.Single(await Conductor.PlanAsync()).TaskKey);
 
         // Two, and it stops — which is the whole point: no third session spends the budget to learn the same thing.
-        await BlockOnceAsync("Still no browser.");
+        await BlockOnceAsync("Still no browser. Tried opening the dashboard URL.");
         Assert.Empty(await Conductor.PlanAsync());
 
         // And it is a flag, not a verdict: the founder lifts it and the task is staffable again.

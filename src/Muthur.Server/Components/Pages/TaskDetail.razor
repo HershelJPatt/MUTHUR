@@ -27,6 +27,21 @@
                 </div>
                 <dl class="kv" style="margin-top: 12px">
                     <dt>Project</dt><dd>@task.Project</dd>
+                    <dt>Validation provenance</dt><dd>@task.ProvenanceStatus</dd>
+                    @if (task.CurrentSubject is { } subject)
+                    {
+                        <dt>Validation round</dt><dd>@subject.Id</dd>
+                        <dt>Implementation SHA</dt><dd>@subject.ImplementationSha</dd>
+                        <dt>Spec SHA-256</dt><dd>@subject.SpecSha256</dd>
+                    }
+                    @foreach (var validation in task.Validations)
+                    {
+                        <dt>@validation.Validator evidence</dt><dd>@validation.EvidenceStatus</dd>
+                    }
+                    @if (task.ProvenanceStatus != "current")
+                    {
+                        <dt>Recovery</dt><dd>@Validations.Recovery</dd>
+                    }
                     @if (task.DependsOn is { Count: > 0 })
                     {
                         <dt>Prerequisites</dt><dd>@string.Join(", ", task.DependsOn) — @task.DependencyReason</dd>

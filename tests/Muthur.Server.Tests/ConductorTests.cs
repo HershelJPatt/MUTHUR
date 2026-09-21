@@ -92,7 +92,7 @@ public sealed class ConductorTests : IDisposable
     private static async Task RejectAsync(HttpClient checker, string id, string evidence)
     {
         (await checker.PostAsync(Routes.RoleAction("win-validator", "take"), null)).EnsureSuccessStatusCode();
-        (await checker.PostActionAsync(id, "fail", new VerdictRequest("win-validator", evidence))).EnsureSuccessStatusCode();
+        (await checker.PostActionAsync(id, "fail", new VerdictRequest("win-validator", evidence, SubjectId: (await checker.GetTaskAsync(id)).Task.CurrentSubject!.Id))).EnsureSuccessStatusCode();
         (await checker.PostAsync(Routes.RoleAction("win-validator", "release"), null)).EnsureSuccessStatusCode();
     }
 
@@ -117,7 +117,7 @@ public sealed class ConductorTests : IDisposable
         public async Task StartAsync(ConductorAssignment assignment, CancellationToken ct = default)
         {
             (await validator.PostAsync(Routes.RoleAction(assignment.RoleKey, "take"), null, ct)).EnsureSuccessStatusCode();
-            (await validator.PostActionAsync(assignment.TaskKey, "fail", new VerdictRequest(assignment.RoleKey, "the export still 500s"))).EnsureSuccessStatusCode();
+            (await validator.PostActionAsync(assignment.TaskKey, "fail", new VerdictRequest(assignment.RoleKey, "the export still 500s", SubjectId: (await validator.GetTaskAsync(assignment.TaskKey)).Task.CurrentSubject!.Id))).EnsureSuccessStatusCode();
             (await validator.PostAsync(Routes.RoleAction(assignment.RoleKey, "release"), null, ct)).EnsureSuccessStatusCode();
         }
     }
@@ -142,7 +142,7 @@ public sealed class ConductorTests : IDisposable
             try
             {
                 (await checker.PostAsync(Routes.RoleAction(decider, "take"), null, ct)).EnsureSuccessStatusCode();
-                (await checker.PostActionAsync(assignment.TaskKey, "fail", new VerdictRequest(decider, "the export still 500s"))).EnsureSuccessStatusCode();
+                (await checker.PostActionAsync(assignment.TaskKey, "fail", new VerdictRequest(decider, "the export still 500s", SubjectId: (await checker.GetTaskAsync(assignment.TaskKey)).Task.CurrentSubject!.Id))).EnsureSuccessStatusCode();
                 (await checker.PostAsync(Routes.RoleAction(decider, "release"), null, ct)).EnsureSuccessStatusCode();
             }
             finally { _decided.TrySetResult(); }   // never leave the sibling waiting out the budget
@@ -159,7 +159,7 @@ public sealed class ConductorTests : IDisposable
         {
             var checker = checkerFor(assignment.RoleKey);
             (await checker.PostAsync(Routes.RoleAction(assignment.RoleKey, "take"), null, ct)).EnsureSuccessStatusCode();
-            (await checker.PostActionAsync(assignment.TaskKey, "pass", new VerdictRequest(assignment.RoleKey))).EnsureSuccessStatusCode();
+            (await checker.PostActionAsync(assignment.TaskKey, "pass", new VerdictRequest(assignment.RoleKey, "Ran the application: expected output observed; reproduce with dotnet test.", SubjectId: (await checker.GetTaskAsync(assignment.TaskKey)).Task.CurrentSubject!.Id))).EnsureSuccessStatusCode();
             (await checker.PostAsync(Routes.RoleAction(assignment.RoleKey, "release"), null, ct)).EnsureSuccessStatusCode();
             await Eventually.TrueAsync(
                 async () => (await checker.GetTaskAsync(assignment.TaskKey)).Task.State == TaskState.Validated ? "validated" : null,
@@ -440,7 +440,7 @@ public sealed class ConductorTests : IDisposable
         for (var attempt = 1; attempt <= 3; attempt++)
         {
             (await checker.PostAsync(Routes.RoleAction("win-validator", "take"), null)).EnsureSuccessStatusCode();
-            (await checker.PostActionAsync(id, "fail", new VerdictRequest("win-validator", $"broken, round {attempt}"))).EnsureSuccessStatusCode();
+            (await checker.PostActionAsync(id, "fail", new VerdictRequest("win-validator", $"broken, round {attempt}: reproduce with dotnet test", SubjectId: (await checker.GetTaskAsync(id)).Task.CurrentSubject!.Id))).EnsureSuccessStatusCode();
             (await checker.PostAsync(Routes.RoleAction("win-validator", "release"), null)).EnsureSuccessStatusCode();
             (await owner.PostActionAsync(id, "implemented", new ImplementedRequest("task/T-1-feature"))).EnsureSuccessStatusCode();
         }
@@ -467,7 +467,7 @@ public sealed class ConductorTests : IDisposable
 
         for (var round = 1; round <= 3; round++)
         {
-            await RejectAsync(checker, id, $"broken, round {round}");
+            await RejectAsync(checker, id, $"broken, round {round}: reproduce with dotnet test");
             MoveHead();
             (await owner.PostActionAsync(id, "implemented", new ImplementedRequest("task/T-1-feature"))).EnsureSuccessStatusCode();
         }
@@ -495,7 +495,7 @@ public sealed class ConductorTests : IDisposable
 
         for (var round = 1; round <= 3; round++)
         {
-            await RejectAsync(checker, id, $"broken, round {round}");
+            await RejectAsync(checker, id, $"broken, round {round}: reproduce with dotnet test");
             (await owner.PostActionAsync(id, "implemented", new ImplementedRequest("task/T-1-feature"))).EnsureSuccessStatusCode();
         }
 
@@ -523,7 +523,7 @@ public sealed class ConductorTests : IDisposable
 
         for (var round = 1; round <= 3; round++)
         {
-            await RejectAsync(checker, id, $"broken, round {round}");
+            await RejectAsync(checker, id, $"broken, round {round}: reproduce with dotnet test");
             (await owner.PostActionAsync(id, "implemented", new ImplementedRequest("task/T-1-feature"))).EnsureSuccessStatusCode();
         }
 
@@ -533,7 +533,7 @@ public sealed class ConductorTests : IDisposable
 
         // Rejected a fourth time, and resubmitted on that same commit again. That is a new round, and the
         // founder hearing about it a second time is the point: nothing has changed, again.
-        await RejectAsync(checker, id, "broken, round 4");
+        await RejectAsync(checker, id, "broken, round 4: reproduce with dotnet test");
         (await owner.PostActionAsync(id, "implemented", new ImplementedRequest("task/T-1-feature"))).EnsureSuccessStatusCode();
         await Conductor.RunPassAsync();
 
@@ -561,7 +561,7 @@ public sealed class ConductorTests : IDisposable
         {
             if (round > 1)
                 (await owner.PostActionAsync(id, "implemented", new ImplementedRequest("task/T-1-feature"))).EnsureSuccessStatusCode();
-            await RejectAsync(checker, id, $"broken, round {round}");
+            await RejectAsync(checker, id, $"broken, round {round}: reproduce with dotnet test");
         }
 
         // The round before the current one was recorded by the code this task replaces: same event, same
@@ -2812,10 +2812,17 @@ public sealed class ConductorTests : IDisposable
         Assert.Equal(2, (await EventsAsync()).Count(e => e.Type == "conductor.land_refused"));
         Assert.Equal(2, (await FounderMessagesAsync()).Count);   // a commit nobody has tried is worth saying again
 
-        // And "fix the cause and push" is one act, so do both: the head moves again, and it lands on the very
-        // next pass with the probe interval still nowhere near.
+        // A moved implementation now also needs a new validation subject. Clearing the checkout alone
+        // cannot authorize the new commit; explicit recovery opens the fresh round.
         CleanTheCheckout();
         CommitOnBranch(Branch(id));
+        Assert.Equal(0, await Conductor.RunPassAsync());
+        Assert.Equal(TaskState.Validated, (await _hub.Founder().GetTaskAsync(id)).Task.State);
+        Assert.Contains(await EventsAsync(), e => e.Type == "conductor.land_refused"
+            && e.Payload.GetProperty("code").GetString() == "implementation_changed");
+        (await owner.PostActionAsync(id, "revalidate", new RevalidateRequest("Review the changed implementation."))).EnsureSuccessStatusCode();
+        (await owner.PostActionAsync(id, "implemented", new ImplementedRequest(Branch(id)))).EnsureSuccessStatusCode();
+        OwnerGoesQuiet();
         Assert.Equal(0, await Conductor.RunPassAsync());
 
         Assert.Equal(TaskState.Done, (await _hub.Founder().GetTaskAsync(id)).Task.State);

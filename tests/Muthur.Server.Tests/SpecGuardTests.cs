@@ -67,6 +67,10 @@ public sealed class SpecGuardTests : IDisposable
         _repo.BranchWithFile("task/T-1-feature", "specs/T-1-feature.md", content);
         _repo.Write("specs/T-1-placeholder.md", "# T-1 — placeholder\n");
         _repo.Commit("a spec on main, so the first attach has something to find");
+        _repo.Git("checkout", "-q", "task/T-1-feature");
+        _repo.Write("specs/T-1-placeholder.md", "# T-1 — placeholder\n");
+        _repo.Commit("the attached frozen spec also belongs to the implementation");
+        _repo.Git("checkout", "-q", "main");
 
         // The branch reaches the task the way it really does: through implemented, and back on a blocked
         // verdict — which is the shape that left the next holder unable to re-attach.
@@ -74,7 +78,7 @@ public sealed class SpecGuardTests : IDisposable
         (await owner.PostActionAsync(id, "implemented", new ImplementedRequest("task/T-1-feature"))).EnsureSuccessStatusCode();
         var validator = await _hub.RegisterAgentAsync("validator");
         (await validator.PostAsync(Routes.RoleAction("win-validator", "take"), null)).EnsureSuccessStatusCode();
-        (await validator.PostActionAsync(id, "blocked", new VerdictRequest("win-validator", "No browser here."))).EnsureSuccessStatusCode();
+        (await validator.PostActionAsync(id, "blocked", new VerdictRequest("win-validator", "No browser here. Tried opening the dashboard URL.", SubjectId: (await validator.GetTaskAsync(id)).Task.CurrentSubject!.Id))).EnsureSuccessStatusCode();
 
         return (owner, id);
     }

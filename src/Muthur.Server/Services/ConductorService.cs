@@ -61,7 +61,7 @@ public interface IOrchestratorSessionLauncher
 /// is not a session and takes no slot — see <see cref="LandOrphanedAsync"/>.
 /// </para>
 /// </summary>
-public sealed class ConductorService(
+public sealed partial class ConductorService(
     Ledger ledger,
     MuthurOptions options,
     TimeProvider clock,
@@ -258,7 +258,7 @@ public sealed class ConductorService(
     {
         var since = now.AddDays(-1);
         var events = await db.Events.Where(e => e.Type == "task.implemented" || (e.At >= since &&
-            (e.Type == "conductor.staffing" || e.Type == "conductor.on" ||
+            (e.Type == "conductor.staffing" || e.Type == "worker.probe_admitted" || e.Type == "conductor.on" ||
              e.Type == "request.answered" || e.Type == "task.dependencies_ready"))).OrderBy(e => e.Seq).ToListAsync(ct);
         var attempts = new Dictionary<string, List<DateTimeOffset>>();
         var heads = new Dictionary<int, string>();
@@ -268,7 +268,7 @@ public sealed class ConductorService(
             if (e.TaskId is not { } id) continue;
             var prefix = Wire.TaskId(id) + "/";
             using var payload = JsonDocument.Parse(e.PayloadJson);
-            if (e.Type != "conductor.staffing")
+            if (e.Type is not ("conductor.staffing" or "worker.probe_admitted"))
             {
                 if (e.Type == "task.implemented")
                 {
@@ -355,6 +355,7 @@ public sealed class ConductorService(
     /// </summary>
     public async Task StopSessionsAsync(CancellationToken ct = default)
     {
+        Interlocked.Exchange(ref _probeStopping, 1);
         if (_sessions.IsCancellationRequested) return;
 
         Task[] running;
@@ -387,9 +388,18 @@ public sealed class ConductorService(
     {
         await ledger.ReadAsync((db, now) => BudgetBlockedAsync(db, now, ct), ct);
         var ceiling = await CeilingAsync(ct);
+        List<ConductorSessionDto> sessions;
+        await _pass.WaitAsync(ct);
+        try
+        {
+            sessions = Sessions();
+            sessions.AddRange(await ledger.ReadAsync(async (db, _) => (await ProbeReservationsAsync(db, ct))
+                .Where(r => !r.Released).Select(r => new ConductorSessionDto(r.Request.Task, "#capability-probe:" + r.Id)).ToList(), ct));
+        }
+        finally { _pass.Release(); }
         return new(
             await EnabledAsync(ct),
-            RunningCount,
+            sessions.Count,
             options.ConductorMaxSessions,
             options.ConductorSessionMinutes,
             options.ConductorMaxAttempts,
@@ -400,7 +410,7 @@ public sealed class ConductorService(
             ceiling.Sessions,
             ceiling.Reason,
             await OrchestratorsEnabledAsync(ct),
-            Sessions(),
+            sessions,
             Stalls(), await StaffingWaitAsync(ct), await LandingWaitsAsync(ct));
     }
 
@@ -471,17 +481,19 @@ public sealed class ConductorService(
     /// </para>
     /// </summary>
     private Task<(int Sessions, string Reason)> CeilingAsync(CancellationToken ct) =>
-        ledger.ReadAsync(async (db, now) =>
-        {
-            var stored = await db.Meta
-                .Where(e => e.Key == MetaEntry.ConductorSessions || e.Key == MetaEntry.ConductorUnattended)
-                .ToDictionaryAsync(e => e.Key, e => e.Value, ct);
-            return Ceiling(
-                stored.GetValueOrDefault(MetaEntry.ConductorSessions),
-                stored.GetValueOrDefault(MetaEntry.ConductorUnattended),
-                // Local time, because "while I am asleep" is a fact about the founder's night and not about UTC.
-                TimeZoneInfo.ConvertTime(now, clock.LocalTimeZone).TimeOfDay);
-        }, ct);
+        ledger.ReadAsync((db, now) => CeilingAsync(db, now, ct), ct);
+
+    private async Task<(int Sessions, string Reason)> CeilingAsync(MuthurDb db, DateTimeOffset now, CancellationToken ct)
+    {
+        var stored = await db.Meta
+            .Where(e => e.Key == MetaEntry.ConductorSessions || e.Key == MetaEntry.ConductorUnattended)
+            .ToDictionaryAsync(e => e.Key, e => e.Value, ct);
+        return Ceiling(
+            stored.GetValueOrDefault(MetaEntry.ConductorSessions),
+            stored.GetValueOrDefault(MetaEntry.ConductorUnattended),
+            // Local time, because "while I am asleep" is a fact about the founder's night and not about UTC.
+            TimeZoneInfo.ConvertTime(now, clock.LocalTimeZone).TimeOfDay);
+    }
 
     private (int Sessions, string Reason) Ceiling(string? sessions, string? unattended, TimeSpan localNow)
     {
@@ -651,9 +663,13 @@ public sealed class ConductorService(
             // Only 'validating'. A blocked task is waiting on the founder, and staffing it would waste a session
             // on work that cannot move.
             var tasks = await db.Tasks.Include(t => t.Project)
-                .Where(t => t.State == TaskState.Validating)
+                .Where(t => t.State == TaskState.Validating && t.CurrentSubjectId != null && t.ValidationInvalidationReason == null)
                 .OrderByDescending(t => t.Priority).ThenBy(t => t.Id)
                 .ToListAsync(ct);
+            var compatible = new List<WorkTask>();
+            foreach (var task in tasks)
+                if (await Validations.CompatibleAsync(db, task, ct)) compatible.Add(task);
+            tasks = compatible;
             if (tasks.Count == 0) return [];
 
             var ids = tasks.Select(t => t.Id).ToList();
@@ -1075,6 +1091,7 @@ public sealed class ConductorService(
         if (!await _pass.WaitAsync(0, ct)) return 0;   // a slow pass must never overlap the next tick
         try
         {
+            if (Volatile.Read(ref _probeStopping) != 0 || _sessions.IsCancellationRequested) return 0;
             _lastPass = clock.GetUtcNow();
             await TaskDependencies.ResolveAsync(ledger, ct);
             await RecoverExitedOwnersAsync(ct);
@@ -1087,7 +1104,8 @@ public sealed class ConductorService(
 
             // Read once per pass: the founder may move it mid-pass, and a ceiling that changes under the loop
             // would let a pass start more sessions than either number allows.
-            var ceiling = (await CeilingAsync(ct)).Sessions;
+            var ceiling = (await CeilingAsync(ct)).Sessions - await ledger.ReadAsync(async (db, _) =>
+                (await ProbeReservationsAsync(db, ct)).Count(r => !r.Released), ct);
 
             var started = 0;
             const string overseerKey = "organization/#overseer";

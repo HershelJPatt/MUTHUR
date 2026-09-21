@@ -23,13 +23,18 @@ env $T <path to the build under test> …
 
 Give each scratch instance its own port and its own directory. Delete both when you are done.
 
-## Build the branch
+## Build the claimed implementation
+
+Retain `currentSubject.id` and `currentSubject.implementationSha` from `muthur validate claim`. Every verdict
+uses `--subject <retained-guid>` and at least 20 trimmed characters describing check, observation and an
+artifact/reference or reproduction command. Use `--evidence-file` for a local UTF-8 report, or `--evidence`
+for inline text. Never fetch a replacement subject ID at verdict time.
 
 Never check the task's branch out in the main checkout — the agent that built it usually still has it. Work in
 a worktree of your own:
 
 ```bash
-git worktree add --detach .worktrees/validate-T-n <branch>
+git worktree add --detach .worktrees/validate-T-n <implementation-sha>
 cd .worktrees/validate-T-n
 ```
 
@@ -45,7 +50,7 @@ TODO(founder): the flows worth walking for a change of each kind, and anything t
 than a fetched page.
 
 If the product cannot be driven unattended, the verdict is **not** pass. Record it —
-`muthur validate blocked T-n --as <role> --evidence <file>` — saying what stopped you and what would let the
+`muthur validate blocked T-n --as <role> --subject <retained-guid> --evidence-file <file>` — saying what stopped you and what would let the
 next validator get further, then release the role. Message the owner too if you like, but the verdict is what
 the organization can see; a message alone leaves the task looking untouched.
 
@@ -63,9 +68,9 @@ A pass says you ran the product and it worked. It never says the diff looked rig
   debug output left behind.
 - Write the evidence as the commands you ran and the output you got back, concretely enough that someone
   else could repeat it. Verdicts without that are worthless to the founder six weeks from now.
-- Failing is cheap and normal. `muthur validate fail T-n --as <role> --evidence <file>` with an exact
+- Failing is cheap and normal. `muthur validate fail T-n --as <role> --subject <retained-guid> --evidence-file <file>` with an exact
   reproduction is worth more to this organization than a pass you were not sure about.
-- Blocking is cheap and normal too. `muthur validate blocked T-n --as <role> --evidence <file>` says you
+- Blocking is cheap and normal too. `muthur validate blocked T-n --as <role> --subject <retained-guid> --evidence-file <file>` says you
   could not do the job, not that the work is bad. A validator that cannot run must never pass.
 
 ## Before you release the role
