@@ -2,6 +2,7 @@ using System.Diagnostics;
 using System.Text.Json;
 using Muthur.Launch;
 using Muthur.Server.Services;
+using Xunit.Sdk;
 
 namespace Muthur.Server.Tests;
 
@@ -9,12 +10,64 @@ namespace Muthur.Server.Tests;
 public sealed class CensusProcessEnvironmentCollection;
 
 [Collection("Census process environment")]
-public sealed class CensusCommandRunnerTests : IDisposable
+public sealed class CensusCommandRunnerTests : IAsyncLifetime
 {
     private readonly string _root = Directory.CreateTempSubdirectory("muthur-census-runner-").FullName;
     private readonly CensusCommandRunner _runner = new();
 
-    public void Dispose() => Directory.Delete(_root, recursive: true);
+    public Task InitializeAsync() => Task.CompletedTask;
+
+    public Task DisposeAsync() => DeleteFixtureDirectoryAsync(_root);
+
+    private static async Task DeleteFixtureDirectoryAsync(string path)
+    {
+        IOException? lastSharingException = null;
+        try
+        {
+            // Exit assertions verify termination; cleanup separately observes filesystem release.
+            await Eventually.TrueAsync(() =>
+            {
+                try
+                {
+                    Directory.Delete(path, recursive: true);
+                    return true;
+                }
+                catch (DirectoryNotFoundException) { return true; }
+                catch (IOException ex) when (OperatingSystem.IsWindows() &&
+                    (ex.HResult == unchecked((int)0x80070020) || ex.HResult == unchecked((int)0x80070021)))
+                {
+                    lastSharingException = ex;
+                    return false;
+                }
+            }, $"fixture directory '{path}' remained locked");
+        }
+        catch (XunitException)
+        {
+            throw new IOException($"Timed out deleting fixture directory '{path}'.", lastSharingException);
+        }
+    }
+
+    [CensusWindowsFact]
+    public async Task Fixture_cleanup_waits_for_a_sharing_lock_to_be_released()
+    {
+        var directory = Directory.CreateDirectory(Path.Combine(_root, "locked-child")).FullName;
+        var stream = new FileStream(Path.Combine(directory, "held-file"), FileMode.Create,
+            FileAccess.ReadWrite, FileShare.ReadWrite);
+        Task? cleanup = null;
+        try
+        {
+            cleanup = DeleteFixtureDirectoryAsync(directory);
+            Assert.False(cleanup.IsCompleted);
+            Assert.True(Directory.Exists(directory));
+        }
+        finally
+        {
+            stream.Dispose();
+            if (cleanup is not null) await cleanup.WaitAsync(Eventually.Budget);
+        }
+        Assert.False(Directory.Exists(directory));
+        await DeleteFixtureDirectoryAsync(directory);
+    }
 
     [CensusNonWindowsFact]
     public async Task Unsupported_platform_is_rejected_before_launching_a_fixture()
