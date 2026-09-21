@@ -1,12 +1,14 @@
-param([ValidateSet('build','test')][string]$Check = 'test', [string]$Filter, [switch]$Serialized)
+param([ValidateSet('build','test')][string]$Check = 'test', [string]$Filter, [switch]$Serialized, [string]$Project)
 $ErrorActionPreference = 'Stop'
 $repo = Split-Path $PSScriptRoot -Parent
 $name = if ($Filter) { 'focused' } else { $Check }
+if ($Project) { $name += '-project' }
 if ($Serialized) { $name += '-serialized' }
 $log = Join-Path $repo "t121-$name.log"
 $errorLog = Join-Path $repo "t121-$name.stderr.log"
 $arguments = if ($Check -eq 'build') { @('build','--nologo','--disable-build-servers') } else { @('test','-v','n','--disable-build-servers','--blame-hang-timeout','3m') }
 if ($Filter) { $arguments += @('--filter', $Filter) }
+if ($Project) { $arguments += $Project }
 if ($Serialized) { $arguments += '-m:1' }
 $previousProcessors = $env:DOTNET_PROCESSOR_COUNT
 $process = $null
