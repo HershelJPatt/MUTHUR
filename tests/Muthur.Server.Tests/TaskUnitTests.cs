@@ -2,11 +2,167 @@ using System.Net;
 using System.Net.Http.Json;
 using System.Text.Json;
 using Muthur.Contracts;
+using Muthur.Core;
+using Muthur.Launch;
+using Muthur.Server.Services;
 
 namespace Muthur.Server.Tests;
 
 public sealed class TaskUnitTests
 {
+    private const string ProofCommit = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+    private const string OtherCommit = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
+    private const string ProofBlob = "cccccccccccccccccccccccccccccccccccccccc";
+
+    private sealed class CountingProofRunner : IProcessRunner
+    {
+        public List<string[]> Calls { get; } = [];
+        public Func<IReadOnlyList<string>, ProcessResult?>? Override { get; set; }
+        public int Count(params string[] args) => Calls.Count(call => call.SequenceEqual(args));
+
+        public Task<ProcessResult> RunAsync(string fileName, IReadOnlyList<string> arguments, string workingDirectory,
+            string? stdin = null, TimeSpan? timeout = null, CancellationToken ct = default,
+            IReadOnlyCollection<string>? scrubEnvironment = null, IReadOnlyDictionary<string, string>? environment = null)
+        {
+            Assert.Equal("git", fileName);
+            Assert.Equal(TimeSpan.FromSeconds(10), timeout);
+            Calls.Add(arguments.ToArray());
+            var result = Override?.Invoke(arguments);
+            if (result is not null) return Task.FromResult(result);
+            var output = arguments[0] switch
+            {
+                "cat-file" => arguments[2] == ProofBlob ? "blob" : "commit",
+                "rev-parse" => ProofCommit,
+                "--literal-pathspecs" => arguments[^1] == "evidence"
+                    ? $"040000 tree {OtherCommit}\tevidence\0"
+                    : $"100644 blob {ProofBlob}\t{arguments[^1]}\0",
+                _ => ""
+            };
+            return Task.FromResult(new ProcessResult(0, output, ""));
+        }
+    }
+
+    [Theory]
+    [InlineData(0)]
+    [InlineData(1)]
+    public async Task Immutable_git_proofs_are_reused_only_within_one_instance(int ancestryExit)
+    {
+        var runner = new CountingProofRunner
+        {
+            Override = args => args[0] == "merge-base" ? new(ancestryExit, "", "") : null
+        };
+        for (var instance = 1; instance <= 2; instance++)
+        {
+            var git = new TaskUnitGit(runner, "repo", default);
+            for (var repeat = 0; repeat < 2; repeat++)
+            {
+                await git.Commit(ProofCommit.ToUpperInvariant());
+                await git.BranchName("worker/a");
+                Assert.Equal(ProofBlob, await git.FileBlob(ProofCommit, "evidence/check.txt"));
+                Assert.Equal(ancestryExit == 0, await git.Ancestor(ProofCommit, OtherCommit));
+            }
+            Assert.Equal(instance, runner.Count("cat-file", "-t", ProofCommit));
+            Assert.Equal(instance, runner.Count("cat-file", "-t", OtherCommit));
+            Assert.Equal(instance, runner.Count("cat-file", "-t", ProofBlob));
+            Assert.Equal(instance, runner.Count("check-ref-format", "refs/heads/worker/a"));
+            Assert.Equal(instance, runner.Count("--literal-pathspecs", "ls-tree", "-z", ProofCommit, "--", "evidence"));
+            Assert.Equal(instance, runner.Count("--literal-pathspecs", "ls-tree", "-z", ProofCommit, "--", "evidence/check.txt"));
+            Assert.Equal(instance, runner.Count("merge-base", "--is-ancestor", ProofCommit, OtherCommit));
+        }
+    }
+
+    [Fact]
+    public async Task Git_proof_keys_preserve_paths_commits_ancestry_direction_and_branch_case()
+    {
+        var runner = new CountingProofRunner();
+        var git = new TaskUnitGit(runner, "repo", default);
+        await git.FileBlob(ProofCommit, "check.txt");
+        await git.FileBlob(OtherCommit, "check.txt");
+        await git.FileBlob(ProofCommit, "Check.txt");
+        await git.Ancestor(ProofCommit, OtherCommit);
+        await git.Ancestor(OtherCommit, ProofCommit);
+        await git.BranchName("worker/a");
+        await git.BranchName("worker/A");
+        Assert.Equal(3, runner.Calls.Count(args => args[0] == "--literal-pathspecs"));
+        Assert.Equal(2, runner.Calls.Count(args => args[0] == "merge-base"));
+        Assert.Equal(2, runner.Calls.Count(args => args[0] == "check-ref-format"));
+        Assert.Equal(1, runner.Count("cat-file", "-t", ProofBlob));
+    }
+
+    [Fact]
+    public async Task Branch_heads_are_read_again_even_after_success()
+    {
+        var runner = new CountingProofRunner();
+        var git = new TaskUnitGit(runner, "repo", default);
+        Assert.Equal(ProofCommit, await git.Head("worker/a"));
+        runner.Override = args => args[0] == "rev-parse" ? new(0, OtherCommit, "") : null;
+        Assert.Equal(OtherCommit, await git.Head("worker/a"));
+        runner.Override = args => args[0] == "rev-parse" ? new(128, "", "missing") : null;
+        await Assert.ThrowsAsync<MuthurException>(() => git.Head("worker/a"));
+        runner.Override = null;
+        Assert.Equal(ProofCommit, await git.Head("worker/a"));
+        Assert.Equal(4, runner.Count("rev-parse", "--verify", "refs/heads/worker/a^{commit}"));
+        Assert.Equal(1, runner.Count("check-ref-format", "refs/heads/worker/a"));
+    }
+
+    [Theory]
+    [InlineData("commit")]
+    [InlineData("branch")]
+    [InlineData("tree")]
+    [InlineData("blob")]
+    [InlineData("ancestry")]
+    public async Task Failed_timed_out_and_cancelled_git_probes_are_retried(string probe)
+    {
+        var runner = new CountingProofRunner();
+        var git = new TaskUnitGit(runner, "repo", default);
+        string[] command = probe switch
+        {
+            "commit" => ["cat-file", "-t", ProofCommit],
+            "branch" => ["check-ref-format", "refs/heads/worker/a"],
+            "tree" => ["--literal-pathspecs", "ls-tree", "-z", ProofCommit, "--", "check.txt"],
+            "blob" => ["cat-file", "-t", ProofBlob],
+            _ => ["merge-base", "--is-ancestor", ProofCommit, OtherCommit]
+        };
+        Task Probe() => probe switch
+        {
+            "commit" => git.Commit(ProofCommit),
+            "branch" => git.BranchName("worker/a"),
+            "tree" or "blob" => git.FileBlob(ProofCommit, "check.txt"),
+            _ => git.Ancestor(ProofCommit, OtherCommit)
+        };
+        foreach (var exit in new[] { 128, 124 })
+        {
+            runner.Override = args => args.SequenceEqual(command) ? new(exit, "", "failed") : null;
+            await Assert.ThrowsAsync<MuthurException>(Probe);
+        }
+        runner.Override = args => args.SequenceEqual(command) ? throw new OperationCanceledException() : null;
+        await Assert.ThrowsAsync<OperationCanceledException>(Probe);
+        runner.Override = null;
+        await Probe();
+        await Probe();
+        Assert.Equal(4, runner.Count(command));
+    }
+
+    [Theory]
+    [InlineData("commit")]
+    [InlineData("blob")]
+    [InlineData("tree")]
+    public async Task Successful_commands_with_invalid_proof_are_not_cached(string probe)
+    {
+        var runner = new CountingProofRunner();
+        var git = new TaskUnitGit(runner, "repo", default);
+        runner.Override = args => probe switch
+        {
+            "commit" when args[0] == "cat-file" && args[2] == ProofCommit => new(0, "tag", ""),
+            "blob" when args[0] == "cat-file" && args[2] == ProofBlob => new(0, "tree", ""),
+            "tree" when args[0] == "--literal-pathspecs" => new(0, $"120000 blob {ProofBlob}\tcheck.txt\0", ""),
+            _ => null
+        };
+        await Assert.ThrowsAsync<MuthurException>(() => git.FileBlob(ProofCommit, "check.txt"));
+        runner.Override = null;
+        Assert.Equal(ProofBlob, await git.FileBlob(ProofCommit, "check.txt"));
+    }
+
     private sealed class Fixture : IDisposable
     {
         public HubFactory Hub { get; } = new();

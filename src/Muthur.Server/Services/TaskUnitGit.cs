@@ -6,6 +6,12 @@ namespace Muthur.Server.Services;
 
 internal sealed partial class TaskUnitGit(IProcessRunner runner, string repo, CancellationToken ct)
 {
+    // Immutable observations are reused only within this request; branch heads stay fresh.
+    private readonly HashSet<(string Object, string Type)> objects = [];
+    private readonly Dictionary<(string Commit, string Path), string> files = [];
+    private readonly Dictionary<(string Ancestor, string Descendant), bool> ancestry = [];
+    private readonly HashSet<string> branches = new(StringComparer.Ordinal);
+
     [GeneratedRegex("\\A(?:[0-9a-fA-F]{40}|[0-9a-fA-F]{64})\\z")]
     private static partial Regex ObjectIdPattern();
 
@@ -27,8 +33,9 @@ internal sealed partial class TaskUnitGit(IProcessRunner runner, string repo, Ca
     internal async Task BranchName(string? value)
     {
         if (string.IsNullOrWhiteSpace(value) || value.Length > 250 || value.StartsWith('-') || value == "HEAD" ||
-            !(await Run("check-ref-format", "refs/heads/" + value)).Ok)
+            (!branches.Contains(value) && !(await Run("check-ref-format", "refs/heads/" + value)).Ok))
             throw Fail.Rule("invalid_unit_branch", "Use a named local branch.");
+        branches.Add(value);
     }
 
     internal async Task<string> Head(string branch)
@@ -41,25 +48,33 @@ internal sealed partial class TaskUnitGit(IProcessRunner runner, string repo, Ca
 
     internal async Task Commit(string commit)
     {
-        ObjectId(commit);
+        commit = ObjectId(commit);
+        if (objects.Contains((commit, "commit"))) return;
         var result = await Run("cat-file", "-t", commit);
         if (!result.Ok || result.StdOut.Trim() != "commit")
             throw Fail.Rule("unit_artifact_missing", "The pinned commit is missing; recover artifacts or redispatch.");
+        objects.Add((commit, "commit"));
     }
 
     internal async Task<bool> Ancestor(string ancestor, string descendant)
     {
+        ancestor = ObjectId(ancestor);
+        descendant = ObjectId(descendant);
+        if (ancestry.TryGetValue((ancestor, descendant), out var cached)) return cached;
         await Commit(ancestor);
         await Commit(descendant);
         var result = await Run("merge-base", "--is-ancestor", ancestor, descendant);
         if (result.ExitCode is not (0 or 1)) throw Fail.Rule("unit_git_failed", "Git ancestry could not be established.");
+        ancestry.Add((ancestor, descendant), result.Ok);
         return result.Ok;
     }
 
     internal async Task<string> FileBlob(string commit, string path)
     {
+        commit = ObjectId(commit);
         await Commit(commit);
         PathName(path);
+        if (files.TryGetValue((commit, path), out var cached)) return cached;
         // Probe each component, with literal pathspecs: a symlink in any position is not evidence.
         var parts = path.Split('/');
         string blob = "";
@@ -74,9 +89,14 @@ internal sealed partial class TaskUnitGit(IProcessRunner runner, string repo, Ca
                 throw Fail.Rule("unit_artifact_missing", "A pinned regular committed file is missing; recover artifacts or redispatch.");
             blob = ObjectId(fields[2]);
         }
-        var present = await Run("cat-file", "-t", blob);
-        if (!present.Ok || present.StdOut.Trim() != "blob")
-            throw Fail.Rule("unit_artifact_missing", "The pinned file blob is missing; recover artifacts or redispatch.");
+        if (!objects.Contains((blob, "blob")))
+        {
+            var present = await Run("cat-file", "-t", blob);
+            if (!present.Ok || present.StdOut.Trim() != "blob")
+                throw Fail.Rule("unit_artifact_missing", "The pinned file blob is missing; recover artifacts or redispatch.");
+            objects.Add((blob, "blob"));
+        }
+        files.Add((commit, path), blob);
         return blob;
     }
 
