@@ -10,6 +10,18 @@ public sealed class ClaudeAdapter : IHarnessAdapter
 
     public string? WorkerNote => null;
 
+    public string? CapabilityExecutable => "claude";
+
+    public string? CapabilitySettings(WorkerRequest request)
+    {
+        var inherited = Launch.CapabilitySettings.HashFiles([
+            ("user", Path.Combine(Environment.GetEnvironmentVariable("CLAUDE_CONFIG_DIR") ??
+                Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), ".claude"), "settings.json")),
+            ("project", Path.Combine(request.WorkingDirectory, ".claude", "settings.json")),
+            ("project-local", Path.Combine(request.WorkingDirectory, ".claude", "settings.local.json"))]);
+        return inherited is null ? null : CapabilityHash.Of("acceptEdits\n" + inherited + "\n" + SettingsJson(request));
+    }
+
     public HarnessInvocation Build(WorkerRequest request)
     {
         var settings = Path.Combine(request.ScratchDirectory, "claude-settings.json");
