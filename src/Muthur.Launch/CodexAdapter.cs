@@ -10,6 +10,12 @@ public sealed class CodexAdapter(string name, string? openSourceProvider) : IHar
 {
     public string Name => name;
 
+    public string? CapabilityExecutable => "codex";
+
+    public string? CapabilitySettings(WorkerRequest request) => Launch.CapabilitySettings.HashFiles([
+        ("user", Path.Combine(Environment.GetEnvironmentVariable("CODEX_HOME") ?? Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), ".codex"), "config.toml")),
+        ("project", Path.Combine(request.WorkingDirectory, ".codex", "config.toml"))]);
+
     /// <summary>The workspace-write sandbox keeps .git read-only, so a Codex worker cannot commit; the launcher does it.</summary>
     public string? WorkerNote =>
         "Your sandbox does not allow writing to .git, so `git add`/`git commit` will be refused. That is expected and is NOT a blocker: " +
