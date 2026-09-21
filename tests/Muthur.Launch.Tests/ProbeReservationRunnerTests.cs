@@ -12,9 +12,13 @@ public sealed class ProbeReservationRunnerTests
         public Exception? AdmissionFailure { get; init; }
         public Exception? ReleaseFailure { get; init; }
         public int Releases { get; private set; }
+        public Action? OnAdmission { get; init; }
         public Action<CancellationToken>? OnRelease { get; init; }
-        public Task<ProbeAdmissionDto> AdmitAsync(ProbeAdmissionRequest request, CancellationToken ct = default) =>
-            AdmissionFailure is { } failure ? Task.FromException<ProbeAdmissionDto>(failure) : Task.FromResult(new ProbeAdmissionDto("reservation", request.Task, request.RunId, MayExecute));
+        public Task<ProbeAdmissionDto> AdmitAsync(ProbeAdmissionRequest request, CancellationToken ct = default)
+        {
+            OnAdmission?.Invoke();
+            return AdmissionFailure is { } failure ? Task.FromException<ProbeAdmissionDto>(failure) : Task.FromResult(new ProbeAdmissionDto("reservation", request.Task, request.RunId, MayExecute));
+        }
         public Task ReleaseAsync(ProbeReleaseRequest request, CancellationToken ct = default)
         {
             Assert.Equal("reservation", request.ReservationId);
@@ -43,6 +47,50 @@ public sealed class ProbeReservationRunnerTests
         Assert.Same(failure, await Assert.ThrowsAsync<InvalidOperationException>(() => new ProbeReservationRunner(client)
             .RunAsync<int>(Request, _ => throw new Exception("Must not run"))));
         Assert.Equal(0, client.Releases);
+    }
+
+    [Fact]
+    public async Task Uncertain_cleanup_retains_reservation_and_original_failure()
+    {
+        var cause = new ApplicationException("cleanup");
+        var failure = new ProbeCleanupUncertainException("Process cleanup unconfirmed", cause);
+        var client = new Client();
+        var error = await Assert.ThrowsAsync<InvalidOperationException>(() => new ProbeReservationRunner(client)
+            .RunAsync<int>(Request, _ => Task.FromException<int>(failure)));
+        Assert.Contains("reservation", error.Message);
+        Assert.Contains("retained pending confirmed process cleanup", error.Message);
+        Assert.Same(failure, error.InnerException);
+        Assert.Same(cause, failure.InnerException);
+        Assert.Equal(0, client.Releases);
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task Cancellation_after_admission_never_executes_and_only_releases_grant(bool mayExecute)
+    {
+        using var caller = new CancellationTokenSource();
+        var callbacks = 0;
+        var client = new Client
+        {
+            MayExecute = mayExecute,
+            OnAdmission = caller.Cancel,
+            OnRelease = token =>
+            {
+                Assert.False(token.IsCancellationRequested);
+                Assert.True(token.CanBeCanceled);
+                Assert.NotEqual(caller.Token, token);
+            }
+        };
+        var execution = new ProbeReservationRunner(client).RunAsync(Request, _ =>
+        {
+            callbacks++;
+            return Task.FromResult(42);
+        }, caller.Token);
+        if (mayExecute) await Assert.ThrowsAnyAsync<OperationCanceledException>(() => execution);
+        else Assert.Contains("replay", (await Assert.ThrowsAsync<InvalidOperationException>(() => execution)).Message);
+        Assert.Equal(0, callbacks);
+        Assert.Equal(mayExecute ? 1 : 0, client.Releases);
     }
 
     [Theory]
