@@ -1,5 +1,8 @@
 using System.Diagnostics;
+using System.IO.Compression;
 using System.IO.Pipes;
+using System.Security.Cryptography;
+using System.Text;
 using System.Text.Json;
 using Muthur.Launch;
 
@@ -9,7 +12,93 @@ public sealed class VerificationTests : IDisposable
 {
     private readonly string root = Path.Combine(Path.GetTempPath(), "muthur-cli-tests", Guid.NewGuid().ToString("N"));
     public VerificationTests() => Directory.CreateDirectory(root);
-    public void Dispose() => Directory.Delete(root, true);
+    public void Dispose() => VerificationFiles.DeleteOwned(root, Path.GetDirectoryName(root)!);
+
+    [Fact]
+    public async Task Committed_spec_archive_preserves_exact_bytes_and_digest()
+    {
+        var repo = Path.Combine(root, "repo");
+        Directory.CreateDirectory(Path.Combine(repo, "specs"));
+        var bytes = Encoding.UTF8.GetBytes("\ufeff# Spécification 日本語\r\nfirst\nlast\r\n\n");
+        var spec = Path.Combine(repo, "specs", "T-107.md");
+        File.WriteAllBytes(spec, bytes);
+        File.WriteAllText(Path.Combine(repo, "muthur.project.json"), "{\"verification\":" +
+            JsonSerializer.Serialize(VerificationRecipes.Muthur, VerificationJsonContext.Default.VerificationRecipe) + "}");
+        var processes = new ProcessRunner();
+        foreach (var args in new[] {
+            new[] { "init", "--quiet" },
+            new[] { "-c", "core.autocrlf=false", "add", "." },
+            new[] { "-c", "user.name=Verification Fixture", "-c", "user.email=fixture@example.invalid", "commit", "--quiet", "-m", "fixture" } })
+        {
+            var command = await processes.RunAsync("git", args, repo);
+            Assert.True(command.Ok, command.Message);
+        }
+        var committed = await processes.RunAsync("git", ["rev-parse", "HEAD:specs/T-107.md"], repo);
+        Assert.True(committed.Ok, committed.Message);
+        var blob = Encoding.ASCII.GetBytes("blob " + bytes.Length + "\0").Concat(bytes).ToArray();
+        Assert.Equal(Convert.ToHexStringLower(SHA1.HashData(blob)), committed.StdOut.Trim());
+        File.WriteAllText(spec, "uncommitted replacement");
+        var output = Path.Combine(root, "output");
+        var runner = new VerificationRunner(new GitFixtureRunner(), inputProbe: (_, _) => Task.CompletedTask);
+        var result = await runner.RunAsync(new(repo, "HEAD", "specs/T-107.md", "muthur", output, Path.Combine(root, "cache")));
+        Assert.Equal(1, result.ExitCode); // Stop at the fake build after capturing the real committed input.
+        var evidence = JsonSerializer.Deserialize(File.ReadAllText(result.EvidencePath!), VerificationJsonContext.Default.VerificationEvidence)!;
+        Assert.Contains(evidence.Stages, stage => stage.Name == "build" && stage.Status == "failed");
+        Assert.Equal(bytes, File.ReadAllBytes(Path.Combine(output, "spec.bin")));
+        Assert.Equal(Convert.ToHexStringLower(SHA256.HashData(bytes)), evidence.SpecSha256);
+        Assert.NotEqual(VerificationFiles.Hash(""), evidence.SpecSha256);
+        Assert.False(File.Exists(Path.Combine(output, "spec.zip")));
+        Assert.True(evidence.CleanupSucceeded);
+    }
+
+    [Theory]
+    [InlineData("missing")]
+    [InlineData("duplicate")]
+    [InlineData("directory")]
+    [InlineData("symlink")]
+    public async Task Invalid_spec_archive_is_refused_without_extracting_paths(string defect)
+    {
+        var repo = Path.Combine(root, "repo");
+        Directory.CreateDirectory(repo);
+        var output = Path.Combine(root, "output");
+        var result = await new VerificationRunner(new RecipeRunner(repo, "archive-" + defect)).RunAsync(
+            new(repo, "HEAD", "specs/T-107.md", "muthur", output, Path.Combine(root, "cache")));
+        Assert.Equal(2, result.ExitCode);
+        Assert.Contains("exactly one matching regular file", result.Error);
+        Assert.False(File.Exists(Path.Combine(output, "spec.bin")));
+        Assert.False(File.Exists(Path.Combine(output, "spec.zip")));
+        Assert.False(File.Exists(Path.Combine(root, "escape")));
+    }
+
+    [Fact]
+    public void Owned_nested_read_only_git_objects_are_deleted()
+    {
+        var owned = Path.Combine(root, "owned");
+        var objects = Path.Combine(owned, "nested", ".git", "objects", "ab");
+        Directory.CreateDirectory(objects);
+        var file = Path.Combine(objects, "cdef");
+        File.WriteAllText(file, "git object fixture");
+        File.SetAttributes(file, File.GetAttributes(file) | FileAttributes.ReadOnly | FileAttributes.Archive);
+        using var cancel = new CancellationTokenSource();
+        cancel.Cancel();
+        Assert.Throws<OperationCanceledException>(() => VerificationFiles.DeleteOwned(owned, root, cancel.Token));
+        Assert.True((File.GetAttributes(file) & FileAttributes.ReadOnly) != 0);
+        VerificationFiles.DeleteOwned(owned, root);
+        Assert.False(Directory.Exists(owned));
+    }
+
+    [Fact]
+    public void Processor_architecture_is_inherited_and_hashed_as_toolchain_identity()
+    {
+        Assert.Contains("PROCESSOR_ARCHITECTURE", VerificationEnvironment.Allowed);
+        var environment = VerificationEnvironment.Create(root, "http://127.0.0.1:12345");
+        var inherited = Environment.GetEnvironmentVariable("PROCESSOR_ARCHITECTURE");
+        Assert.Equal(string.IsNullOrEmpty(inherited) ? null : inherited, environment.GetValueOrDefault("PROCESSOR_ARCHITECTURE"));
+        var identity = VerificationEnvironment.Identity(environment);
+        Assert.Equal(VerificationFiles.Hash(inherited is { Length: > 0 } ? inherited : "<absent>"), identity["environment/PROCESSOR_ARCHITECTURE"]);
+        environment["PROCESSOR_ARCHITECTURE"] = "different-architecture";
+        Assert.NotEqual(VerificationCache.Key(identity), VerificationCache.Key(VerificationEnvironment.Identity(environment)));
+    }
 
     [Theory]
     [InlineData("../outside")]
@@ -305,6 +394,11 @@ public sealed class VerificationTests : IDisposable
         {
             Assert.Throws<IOException>(() => VerificationFiles.PlainPath(Path.Combine(link, "new-output")));
             Assert.Throws<IOException>(() => VerificationFiles.Inventory(root));
+            var readOnly = Path.Combine(target, "keep");
+            File.WriteAllText(readOnly, "outside owned junction");
+            File.SetAttributes(readOnly, File.GetAttributes(readOnly) | FileAttributes.ReadOnly);
+            Assert.Throws<IOException>(() => VerificationFiles.DeleteOwned(root, Path.GetDirectoryName(root)!));
+            Assert.True((File.GetAttributes(readOnly) & FileAttributes.ReadOnly) != 0);
         }
         finally { Directory.Delete(link); }
     }
@@ -491,6 +585,16 @@ public sealed class VerificationTests : IDisposable
             throw new InvalidOperationException("Unexpected child process.");
     }
 
+    private sealed class GitFixtureRunner : IProcessRunner
+    {
+        public Task<ProcessResult> RunAsync(string fileName, IReadOnlyList<string> arguments, string workingDirectory,
+            string? stdin = null, TimeSpan? timeout = null, CancellationToken ct = default,
+            IReadOnlyCollection<string>? scrubEnvironment = null, IReadOnlyDictionary<string, string>? environment = null) =>
+            fileName == "git"
+                ? new ProcessRunner().RunAsync(fileName, arguments, workingDirectory, stdin, timeout, ct, scrubEnvironment, environment)
+                : Task.FromResult(new ProcessResult(1, "", "fixture stops before build"));
+    }
+
     private sealed class RecipeRunner(string repo, string failure) : IProcessRunner
     {
         public List<IReadOnlyDictionary<string, string>> Environments { get; } = [];
@@ -509,8 +613,20 @@ public sealed class VerificationTests : IDisposable
                 else if (arguments.SequenceEqual(new[] { "rev-parse", "--git-common-dir" })) output = Path.Combine(repo, ".git");
                 else if (arguments[0] == "rev-parse") output = new string('a', 40);
                 else if (arguments[0] == "ls-tree") output = "100644 blob " + new string('b', 40) + "\t" + arguments[^1];
-                else if (arguments[0] == "show" && arguments[1].StartsWith("--output=", StringComparison.Ordinal))
-                    File.WriteAllText(arguments[1][9..], "frozen spec");
+                else if (arguments[0] == "archive")
+                {
+                    using var archive = ZipFile.Open(arguments[2][9..], ZipArchiveMode.Create);
+                    archive.CreateEntry("../escape");
+                    if (failure != "archive-missing")
+                    {
+                        var entry = archive.CreateEntry(arguments[^1]);
+                        if (failure == "archive-directory") entry.ExternalAttributes = (int)FileAttributes.Directory;
+                        if (failure == "archive-symlink") entry.ExternalAttributes = 0xa000 << 16;
+                        using var writer = new StreamWriter(entry.Open());
+                        writer.Write("frozen spec");
+                    }
+                    if (failure == "archive-duplicate") archive.CreateEntry(arguments[^1]);
+                }
                 else if (arguments[0] == "show") output = "{\"verification\":" + JsonSerializer.Serialize(VerificationRecipes.Muthur, VerificationJsonContext.Default.VerificationRecipe) + "}";
                 else if (arguments[0] == "worktree" && arguments[1] == "add") Directory.CreateDirectory(arguments[3]);
                 else if (arguments[0] == "worktree" && arguments[1] == "remove") Directory.Delete(arguments[3], true);

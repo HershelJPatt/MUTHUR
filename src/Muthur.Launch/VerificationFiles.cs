@@ -133,11 +133,26 @@ public static class VerificationFiles
             ct.ThrowIfCancellationRequested();
             foreach (var entry in Directory.EnumerateFileSystemEntries(dir))
             {
+                ct.ThrowIfCancellationRequested();
                 PlainPath(entry);
                 if (Directory.Exists(entry)) Check(entry);
             }
         }
         Check(path);
+        void ClearReadOnly(string dir)
+        {
+            ct.ThrowIfCancellationRequested();
+            foreach (var entry in Directory.EnumerateFileSystemEntries(dir))
+            {
+                ct.ThrowIfCancellationRequested();
+                PlainPath(entry);
+                var attributes = File.GetAttributes(entry);
+                if ((attributes & FileAttributes.Directory) != 0) ClearReadOnly(entry);
+                else if ((attributes & FileAttributes.ReadOnly) != 0)
+                    File.SetAttributes(entry, attributes & ~FileAttributes.ReadOnly);
+            }
+        }
+        ClearReadOnly(path);
         ct.ThrowIfCancellationRequested();
         Directory.Delete(path, true);
     }

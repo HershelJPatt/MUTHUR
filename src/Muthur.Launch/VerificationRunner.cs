@@ -1,4 +1,5 @@
 using System.Diagnostics;
+using System.IO.Compression;
 using System.Net;
 using System.Net.Sockets;
 using System.Runtime.InteropServices;
@@ -93,7 +94,21 @@ public sealed class VerificationRunner(IProcessRunner processes, TimeProvider? t
             };
             SaveOwnership(ownership);
             var frozenSpec = Path.Combine(output, "spec.bin");
-            await Git(repo, ["show", "--output=" + frozenSpec, commit + ":" + request.Spec], budget.Token, environment);
+            var specArchive = Path.Combine(output, "spec.zip");
+            try
+            {
+                await Git(repo, ["archive", "--format=zip", "--output=" + specArchive, commit, request.Spec], budget.Token, environment);
+                using var archive = ZipFile.OpenRead(specArchive);
+                var entries = archive.Entries.Where(entry => entry.FullName == request.Spec).ToArray();
+                if (entries.Length != 1 || entries[0].Name.Length == 0 ||
+                    (entries[0].ExternalAttributes & (int)(FileAttributes.Directory | FileAttributes.ReparsePoint)) != 0 ||
+                    ((entries[0].ExternalAttributes >> 16) & 0xf000) is not (0 or 0x8000))
+                    throw new IOException("Spec archive must contain exactly one matching regular file.");
+                using var input = entries[0].Open();
+                await using var destination = new FileStream(frozenSpec, FileMode.CreateNew);
+                await input.CopyToAsync(destination, budget.Token);
+            }
+            finally { if (File.Exists(specArchive)) File.Delete(specArchive); }
             evidencePath = Path.Combine(output, "evidence.json");
             evidence = new()
             {
