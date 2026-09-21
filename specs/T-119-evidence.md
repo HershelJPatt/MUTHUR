@@ -1,0 +1,51 @@
+# T-119 verification evidence
+
+## Scope and decisions
+Claimed as orchestrator-t-119. Task show contained no question/answer decisions or prerequisites. T-103 depends on this task. Frozen spec: specs/T-119.md. Product behavior, shared admission, retained reservation, permission gates and limits are unchanged. Implementation diff is confined to CapabilityProbeTests.cs.
+
+## Baseline
+Started from main cd8325fc0986acd77d54b16de6d0b41d4f735cf4 with TEMP/TMP/GIT_CEILING_DIRECTORIES=C:/WorkSrc/MUTHUR/.t119. Two uncertain-cleanup cases passed, followed by all 27 CapabilityProbeTests cases. No capability-probe directories remained. The historical lock holder remains unknown; no flake rate or live-harness recovery is claimed.
+
+## Implementation and review
+Implementer-tier dispatch used codex/gpt-6-astra and produced a8850e609defe58bce3231ffc06f57047418769f, committed by the launcher. Every changed line was reviewed. The fixture now tracks all real runner calls, refuses deletion on uncertain real ownership, observes retained production scratch, explicitly removes recorded owned worktrees through Git, and strictly deletes/asserts the fixture root. Two new cases exercise test-owned cleanup while the fake reservation remains retained. No retry or swallowed cleanup failures were added.
+
+The first worker could not create the external short TEMP directory. The corrected continuation used a short worktree-local TEMP root, but its build was denied access to the user's NuGet.Config. It produced no source changes and ran no tests. Permissions were not expanded. Orchestrator independently ran the required checks using its authorized environment. Both worker worktrees were removed after preserving their reports/build logs in artifacts/T-119.
+
+Integrated main 2e51fd4e835a59dc82c506d55ec9b0a20d575075 before final verification. T-101/T-102 had landed during implementation; no conflict occurred. The final diff against that main consists only of this task's spec/evidence and probe fixture.
+
+## Completed checks
+- dotnet build --disable-build-servers: exit 0, zero warnings/errors.
+- Complete CapabilityProbeTests class: 29 passed, zero failed/skipped.
+- Three fixed repetitions of Uncertain_cleanup/Test_owned_cleanup filter: 5/5 passed each (includes the existing reservation-runner case), no retries in the fixed repetition run.
+- Initial parallel full suite: Core 3742, XmlDocCheck 64, CLI 321, Server 914 plus one explicit skip passed; Launch 138 passed and one prose-case Git commit setup timeout (exit 124). No cleanup assertion failure. Failure logs are preserved; the cause is not attributed. A separately recorded serial-project full run passed: Core 3742, XmlDocCheck 64, CLI 321, Launch 139, Server 914 plus one existing skip; total 5180 passed, zero failed, one skipped. No test or production timeout was changed. The command uses -m:1, as recorded in the revised frozen spec, and no publish/worker verification ran concurrently.
+- Pinned install from a151768 succeeded. Installed verification: passed, 44 CLI/HTTP commands, zero cleanup failures.
+
+Commands used artifacts/T-119/verify.ps1 with bounded process waits, automatic heartbeats and a short isolated TEMP root. Full output, TRX, worker reports and summary attempts are under artifacts/T-119 or test-project TestResults. Local utility summaries were attempted before large-log inspection; some timed out or were refused by the inference lock. Exact result lines were verified directly. Summary output is advisory.
+
+
+## Cleanup and handoff
+The final process audit found no task-owned test/scratch-hub processes or retained capability-probe directories. The checked isolated TEMP root C:/WorkSrc/MUTHUR/.t119 was removed. Cleanup evidence is artifacts/T-119/cleanup.txt. Both worker worktrees were already removed. Task worktree and ignored evidence remain available for validators.
+
+The installed commit a151768 and final test source are identical; later commits change only task spec/evidence. git diff --check passes. Submit task/T-119-probe-cleanup for independent conductor validation; the orchestrator exits after submission and does not wait for or perform landing.
+
+## Resumption after independent rejection (2026-09-21)
+Resumed existing branch at 508a8cc; it matched the ledger. Independent validator passed the 29-case class and two cleanup repetitions, then rejected repetition 3 because cleanup mode had zero model invocations. No cleanup IOException or retained capability directory was observed. No task questions, decisions or prerequisites changed scope. Newer main fcec23d contains protected-definition procedure documentation only relative to our integrated base; this test-only task does not apply installed agent definitions.
+
+Code review established that a simulated removal failure can mask an earlier setup refusal. The historical command is unknown. Unit B was frozen at 1e4260b and delegated to implementer tier codex/gpt-6-astra, run 4e5a023984b94ff68e2dcff26021eeb8. Launcher committed 954aebe after worker verification was blocked by NuGet.Config access denial. No worker tests ran. Reviewed all changes and integrated; removed accidentally launcher-captured build logs in f0d4a66. Worker worktree was removed after archiving evidence.
+
+Unit B adds ordered command/exit/timeout/exception diagnostics while preserving exact invocation and ownership requirements. Two deterministic init/commit injected-failure cases verify that zero invocations are diagnosed, simulation is labeled, output streams are excluded, real retained worktrees are removed and the reservation stays retained. No production code, test timeout, permissions, retries or cache/admission semantics changed. The injected failures demonstrate the masking path, not the historical cause.
+
+Independent checks at f0d4a66 used artifacts/T-119-resume/verify.ps1 with TEMP/TMP/GIT_CEILING_DIRECTORIES=C:/WorkSrc/MUTHUR/.t119r and bounded waits/heartbeats. Build exit 0. Its detailed logs were inadvertently overwritten while archiving worker logs and are now explicitly named worker-build.*; build exit is retained in the command transcript and build-result.txt, and no warning-count claim is made. Three fixed cleanup-filter invocations passed 7 cases each. Full CapabilityProbeTests class passed 31 cases. No retries occurred.
+
+Final serialized full suite: 5182 passed, 0 failed, 1 existing platform skip (CLI 321, Core 3742, Launch 141, Server 914 + 1 skip, XmlDocCheck 64). Installation reports exact source task/T-119-probe-cleanup f0d4a66. Installed verification passed 44 CLI/HTTP commands with cleanupFailures empty. Utility summary completed; exact result lines and structured installed evidence were checked directly. The validator's zero-invocation observation did not recur in this acceptance sequence; its original cause remains unknown and is not represented as repaired by diagnostics.
+
+Cleanup: no retained capability-probe roots or task test/hub/git processes. The isolated install left compiler PID 27840 holding analyzer modules inside this run's .t119r directory. Its loaded module paths and installation-era start time established ownership; that compiler was stopped, then TEMP removal succeeded. This is installation scratch cleanup evidence, not identification of the historical probe lock. Completed worker worktree removed. Live hub identity remained PID 43640, startedAt 2026-09-21T00:57:33.4133699Z. Task branch and ignored verification artifacts are preserved for validation. Final evidence-only commit does not change tested or installed source. No push, default-branch merge, external account probe, protected-definition application, or live hub mutation was performed.
+
+## Second validation resumption — Unit C (2026-09-21)
+Resumed afec564, matching the ledger. Latest independent validator rejected Host_setup_never_runs_configured_helpers(process) at a fixture Git commit; its bare assertion omitted the exit code. No cleanup failure or retained probe directory was observed. No decisions or prerequisites changed scope. Historic lock holder and this prior command's failure cause remain unknown.
+
+Frozen Unit C ed80fc0 delegated to implementer tier codex/gpt-6-astra, run 97549da94fad465ca4028ef34da9a787. Launcher committed dd37a63; worker build was blocked by NuGet.Config sandbox access and ran no tests. Reviewed every changed line: shared fixture Git assertions now include arguments, working directory, exit code and existing observations; both rev-parse calls assert success before becoming BaseCommit. No timeout, command order, production behavior, permission, reservation or cleanup changes. Archived then removed launcher-captured scratch logs in fde73e4; completed worker worktree removed.
+
+Independent acceptance tested and installed fde73e49d34cb6f9b2b912c63213734db0546430 using artifacts/T-119-c/verify.ps1, unique short TEMP/TMP/GIT_CEILING_DIRECTORIES C:/WorkSrc/MUTHUR/.t119c, bounded process-tree deadlines and automatic heartbeats. Build passed with zero warnings/errors. Full probe class 31/31 passed (including all seven helper-safety cases). Three fixed cleanup-filter invocations each passed 7/7. Serialized full suite passed 5182 with zero failures and one existing platform skip: CLI 321, Core 3742, Launch 141, Server 914 plus one skip, XmlDocCheck 64. Installed check passed 44 CLI/HTTP commands with cleanupFailures empty. No test retries occurred. Required utility summary completed; exact result lines and structured installed evidence verified. Prior setup failure did not recur, and diagnostics are not represented as a repair of its unknown cause.
+
+Final audit: no capability-probe directories or task test/scratch-hub processes remained. Installation compiler PID 73684 (start 2026-09-21T16:41:54Z) held this run's .t119c analyzer DLLs; loaded-module evidence is artifacts/T-119-c/compiler-ownership.json. Stopped that owned compiler, confirmed exit, and successfully removed the isolated TEMP root. This is installation cleanup evidence, not the historical probe lock holder. Task branch and ignored evidence remain for validation; no scratch process is left running. Final evidence-only commit leaves tested/installed source unchanged. No push, default-branch merge, live hub mutation or real account probe.
