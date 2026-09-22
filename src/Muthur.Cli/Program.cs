@@ -27,6 +27,7 @@ OverseerCommands.AddTo(root);
 InboundCommands.AddTo(root);
 OutboundCommands.AddTo(root);
 KitCommands.AddTo(root);
+SimCommands.AddTo(root);
 
 var parsed = root.Parse(args);
 if (args.FirstOrDefault() == "verify" && VerificationCommands.ParseError(parsed) is { } error)

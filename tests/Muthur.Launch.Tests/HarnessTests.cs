@@ -37,6 +37,34 @@ public sealed class HarnessTests : IDisposable
         new("C:/repo/.worktrees/w1", "do the unit", model, "C:/repo/.git", ["dotnet *", "git commit *"], ["git push*", "muthur *"], _scratch, effort);
 
     [Fact]
+    public void The_sim_harness_is_the_cli_itself_reading_the_prompt_on_stdin()
+    {
+        var invocation = Harnesses.Find("sim")!.Build(Request(model: "scripted"));
+
+        Assert.Equal("muthur", invocation.FileName);
+        Assert.Equal(["sim", "agent", "--report", Path.Combine(_scratch, "sim-report.txt"), "--cd", "C:/repo/.worktrees/w1"], invocation.Arguments);
+        Assert.Equal("do the unit", invocation.Stdin);
+        Assert.Null(Harnesses.Find("sim")!.WorkerNote);
+    }
+
+    [Theory]
+    [InlineData(0, "STATUS: done | NOTES: landed", true)]
+    [InlineData(0, "STATUS: blocked | NOTES: asked the founder", false)]
+    [InlineData(0, null, false)]
+    [InlineData(7, "STATUS: done", false)]
+    public void A_sim_session_succeeds_only_when_it_exited_cleanly_and_reported_done(int exit, string? report, bool success)
+    {
+        var request = Request(model: "scripted");
+        if (report is not null) File.WriteAllText(Path.Combine(_scratch, "sim-report.txt"), report.Replace(" | ", "\n"));
+
+        var outcome = Harnesses.Find("sim")!.Interpret(request, new ProcessResult(exit, "", exit == 0 ? "" : "boom"));
+
+        Assert.Equal(success, outcome.Success);
+        Assert.False(outcome.RateLimited);
+        if (report is not null) Assert.Contains(report.Split(" | ")[0], outcome.Report, StringComparison.Ordinal);
+    }
+
+    [Fact]
     public void Claude_runs_headless_with_permissions_in_a_settings_file_and_the_prompt_on_stdin()
     {
         var invocation = Harnesses.Find("claude")!.Build(Request());

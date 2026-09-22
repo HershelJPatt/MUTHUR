@@ -46,6 +46,7 @@ public static class Harnesses
         new ClaudeAdapter(),
         new CodexAdapter("codex", openSourceProvider: null),
         new CodexAdapter("codex-oss", openSourceProvider: "ollama"),
+        new SimAdapter(),
     ];
 
     public static IHarnessAdapter? Find(string name) =>

@@ -100,7 +100,7 @@ public static class SystemCommands
         return report.Fail > 0 ? ExitCodes.Error : ExitCodes.Ok;
     }
 
-    private static async Task<int> UpAsync(ParseResult parse, CancellationToken ct)
+    internal static async Task<int> UpAsync(ParseResult parse, CancellationToken ct)
     {
         var probe = new HubClient(null, TimeSpan.FromSeconds(3));
         var current = await probe.GetAsync(Routes.Status, ct);
