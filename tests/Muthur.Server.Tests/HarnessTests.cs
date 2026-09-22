@@ -28,6 +28,26 @@ public sealed class HarnessTests : IDisposable
     }
 
     [Fact]
+    public async Task A_disabled_candidate_stays_in_the_file_as_a_toggle_and_is_never_offered()
+    {
+        // The shipped local models are toggled off: the file lists them, the hub staffs nothing on them.
+        var utility = await TierAsync("utility");
+        Assert.Empty(utility.Candidates);
+        Assert.Contains("\"enabled\": false", File.ReadAllText(Path.Combine(_hub.DataDir, MuthurEnvironment.HarnessFile)));
+
+        File.WriteAllText(Path.Combine(_hub.DataDir, MuthurEnvironment.HarnessFile),
+            """
+            { "tiers": { "utility": [
+                { "harness": "codex-oss", "model": "off", "account": "local", "enabled": false },
+                { "harness": "codex-oss", "model": "on", "account": "local", "enabled": true },
+                { "harness": "codex-oss", "model": "default", "account": "local" } ] } }
+            """);
+
+        var edited = await TierAsync("utility");
+        Assert.Equal(["on", "default"], edited.Candidates.Select(c => c.Model));
+    }
+
+    [Fact]
     public async Task A_catalog_that_cannot_be_read_is_reported_rather_than_crashing_the_endpoint()
     {
         await TierAsync("implementer");

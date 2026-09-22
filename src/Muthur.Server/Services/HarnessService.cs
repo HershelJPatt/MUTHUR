@@ -137,7 +137,9 @@ public sealed class HarnessService(Ledger ledger, MuthurOptions options)
                     var model = c.TryGetProperty("model", out var mo) ? mo.GetString() ?? "" : "";
                     var account = c.TryGetProperty("account", out var ac) ? ac.GetString() : null;
                     var effort = c.TryGetProperty("reasoningEffort", out var re) ? re.GetString() : null;
-                    if (harness.Length > 0) candidates.Add(new HarnessCandidate(harness, model, account, effort is { Length: > 0 } ? effort : null));
+                    // "enabled": false keeps a candidate in the file as a toggle without staffing anything on it.
+                    var enabled = !c.TryGetProperty("enabled", out var en) || en.ValueKind != JsonValueKind.False;
+                    if (harness.Length > 0 && enabled) candidates.Add(new HarnessCandidate(harness, model, account, effort is { Length: > 0 } ? effort : null));
                 }
                 tiers.Add(new CatalogTier(tier.Name.ToLowerInvariant(), candidates));
             }

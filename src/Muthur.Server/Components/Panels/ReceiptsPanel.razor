@@ -182,13 +182,13 @@
         $"{Duration(task.ValidatingSeconds)} validating · {Duration(task.InProgressSeconds)} working";
 
     /// <summary>"42s", "7m", "3.5h", "2.1d" — the board's vocabulary, with a fraction where an hour is too coarse.</summary>
-    private static string Duration(double seconds) => seconds switch
-    {
-        < 60 => ((int)seconds).ToString(CultureInfo.InvariantCulture) + "s",
-        < 3600 => ((int)(seconds / 60)).ToString(CultureInfo.InvariantCulture) + "m",
-        < 86400 => (seconds / 3600).ToString("0.#", CultureInfo.InvariantCulture) + "h",
-        _ => (seconds / 86400).ToString("0.#", CultureInfo.InvariantCulture) + "d",
-    };
+    // Plain comparisons, not relational patterns: the Razor parser reads a pattern like "less-than 60 =>" inside @code as
+    // an opening tag and the panel stops compiling.
+    private static string Duration(double seconds) =>
+        seconds < 60 ? ((int)seconds).ToString(CultureInfo.InvariantCulture) + "s"
+        : seconds < 3600 ? ((int)(seconds / 60)).ToString(CultureInfo.InvariantCulture) + "m"
+        : seconds < 86400 ? (seconds / 3600).ToString("0.#", CultureInfo.InvariantCulture) + "h"
+        : (seconds / 86400).ToString("0.#", CultureInfo.InvariantCulture) + "d";
 
     /// <summary>What one harness reported for one run. Invariant, because the hub's culture is not the founder's.</summary>
     private static string Usd(decimal cost) => "$" + cost.ToString("0.00", CultureInfo.InvariantCulture);

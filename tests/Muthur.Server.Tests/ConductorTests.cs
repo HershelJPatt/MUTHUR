@@ -17,7 +17,7 @@ namespace Muthur.Server.Tests;
 public sealed class ConductorTests : IDisposable
 {
     private readonly HubFactory _hub = new();
-    private readonly TestRepo _repo = new();
+    private readonly TestRepo _repo = new(integrationChecks: true);
 
     public ConductorTests()
     {
@@ -2516,7 +2516,11 @@ public sealed class ConductorTests : IDisposable
     /// A task its owner took all the way to validated. The project requires no validators, so <c>implemented</c>
     /// is the whole round and the state it ends in is the state a passed validation leaves a task in.
     /// </summary>
-    private async Task<string> ValidatedTaskAsync(HttpClient owner, string title = "Ship the export", int priority = 0)
+    /// <param name="integrate">
+    /// Whether to supply the passing integration candidate a land needs. Only one candidate may be active, so a
+    /// test that validates two tasks integrates the second once the first has been promoted.
+    /// </param>
+    private async Task<string> ValidatedTaskAsync(HttpClient owner, string title = "Ship the export", int priority = 0, bool integrate = true)
     {
         var task = await owner.AddTaskAsync(title, priority: priority);
         (await owner.ClaimAsync(task.Id)).EnsureSuccessStatusCode();
@@ -2524,6 +2528,7 @@ public sealed class ConductorTests : IDisposable
         _repo.BranchWithFile(Branch(task.Id), $"{task.Id}.txt", $"{task.Id}\n");
         (await owner.PostActionAsync(task.Id, "implemented", new ImplementedRequest(Branch(task.Id)))).EnsureSuccessStatusCode();
         Assert.Equal(TaskState.Validated, (await _hub.Founder().GetTaskAsync(task.Id)).Task.State);
+        if (integrate) await _hub.PassIntegrationAsync(_repo, task.Id);
         return task.Id;
     }
 
@@ -2553,21 +2558,23 @@ public sealed class ConductorTests : IDisposable
     }
 
     /// <summary>
-    /// The default branch checked out with uncommitted changes, which is the refusal that fires most often on a
-    /// machine that is also worked in. Unlike a deleted branch it leaves the task branch alone, so a test can
-    /// move its head while the cause persists.
+    /// The default branch checked out, which is the refusal that fires most often on a machine that is also
+    /// worked in: exact promotion moves the ref, and will not do so under somebody's working tree. Unlike a
+    /// deleted branch it leaves the task branch alone, so a test can move its head while the cause persists.
     /// </summary>
-    private void DirtyTheCheckout() => _repo.Write("README.md", "somebody is part-way through editing this\n");
+    private void CheckOutMain() => _repo.Git("checkout", "-q", "main");
 
-    private void CleanTheCheckout() => _repo.Git("checkout", "--", "README.md");
+    private void DetachFromMain() => _repo.Git("checkout", "-q", "--detach");
 
     /// <summary>A real commit on the task branch: what "fix the cause and push" actually does to the head.</summary>
     private void CommitOnBranch(string branch)
     {
+        var standing = _repo.Git("rev-parse", "--abbrev-ref", "HEAD");
         _repo.Git("checkout", "-q", branch);
         _repo.Write("fix.txt", $"fixed at {_repo.Git("rev-parse", "HEAD")}\n");
         _repo.Commit($"{branch}: another go");
-        _repo.Git("checkout", "-q", "main");
+        if (standing == "HEAD") _repo.Git("checkout", "-q", "--detach", "main");
+        else _repo.Git("checkout", "-q", standing);
     }
 
     [Fact]
@@ -2592,8 +2599,8 @@ public sealed class ConductorTests : IDisposable
         Assert.Equal("owner", landed.Payload.GetProperty("owner").GetString());
         Assert.Equal($"landed {id}, which owner did not survive to land", (await Conductor.StatusAsync()).LastAction);
 
-        // And the merge is really in the repository, not only in the ledger.
-        Assert.Contains($"Land {id}", _repo.Git("log", "--oneline", "main"), StringComparison.Ordinal);
+        // And the merge is really in the repository, not only in the ledger: main now carries the branch's file.
+        Assert.Equal($"{id}", _repo.Git("show", $"main:{id}.txt"));
     }
 
     [Fact]
@@ -2636,6 +2643,7 @@ public sealed class ConductorTests : IDisposable
             (await session.PostActionAsync(key, "spec", new SetSpecRequest(_repo.WriteSpec(key)))).EnsureSuccessStatusCode();
             _repo.BranchWithFile(Branch(key), $"{key}.txt", $"{key}\n");
             (await session.PostActionAsync(key, "implemented", new ImplementedRequest(Branch(key)))).EnsureSuccessStatusCode();
+            await _hub.PassIntegrationAsync(_repo, key);
         };
 
         Assert.Equal(1, await Conductor.RunPassAsync());
@@ -2683,44 +2691,53 @@ public sealed class ConductorTests : IDisposable
     [Fact]
     public async Task A_branch_that_no_longer_merges_goes_back_to_its_owner_and_the_founder_hears_once()
     {
+        // The conflict is found where the merge is now made: by integration, not by the land. A candidate tested
+        // against a main that has since moved is worth nothing, so the hub lands nothing and says nothing until
+        // integration has looked again - and that look is what returns the work to its owner with the files named.
         await SetUpAsync();
         var owner = await _hub.RegisterAgentAsync("owner");
         var id = await ValidatedTaskAsync(owner);
         // main grew a different version of the same file while the branch waited for its verdict.
+        _repo.Git("checkout", "-q", "main");
         _repo.Write($"{id}.txt", "main wrote this instead\n");
         _repo.Commit("main moves on");
+        _repo.Git("checkout", "-q", "--detach");
         OwnerGoesQuiet();
 
         Assert.Equal(0, await Conductor.RunPassAsync());
 
         var founder = _hub.Founder();
-        Assert.Equal(TaskState.InProgress, (await founder.GetTaskAsync(id)).Task.State);   // where today's land path leaves it
-        var conflict = Assert.Single(await EventsAsync(), e => e.Type == "conductor.land_conflict");
-        Assert.Equal(id, conflict.TaskId);
-        Assert.Equal(Branch(id), conflict.Payload.GetProperty("branch").GetString());
-        Assert.Contains($"conflicts: {id}.txt", conflict.Payload.GetProperty("message").GetString(), StringComparison.Ordinal);
-        var told = Assert.Single(await FounderMessagesAsync());
-        Assert.Contains(Branch(id), told.Body, StringComparison.Ordinal);
-        Assert.Contains($"conflicts: {id}.txt", told.Body, StringComparison.Ordinal);
+        Assert.Equal(TaskState.Validated, (await founder.GetTaskAsync(id)).Task.State);
+        Assert.DoesNotContain(await EventsAsync(), e => e.Type is "conductor.landed" or "conductor.land_conflict" or "conductor.land_refused");
+        Assert.Empty(await FounderMessagesAsync());
+        Assert.Equal($"{id} waits for current integration evidence", (await Conductor.StatusAsync()).LastAction);
 
-        // Resubmitted on the same commit - its owner is gone, so the founder does it - and the conflict is the
-        // same conflict. The event records every attempt; the message is not an attempt, and is not sent twice.
-        (await founder.PostActionAsync(id, "implemented", new ImplementedRequest(Branch(id)))).EnsureSuccessStatusCode();
+        // A candidate invalidated by a moved target is retried on the same cooldown as any other integration retry.
+        _hub.Clock.Advance(TimeSpan.FromMinutes(31));
+        var integration = await _hub.RunIntegrationAsync(id);
+
+        Assert.False(integration.Passed);
+        Assert.StartsWith("merge_conflict:", integration.Failure);
+        var detail = await founder.GetTaskAsync(id);
+        Assert.Equal(TaskState.InProgress, detail.Task.State);   // back with its owner, exactly as a bounced land was
+        var failed = Assert.Single(detail.Events, e => e.Type == "task.land_failed").Payload;
+        Assert.Equal(Branch(id), failed.GetProperty("branch").GetString());
+        Assert.Contains($"{id}.txt", failed.GetProperty("files").EnumerateArray().Select(f => f.GetString()));
+
+        // A further pass has nothing validated to land, and still nothing to shout about.
         Assert.Equal(0, await Conductor.RunPassAsync());
-
-        Assert.Equal(2, (await EventsAsync()).Count(e => e.Type == "conductor.land_conflict"));
-        Assert.Single(await FounderMessagesAsync());
+        Assert.DoesNotContain(await EventsAsync(), e => e.Type is "conductor.landed" or "conductor.land_conflict" or "conductor.land_refused");
     }
 
     [Fact]
     public async Task A_land_the_environment_refuses_leaves_the_task_validated_and_tells_the_founder_once()
     {
-        // A validated task whose branch is gone. Nothing the hub can do about that, and a human has to look -
-        // so it stays validated and it is said once, however many passes go by.
+        // A validated task whose default branch is checked out in somebody's working tree. Nothing the hub can do
+        // about that, and a human has to look - so it stays validated and it is said once, however many passes go by.
         await SetUpAsync();
         var owner = await _hub.RegisterAgentAsync("owner");
         var id = await ValidatedTaskAsync(owner);
-        _repo.Git("branch", "-D", Branch(id));
+        CheckOutMain();
         OwnerGoesQuiet();
 
         Assert.Equal(0, await Conductor.RunPassAsync());
@@ -2728,11 +2745,11 @@ public sealed class ConductorTests : IDisposable
         Assert.Equal(TaskState.Validated, (await _hub.Founder().GetTaskAsync(id)).Task.State);
         var refused = Assert.Single(await EventsAsync(), e => e.Type == "conductor.land_refused");
         Assert.Equal(id, refused.TaskId);
-        Assert.Equal("branch_missing", refused.Payload.GetProperty("code").GetString());
+        Assert.Equal("integration_target_checked_out", refused.Payload.GetProperty("code").GetString());
         Assert.Equal(Branch(id), refused.Payload.GetProperty("branch").GetString());
         var told = Assert.Single(await FounderMessagesAsync());
         Assert.Contains("retries at once", told.Body, StringComparison.Ordinal);   // the incantation, as the stalls say it
-        Assert.Equal($"could not land {id}: branch_missing", (await Conductor.StatusAsync()).LastAction);
+        Assert.Equal($"could not land {id}: integration_target_checked_out", (await Conductor.StatusAsync()).LastAction);
     }
 
     [Fact]
@@ -2741,13 +2758,12 @@ public sealed class ConductorTests : IDisposable
         // A refusal leaves the task validated, so an unbounded retry is a pass a minute for ever: task.land_refused
         // and conductor.land_refused some fourteen hundred times a day for a fault only a human can clear. That is
         // the noise this mechanism exists to prevent, moved from the inbox into the ledger - and it is reachable
-        // rather than exotic, because a dirty main checkout refuses every land there is.
+        // rather than exotic, because main checked out in a working tree refuses every land there is.
         _hub.Settings["Muthur:ConductorStallProbeMinutes"] = "30";
         await SetUpAsync();
         var owner = await _hub.RegisterAgentAsync("owner");
         var id = await ValidatedTaskAsync(owner);
-        var head = _repo.Git("rev-parse", Branch(id));
-        _repo.Git("branch", "-D", Branch(id));
+        CheckOutMain();
         OwnerGoesQuiet();
 
         // Five passes, a minute apart: one attempt, and then silence in the ledger as well as the inbox.
@@ -2770,32 +2786,36 @@ public sealed class ConductorTests : IDisposable
         Assert.Equal(2, (await EventsAsync()).Count(e => e.Type == "conductor.land_refused"));
         Assert.Single(await FounderMessagesAsync());
 
-        // The branch comes back, and no clock moves: a missing branch reads as an empty head, so restoring it
-        // is itself a head that has moved, and the cooldown is cleared rather than waited out.
-        _repo.Git("branch", Branch(id), head);
+        // The cause is fixed outside the hub, and no clock moves: the head has not, so the cooldown holds and
+        // nothing is tried. The next probe finds the way clear and lands it.
+        DetachFromMain();
+        Assert.Equal(0, await Conductor.RunPassAsync());
+        Assert.Equal(TaskState.Validated, (await _hub.Founder().GetTaskAsync(id)).Task.State);
+        _hub.Clock.Advance(TimeSpan.FromMinutes(30));
         Assert.Equal(0, await Conductor.RunPassAsync());
 
         Assert.Equal(TaskState.Done, (await _hub.Founder().GetTaskAsync(id)).Task.State);
         Assert.Single(await EventsAsync(), e => e.Type == "conductor.landed");
+        Assert.Equal(2, (await EventsAsync()).Count(e => e.Type == "conductor.land_refused"));
     }
 
     [Fact]
-    public async Task A_commit_on_the_branch_is_what_clears_the_cooldown_not_a_call_to_implemented()
+    public async Task A_commit_on_the_branch_invalidates_the_candidate_rather_than_waiting_out_the_cooldown()
     {
         // The defect validation failed this on. The cooldown used to be keyed on the head in the last
         // `task.implemented` event, which moves when somebody calls the CLI again - not when somebody makes a
-        // commit. So the recovery the message advertises, fix the cause and push, did not happen: the task
-        // waited out the full probe interval anyway, and the probe recorded a commit that was no longer the
-        // branch's. The key is now what git answers.
+        // commit. The key is now what git answers - and under the integration gate a moved head is not a fresh
+        // land attempt at all: the tested candidate no longer describes the branch, so the task waits for
+        // integration rather than for the cooldown, and a fresh round is what lands it.
         _hub.Settings["Muthur:ConductorStallProbeMinutes"] = "30";
         await SetUpAsync();
         var owner = await _hub.RegisterAgentAsync("owner");
         var id = await ValidatedTaskAsync(owner);
-        DirtyTheCheckout();   // the refusal that fires most often here, and it leaves the branch alone
+        CheckOutMain();   // the refusal that fires most often here, and it leaves the branch alone
         OwnerGoesQuiet();
 
         Assert.Equal(0, await Conductor.RunPassAsync());
-        Assert.Equal("dirty_checkout",
+        Assert.Equal("integration_target_checked_out",
             Assert.Single(await EventsAsync(), e => e.Type == "conductor.land_refused").Payload.GetProperty("code").GetString());
 
         // Nothing has changed, so nothing is tried: the cooldown holds on an unmoved head.
@@ -2803,25 +2823,22 @@ public sealed class ConductorTests : IDisposable
         Assert.Equal(1, (await EventsAsync()).Count(e => e.Type == "conductor.land_refused"));
 
         // A real commit on the branch - not a call to `task implemented`, which is what the old key needed.
-        // The cause is deliberately still there, so what the next pass proves is that it tried at all.
-        CleanTheCheckout();
+        // The cause is deliberately still there. The very next pass, with no clock moved, looks again - and
+        // finds a candidate that no longer describes the branch, which is a wait for integration, not a refusal.
         CommitOnBranch(Branch(id));
-        DirtyTheCheckout();
 
-        Assert.Equal(0, await Conductor.RunPassAsync());   // the very next pass, with no clock moved
-        Assert.Equal(2, (await EventsAsync()).Count(e => e.Type == "conductor.land_refused"));
-        Assert.Equal(2, (await FounderMessagesAsync()).Count);   // a commit nobody has tried is worth saying again
-
-        // A moved implementation now also needs a new validation subject. Clearing the checkout alone
-        // cannot authorize the new commit; explicit recovery opens the fresh round.
-        CleanTheCheckout();
-        CommitOnBranch(Branch(id));
         Assert.Equal(0, await Conductor.RunPassAsync());
+        Assert.Equal(1, (await EventsAsync()).Count(e => e.Type == "conductor.land_refused"));
+        Assert.Single(await FounderMessagesAsync());
         Assert.Equal(TaskState.Validated, (await _hub.Founder().GetTaskAsync(id)).Task.State);
-        Assert.Contains(await EventsAsync(), e => e.Type == "conductor.land_refused"
-            && e.Payload.GetProperty("code").GetString() == "implementation_changed");
+        Assert.Equal($"{id} waits for current integration evidence", (await Conductor.StatusAsync()).LastAction);
+
+        // A moved implementation needs a new validation subject and a new integration candidate. Freeing the
+        // checkout alone cannot authorize the new commit; explicit recovery opens the fresh round.
+        DetachFromMain();
         (await owner.PostActionAsync(id, "revalidate", new RevalidateRequest("Review the changed implementation."))).EnsureSuccessStatusCode();
         (await owner.PostActionAsync(id, "implemented", new ImplementedRequest(Branch(id)))).EnsureSuccessStatusCode();
+        await _hub.PassIntegrationAsync(_repo, id);
         OwnerGoesQuiet();
         Assert.Equal(0, await Conductor.RunPassAsync());
 
@@ -2839,13 +2856,13 @@ public sealed class ConductorTests : IDisposable
         await SetUpAsync();
         var owner = await _hub.RegisterAgentAsync("owner");
         var id = await ValidatedTaskAsync(owner);
-        DirtyTheCheckout();
+        CheckOutMain();
         OwnerGoesQuiet();
 
         Assert.Equal(0, await Conductor.RunPassAsync());
         Assert.Equal(1, (await EventsAsync()).Count(e => e.Type == "conductor.land_refused"));
 
-        CleanTheCheckout();
+        DetachFromMain();
         Assert.Equal(0, await Conductor.RunPassAsync());   // fixed, but inside the cooldown: nothing tried
         Assert.Equal(TaskState.Validated, (await _hub.Founder().GetTaskAsync(id)).Task.State);
 
@@ -2867,7 +2884,9 @@ public sealed class ConductorTests : IDisposable
         (await OrchestratorsAsync(true)).EnsureSuccessStatusCode();
         var owner = await _hub.RegisterAgentAsync("owner");
         var first = await ValidatedTaskAsync(owner, "First", priority: 2);
-        var second = await ValidatedTaskAsync(owner, "Second", priority: 1);
+        // Integration holds one candidate at a time, so the second is tested once the first has been promoted.
+        var second = await ValidatedTaskAsync(owner, "Second", priority: 1, integrate: false);
+        DetachFromMain();   // nobody's working tree sits on main, so exact promotion may move it
         var author = await _hub.RegisterAgentAsync("author");
         await author.AddTaskAsync("Something to start");
 
@@ -2882,6 +2901,12 @@ public sealed class ConductorTests : IDisposable
 
         var founder = _hub.Founder();
         Assert.Equal(TaskState.Done, (await founder.GetTaskAsync(first)).Task.State);
+        Assert.Equal(TaskState.Validated, (await founder.GetTaskAsync(second)).Task.State);
+        Assert.Equal($"{second} waits for current integration evidence", (await Conductor.StatusAsync()).LastAction);
+
+        await _hub.PassIntegrationAsync(_repo, second);
+        Assert.Equal(0, await Conductor.RunPassAsync());   // the slot is still taken, and still not needed
+
         Assert.Equal(TaskState.Done, (await founder.GetTaskAsync(second)).Task.State);
         Assert.Equal([first, second],
             (await EventsAsync()).Where(e => e.Type == "conductor.landed").Select(e => e.TaskId));

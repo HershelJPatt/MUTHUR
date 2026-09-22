@@ -159,7 +159,7 @@ and records which model did the work. Subscriptions work because MUTHUR only eve
 ```bash
 muthur harness tiers                          # who staffs what, which accounts are limited
 muthur agent limited --minutes 120            # "my account hit its limit" → its account leaves the rotation
-muthur worker run --tier utility --spec …     # local models (Ollama via `codex --oss`) belong in the utility tier
+muthur worker run --tier utility --spec …     # local models (Ollama via `codex --oss`) belong in the utility tier; shipped with "enabled": false
 ```
 
 Adapters: `claude` (print mode, permissions via a generated settings file), `codex` (exec, workspace-write sandbox; the

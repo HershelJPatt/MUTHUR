@@ -10,7 +10,7 @@ namespace Muthur.Server.Tests.Benchmark;
 public sealed class WorkflowScenarios : IDisposable
 {
     private readonly HubFactory _hub = new();
-    private readonly TestRepo _repo = new();
+    private readonly TestRepo _repo = new(integrationChecks: true);
     private readonly List<HttpClient> _clients = [];
     private readonly TrialReport _report;
     private HttpClient _founder = null!;
@@ -178,6 +178,7 @@ public sealed class WorkflowScenarios : IDisposable
             await Submit(owner, prerequisite);
             var prerequisiteValidator = await Validator("prerequisite-validator");
             await Approve(prerequisiteValidator, prerequisite);
+            await _hub.PassIntegrationAsync(_repo, prerequisite);
             await Action(owner, prerequisite, "land");
             await Send(prerequisiteValidator, Routes.RoleAction(Role, "release"));
             Check("prerequisite-done", (await owner.GetTaskAsync(prerequisite)).Task.State == TaskState.Done);
@@ -246,10 +247,14 @@ public sealed class WorkflowScenarios : IDisposable
         else await Approve(validator, _id, scenario.Id == "false-green");
         if (scenario.Id == "conflicting-branches")
         {
+            _repo.Git("checkout", "-q", "main");
             _repo.Write("result.txt", "conflicting main\n");
             _repo.Commit("concurrent main update");
+            _repo.Git("checkout", "-q", "--detach");
             var before = _repo.Git("rev-parse", "main");
-            await Action(owner, _id, "land", status: 409);
+            // The merge is made by integration now, so that is where the conflict is found and refused.
+            var conflicted = await _hub.RunIntegrationAsync(_id);
+            Check("conflict-refused-by-integration", !conflicted.Passed && conflicted.Failure?.StartsWith("merge_conflict:", StringComparison.Ordinal) == true);
             Check("conflict-preserves-main", before == _repo.Git("rev-parse", "main") && _repo.Git("show", "main:result.txt") == "conflicting main");
             Check("conflict-not-done", (await owner.GetTaskAsync(_id)).Task.State == TaskState.InProgress);
             _repo.Git("checkout", "-q", _branch);
@@ -269,6 +274,7 @@ public sealed class WorkflowScenarios : IDisposable
             await Approve(validator, _id);
             Check("fresh-validation-required", (await owner.GetTaskAsync(_id)).Events.Count(e => e.Type == "task.implemented") == 2);
         }
+        await _hub.PassIntegrationAsync(_repo, _id);
         await Action(owner, _id, "land");
         var completed = await owner.GetTaskAsync(_id);
         Check("landed", completed.Task.State == TaskState.Done);

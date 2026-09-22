@@ -7,6 +7,13 @@ Cloud orchestration and final validation use the mastermind tier. The shipped Co
 default is GPT-6 Astra with medium reasoning; every Codex child explicitly selects
 standard service and disables fast mode, including workers launched from a fast parent.
 
+## Local models are off
+
+Both Ollama candidates in the utility tier ship with `"enabled": false` (2026-09-22): the local hardware could
+not keep up with the organization, so the cheaper fast cloud tier does that work for now. Flip the flag in
+`{MUTHUR_HOME}/harnesses.json` to bring one back; a disabled candidate is never offered to `utility summarize`
+or `worker run`, and the command reports `no_local_model`.
+
 ## Local evidence summaries
 
 `muthur utility summarize --file failed-tests.log --task T-123 --as-agent NAME`

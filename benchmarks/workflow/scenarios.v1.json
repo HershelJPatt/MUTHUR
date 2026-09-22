@@ -132,13 +132,14 @@
       "scriptedEvents": [
         "validate branch",
         "update main",
-        "land conflict",
+        "integration conflict",
         "correct via rebase",
         "resubmit",
         "require fresh validation",
         "land"
       ],
       "expectedOutcomes": [
+        "conflict-refused-by-integration",
         "conflict-preserves-main",
         "conflict-not-done",
         "fresh-validation-required",
