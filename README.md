@@ -163,7 +163,21 @@ muthur worker run --tier utility --spec …     # local models (Ollama via `code
 ```
 
 Adapters: `claude` (print mode, permissions via a generated settings file), `codex` (exec, workspace-write sandbox; the
-launcher commits for it because the sandbox keeps `.git` read-only), `codex-oss` (Ollama). A new harness is one class in `Muthur.Launch`.
+launcher commits for it because the sandbox keeps `.git` read-only), `codex-oss` (Ollama), `sim` (below). A new harness is one class in `Muthur.Launch`.
+
+### Watch the loop run without a model
+
+```bash
+muthur sim run                     # scratch hub, 6 seeded tasks, conductor on; prints the board URL, streams the ledger
+muthur sim run --pace 3000 --auto-answer 0 --keep   # slow enough to watch; leave the question on Needs you for you; keep the hub up
+```
+
+The `sim` harness is the loop with the model taken out: its session is `muthur sim agent`, a script that reads the
+same prompt a model would and drives the task through the same API. The conductor, leases, validation, integration
+and landing are all real; the verdict is on what the branch actually holds. One seeded task asks you a question first
+and one is built wrong once, so the run crosses **Needs you** and a validation bounce on its way to `done`. It ends
+with per-task phase timings and zero model calls. It runs only from an installed CLI, and the agent refuses any home
+or URL that could be the organization's own.
 
 ## What comes in, what goes out
 

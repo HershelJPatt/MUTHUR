@@ -269,6 +269,6 @@ public sealed class KitInstallTests : IDisposable
             Console.SetOut(previous);
         }
 
-        Assert.Equal("[\"claude\",\"codex\",\"generic\"]", printed.ToString().Trim());
+        Assert.Equal("[\"claude\",\"codex\",\"generic\",\"sim\"]", printed.ToString().Trim());
     }
 }

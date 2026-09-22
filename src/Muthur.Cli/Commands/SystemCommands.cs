@@ -100,15 +100,21 @@ public static class SystemCommands
         return report.Fail > 0 ? ExitCodes.Error : ExitCodes.Ok;
     }
 
-    internal static async Task<int> UpAsync(ParseResult parse, CancellationToken ct)
+    private static async Task<int> UpAsync(ParseResult parse, CancellationToken ct)
+    {
+        var (status, error) = await StartAsync(ct);
+        return status is not null ? Output.Emit(parse, status) : Output.Error(error!.Value.Code, error.Value.Message);
+    }
+
+    /// <summary>Starts the bundled server unless one already answers at MUTHUR_URL; the status it answered with, or why it could not be started.</summary>
+    internal static async Task<(ApiResult? Status, (string Code, string Message)? Error)> StartAsync(CancellationToken ct)
     {
         var probe = new HubClient(null, TimeSpan.FromSeconds(3));
         var current = await probe.GetAsync(Routes.Status, ct);
-        if (current.IsSuccess) return Output.Emit(parse, current);
+        if (current.IsSuccess) return (current, null);
 
         if (ServerProcess.Locate() is not { } server)
-            return Output.Error("server_not_found",
-                $"Muthur.Server was not found next to the CLI (server/) and ${MuthurEnvironment.ServerPathVariable} is not set.");
+            return (null, ("server_not_found", $"Muthur.Server was not found next to the CLI (server/) and ${MuthurEnvironment.ServerPathVariable} is not set."));
 
         ServerProcess.StartDetached(server);
 
@@ -116,9 +122,8 @@ public static class SystemCommands
         {
             await Task.Delay(250, ct);
             current = await probe.GetAsync(Routes.Status, ct);
-            if (current.IsSuccess) return Output.Emit(parse, current);
+            if (current.IsSuccess) return (current, null);
         }
-        return Output.Error("start_timeout",
-            $"The server did not answer within 15s. See {Path.Combine(MuthurEnvironment.Home, MuthurEnvironment.LogFile)}.");
+        return (null, ("start_timeout", $"The server did not answer within 15s. See {Path.Combine(MuthurEnvironment.Home, MuthurEnvironment.LogFile)}."));
     }
 }

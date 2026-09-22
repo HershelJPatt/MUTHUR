@@ -8,12 +8,18 @@
     <span class="stat"><b>@_liveAgents</b> live agents</span>
     <span class="stat"><b>@_openTasks</b> open tasks</span>
     <span class="stat @(_validating > 0 ? "stat-accent" : "")"><b>@_validating</b> validating@(_oldestWait is { } oldest ? $" · oldest {Format.Age(oldest, _now)}" : "")</span>
+    @if (_scripted)
+    {
+        <span class="stat stat-sim" title="Sessions on the sim harness: scripted, no model, no tokens"><b>sim</b> scripted sessions</span>
+    }
     <span class="stat stat-clock">@_now.ToLocalTime().ToString("ddd MMM d · HH:mm")</span>
     <span class="live-dot" title="Live"></span>
 </div>
 
 @code {
     private int _liveAgents;
+    /// <summary>Whether any live agent runs on the sim harness, so nobody mistakes a demo for the organization.</summary>
+    private bool _scripted;
     private int _openTasks;
     private int _validating;
     /// <summary>The longest any task has waited on a validator — the number behind "validating".</summary>
@@ -27,6 +33,7 @@
         var agents = await Agents.ListAsync();
         var open = await Tasks.ListAsync(new TaskQuery(OpenOnly: true, Limit: 2000));
         _liveAgents = agents.Count(a => a.Status == AgentStatus.Live);
+        _scripted = agents.Any(a => a.Status == AgentStatus.Live && string.Equals(a.Harness, "sim", StringComparison.OrdinalIgnoreCase));
         _openTasks = open.Count;
         _validating = open.Count(t => t.State == TaskState.Validating);
         _oldestWait = (await Lifecycle.QueueAsync()).Min(q => q.OldestWaitingSince);

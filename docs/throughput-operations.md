@@ -10,6 +10,14 @@ Keep the conductor at two sessions for the first comparison. Independent validat
 - Setting prerequisites records the return to backlog. Historical dependency events are replayed with their conditional state transition. Waiting on a prerequisite does not consume an unproductive-session strike.
 - Each harness attempt has a fresh output directory. A failed process retains its exit reason even when it wrote a final message. Worker receipts add optional run ID, status, failure kind, exit code and base/head/spec object IDs; old receipts keep unknown values null.
 
+## See the loop run without a model
+
+`muthur sim run` (from an installed CLI) is the quick form of the stand-in harness below: a scratch hub on the
+`sim` harness, seeded tasks, the conductor on, and the ledger streamed until every task has landed. One task asks
+the founder a question and one is built wrong once, so the board shows Needs you and a validation bounce as well as
+integration and a hub land. It prints per-task phase timings at the end and starts no model. `--pace` slows the
+sessions so the board can be watched; `--auto-answer 0` leaves the question for a person; `--keep` leaves the hub up.
+
 ## Verify before rollout
 
 Use a task-specific `MUTHUR_HOME` and `MUTHUR_URL` for every development command. Build and run the full suite, then install the committed candidate into a scratch destination with `scripts/install.ps1 -Destination <scratch-install> -Ref <full-sha>`.

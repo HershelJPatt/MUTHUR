@@ -41,6 +41,7 @@ b { font-weight: 600; }
 .stat b { color: var(--text); font-size: 14px; margin-right: 5px; letter-spacing: 0; }
 .stat-accent b { color: var(--amber); }
 .stat-clock { color: var(--faint); }
+.stat-sim b { color: var(--blue); }
 .live-dot, .dot { display: inline-block; width: 7px; height: 7px; border-radius: 50%; background: var(--accent); }
 .live-dot { box-shadow: 0 0 8px var(--accent); animation: pulse 2.4s ease-in-out infinite; }
 @keyframes pulse { 50% { opacity: .35; } }

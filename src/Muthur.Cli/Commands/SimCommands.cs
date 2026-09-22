@@ -140,8 +140,8 @@ public static class SimCommands
             await Git("checkout", "-q", "--detach");   // nobody's working tree sits on main, so the hub may move it
             await File.WriteAllTextAsync(Path.Combine(home, MuthurEnvironment.HarnessFile), Catalog, ct);
 
-            var up = await SystemCommands.UpAsync(parse, ct);
-            if (up != ExitCodes.Ok) return up;
+            var (started, failure) = await SystemCommands.StartAsync(ct);
+            if (started is null) return Output.Error(failure!.Value.Code, failure.Value.Message);
             var founder = new HubClient(Globals.ReadFounderToken());
 
             await Must(founder.PostAsync(Routes.Projects, new AddProjectRequest(Project, repo, "Sim project", "main", LandMode.Merge, [Role], []), MuthurJsonContext.Default.AddProjectRequest, ct), "project");
@@ -188,8 +188,24 @@ public static class SimCommands
             {
                 await new HubClient(Globals.ReadFounderToken(), TimeSpan.FromSeconds(5)).PostAsync(Routes.Shutdown, CancellationToken.None);
                 await Task.Delay(1500, CancellationToken.None);
-                try { Directory.Delete(scratch, recursive: true); } catch (IOException) { stderr.WriteLine($"sim: could not remove {scratch}"); } catch (UnauthorizedAccessException) { stderr.WriteLine($"sim: could not remove {scratch}"); }
+                if (!RemoveScratch(scratch)) stderr.WriteLine($"sim: could not remove {scratch}");
             }
+        }
+    }
+
+    /// <summary>Git marks its objects read-only, which a recursive delete on Windows refuses; clear that first.</summary>
+    private static bool RemoveScratch(string directory)
+    {
+        try
+        {
+            foreach (var file in Directory.EnumerateFiles(directory, "*", SearchOption.AllDirectories))
+                File.SetAttributes(file, FileAttributes.Normal);
+            Directory.Delete(directory, recursive: true);
+            return true;
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            return false;
         }
     }
 
