@@ -154,6 +154,8 @@ public static class Startup
         }
 
         app.Services.GetRequiredService<HarnessService>().EnsureCatalogExists();
+        // Subscribes to the feed now: a handoff before the worker first waits must still be waiting for it.
+        _ = app.Services.GetRequiredService<ConductorWake>();
         await app.Services.GetRequiredService<OverseerService>().RecoverAfterRestartAsync(stopping);
 
         instance.StartedAt = clock.GetUtcNow();

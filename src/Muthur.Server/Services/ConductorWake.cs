@@ -10,14 +10,15 @@ namespace Muthur.Server.Services;
 public sealed class ConductorWake : IDisposable
 {
     /// <summary>
-    /// The event types that are a handoff the conductor acts on. Nothing else wakes it. The last two are the
-    /// bounce-backs: an owner that exited on a question or a failed verdict is released and restaffed by the
-    /// pass, so the answer and the verdict are handoffs too.
+    /// The event types that are a handoff the conductor acts on. Nothing else wakes it through the feed. The
+    /// bounce-backs are handoffs too: an owner that exited on a question or a failed verdict is released and
+    /// restaffed by the pass. Switching the conductor on is the founder's own handoff. A session ending is not
+    /// an event but a call from the conductor itself (<c>session.exited</c>), made once the slot is free.
     /// </summary>
     public static readonly IReadOnlySet<string> Transitions = new HashSet<string>(StringComparer.Ordinal)
     {
         "task.claimed", "task.implemented", "task.validated", "integration.passed",
-        "request.answered", "task.validation_failed",
+        "request.answered", "task.validation_failed", "conductor.on",
     };
 
     private readonly Lock _gate = new();

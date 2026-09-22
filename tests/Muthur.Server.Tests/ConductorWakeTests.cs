@@ -31,6 +31,13 @@ public sealed class ConductorWakeTests : IDisposable
     private ConductorWake Wake => _hub.Services.GetRequiredService<ConductorWake>();
     private static readonly TimeSpan Interval = TimeSpan.FromSeconds(60);
 
+    /// <summary>A wait parked after the setup's own transitions have been consumed, so it sees only what follows.</summary>
+    private async Task<Task<string?>> ParkAsync()
+    {
+        while (Wake.Pending) await Wake.WaitAsync(Interval, CancellationToken.None);
+        return Wake.WaitAsync(Interval, CancellationToken.None);
+    }
+
     private async Task DefineAsync(string role) =>
         (await _hub.Founder().PutAsJsonAsync(Routes.Roles, new DefineRoleRequest(role, $"# {role}\nDrive it.", Holders: 1))).EnsureSuccessStatusCode();
 
@@ -76,11 +83,11 @@ public sealed class ConductorWakeTests : IDisposable
         // No validators required: implemented and validated are recorded in one mutation, and the first wins.
         await _hub.AddProjectAsync(repoPath: _repo.Path);
         var (owner, id) = await ClaimedTaskAsync();
-        var wait = Wake.WaitAsync(Interval, CancellationToken.None);
+        var wait = await ParkAsync();
         (await owner.PostActionAsync(id, "implemented", new ImplementedRequest("task/T-1-feature"))).EnsureSuccessStatusCode();
         Assert.Equal("task.implemented", await Eventually.CompletesAsync(wait, "implemented never woke the conductor"));
 
-        wait = Wake.WaitAsync(Interval, CancellationToken.None);
+        wait = await ParkAsync();
         await _hub.PassIntegrationAsync(_repo, id);
         Assert.Equal("integration.passed", await Eventually.CompletesAsync(wait, "the integration verdict never woke the conductor"));
     }
@@ -89,7 +96,7 @@ public sealed class ConductorWakeTests : IDisposable
     public async Task A_passing_verdict_wakes()
     {
         var (_, checker, id, subject) = await ValidatingTaskAsync();
-        var wait = Wake.WaitAsync(Interval, CancellationToken.None);
+        var wait = await ParkAsync();
         (await checker.PostActionAsync(id, "pass", new VerdictRequest("win-validator", "Ran it; reproduce with dotnet test.", SubjectId: subject))).EnsureSuccessStatusCode();
         Assert.Equal("task.validated", await Eventually.CompletesAsync(wait, "the verdict never woke the conductor"));
     }
@@ -98,17 +105,41 @@ public sealed class ConductorWakeTests : IDisposable
     public async Task A_failed_verdict_and_an_answered_question_wake()
     {
         var (owner, checker, id, subject) = await ValidatingTaskAsync();
-        var wait = Wake.WaitAsync(Interval, CancellationToken.None);
+        var wait = await ParkAsync();
         (await checker.PostActionAsync(id, "fail", new VerdictRequest("win-validator", "wrong column; reproduce with dotnet test", SubjectId: subject))).EnsureSuccessStatusCode();
         Assert.Equal("task.validation_failed", await Eventually.CompletesAsync(wait, "the failed verdict never woke the conductor"));
 
         var asked = await owner.PostAsJsonAsync(Routes.Requests, new AskRequest("csv or xlsx?", id, ["csv", "xlsx"]));
         asked.EnsureSuccessStatusCode();
         var request = (await asked.Content.ReadFromJsonAsync(MuthurJsonContext.Default.FounderRequestDto))!;
-        wait = Wake.WaitAsync(Interval, CancellationToken.None);
+        wait = await ParkAsync();
         Assert.False(wait.IsCompleted);   // asking is not a handoff; the session that asked is still there
         (await _hub.Founder().PostAsJsonAsync(Routes.RequestAction(request.Id, "answer"), new AnswerRequest("csv"))).EnsureSuccessStatusCode();
         Assert.Equal("request.answered", await Eventually.CompletesAsync(wait, "the answer never woke the conductor"));
+    }
+
+    [Fact]
+    public async Task Switching_the_conductor_on_wakes()
+    {
+        (await _hub.Founder().PostAsJsonAsync(Routes.Conductor, new ConductorSwitch(false))).EnsureSuccessStatusCode();
+        var wait = await ParkAsync();
+        (await _hub.Founder().PostAsJsonAsync(Routes.Conductor, new ConductorSwitch(true))).EnsureSuccessStatusCode();
+        Assert.Equal("conductor.on", await Eventually.CompletesAsync(wait, "turning the conductor on never woke it"));
+    }
+
+    [Fact]
+    public async Task A_session_ending_nudges_once_its_slot_is_free()
+    {
+        // The staffing itself is not a transition; what wakes the wait is the fake session returning.
+        await DefineAsync("win-validator");
+        await _hub.AddProjectAsync(repoPath: _repo.Path, validators: ["win-validator"]);
+        var (owner, id) = await ClaimedTaskAsync();
+        (await owner.PostActionAsync(id, "implemented", new ImplementedRequest("task/T-1-feature"))).EnsureSuccessStatusCode();
+
+        var wait = await ParkAsync();
+        Assert.Equal(1, await _hub.Services.GetRequiredService<ConductorService>().RunPassAsync());
+        Assert.Equal("session.exited", await Eventually.CompletesAsync(wait, "the session ending never woke the conductor"));
+        Assert.Equal(0, _hub.Services.GetRequiredService<ConductorService>().RunningCount);
     }
 
     [Fact]
@@ -116,7 +147,7 @@ public sealed class ConductorWakeTests : IDisposable
     {
         await _hub.AddProjectAsync(repoPath: _repo.Path);
         var agent = await _hub.RegisterAgentAsync("owner");
-        var wait = Wake.WaitAsync(Interval, CancellationToken.None);
+        var wait = await ParkAsync();
 
         await agent.AddTaskAsync("Build the feature");
         (await agent.PostAsJsonAsync(Routes.AgentHeartbeat, new HeartbeatRequest("alive"))).EnsureSuccessStatusCode();

@@ -72,10 +72,22 @@ public sealed partial class ConductorService(
     HarnessService harnesses,
     OverseerService? overseer = null,
     IIntegrationSessionLauncher? integrations = null,
-    IntegrationService? integrationService = null)
+    IntegrationService? integrationService = null,
+    ConductorWake? wake = null)
 {
     private readonly SemaphoreSlim _pass = new(1, 1);
     private readonly HashSet<string> _running = [];
+
+    /// <summary>
+    /// A session that ran has ended: its slot is free and whatever it left behind (a verdict, an integration report,
+    /// a task back in the backlog) is staffable. The pass that acts on it is wanted now, not at the next tick — the
+    /// events the session recorded on its way out arrived while its slot was still held.
+    /// </summary>
+    private void Free(string key)
+    {
+        lock (_running) _running.Remove(key);
+        wake?.Nudge("session.exited");
+    }
 
     /// <summary>
     /// The lifetime of every session this hub has started, cancelled as the host stops.
@@ -1104,7 +1116,7 @@ public sealed partial class ConductorService(
         {
             await ledger.MutateAsync(Caller.System, m => { m.Record("integration.launch_failed", taskId, new { message = ex.Message }); return Task.CompletedTask; });
         }
-        finally { lock (_running) _running.Remove(key); }
+        finally { Free(key); }
     }
 
     public async Task<int> RunPassAsync(CancellationToken ct = default)
@@ -1235,7 +1247,7 @@ public sealed partial class ConductorService(
     private async Task RunOverseerAsync(OverseerService.Assignment assignment, string key)
     {
         try { await overseer!.RunAsync(assignment, _sessions.Token); }
-        finally { lock (_running) _running.Remove(key); }
+        finally { Free(key); }
     }
 
     private async Task RunSessionAsync(ConductorAssignment assignment, string key)
@@ -1287,7 +1299,7 @@ public sealed partial class ConductorService(
         }
         finally
         {
-            lock (_running) _running.Remove(key);
+            Free(key);
         }
     }
 
@@ -1334,7 +1346,7 @@ public sealed partial class ConductorService(
         }
         finally
         {
-            lock (_running) _running.Remove(key);
+            Free(key);
         }
     }
 
