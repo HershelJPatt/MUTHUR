@@ -1,5 +1,7 @@
 using System.Net.Http.Json;
 using System.Text.Json;
+using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.DependencyInjection;
 using Muthur.Contracts;
 
 namespace Muthur.Server.Tests;
@@ -73,5 +75,35 @@ public sealed class ProjectGateTests : IDisposable
 
         var updated = Assert.Single(events, e => e.Type == "project.updated");
         Assert.False(updated.Payload.GetProperty("ungated").GetBoolean());
+    }
+}
+
+/// <summary>
+/// What the live hub's ledger looked like after an upgrade: a list column that a later migration added with an
+/// empty default, on a row written before the migration. Every read of the project - the board, the doctor, the
+/// projects API - failed on it.
+/// </summary>
+public sealed class ProjectListColumnTests : IDisposable
+{
+    private readonly HubFactory _hub = new();
+
+    public void Dispose() => _hub.Dispose();
+
+    [Fact]
+    public async Task A_list_column_left_empty_by_a_migration_reads_as_no_entries()
+    {
+        (await _hub.Founder().PostAsJsonAsync(Routes.Projects,
+            new AddProjectRequest("old", _hub.DataDir, RequiredValidators: ["win-validator"], IngestSources: []))).EnsureSuccessStatusCode();
+        await using (var db = await _hub.Services.GetRequiredService<IDbContextFactory<Muthur.Data.MuthurDb>>().CreateDbContextAsync())
+            await db.Database.ExecuteSqlRawAsync(
+                "UPDATE projects SET ingest_sources = '' WHERE key = 'old'");
+
+        var projects = await _hub.Founder().GetFromJsonAsync(Routes.Projects, MuthurJsonContext.Default.IReadOnlyListProjectDto);
+
+        var project = Assert.Single(projects!);
+        Assert.Empty(project.IngestSources);
+        Assert.Equal(["win-validator"], project.RequiredValidators);
+        Assert.Equal([], Muthur.Data.StringListConverter.Read(""));
+        Assert.Equal([], Muthur.Data.StringListConverter.Read("   "));
     }
 }

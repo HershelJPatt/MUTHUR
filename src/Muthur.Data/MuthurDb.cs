@@ -226,7 +226,14 @@ public static class StringListConverter
 {
     public static readonly ValueConverter<List<string>, string> Instance = new(
         v => JsonSerializer.Serialize(v, (JsonSerializerOptions?)null),
-        v => JsonSerializer.Deserialize<List<string>>(v, (JsonSerializerOptions?)null) ?? new List<string>());
+        v => Read(v));
+
+    /// <summary>
+    /// A column a migration added with an empty default holds "" on every row that predates it, and every read of
+    /// that row failed - the live hub's only project, and with it the board. An empty cell is an empty list.
+    /// </summary>
+    public static List<string> Read(string value) =>
+        string.IsNullOrWhiteSpace(value) ? [] : JsonSerializer.Deserialize<List<string>>(value, (JsonSerializerOptions?)null) ?? [];
 
     public static readonly ValueComparer<List<string>> Comparer = new(
         (a, b) => a != null && b != null && a.SequenceEqual(b),
