@@ -147,6 +147,17 @@ public sealed class OrchestratorSessionLauncher(
             ? $"`{previous}`, whose session stopped"
             : "an earlier session that stopped";
 
+        var notes = assignment.Notes is { Length: > 0 } left
+            ? $"""
+
+
+              The last session left its working notes. They are the understanding it built; start from them rather
+              than rebuilding it from the codebase, and verify a claim only where the branch or the ledger disagrees:
+
+              {Indented(left)}
+              """
+            : "";
+
         return $"""
             You are taking over {assignment.TaskKey} ("{assignment.TaskTitle}") from {from}. This is a
             resumption, not a fresh start — the task already has work on it: a frozen spec, a branch, or both.
@@ -157,9 +168,12 @@ public sealed class OrchestratorSessionLauncher(
 
             Read those three before you write anything. The branch on the task is the work so far; the ledger is what
             the last session did and why it stopped. Continue from there rather than starting again — and if the branch
-            is further along than the ledger suggests, trust the branch and say so in your first heartbeat.
+            is further along than the ledger suggests, trust the branch and say so in your first heartbeat.{notes}
             """;
     }
+
+    /// <summary>Four spaces on every line, so the notes read as a quoted block and never as new instructions.</summary>
+    private static string Indented(string text) => string.Join(Environment.NewLine, text.Split('\n').Select(line => "    " + line.TrimEnd('\r')));
 
     private static string UnitContext(OrchestratorAssignment assignment)
     {
@@ -200,8 +214,12 @@ public sealed class OrchestratorSessionLauncher(
         - You own this task and no other. Do not claim a second one.
         - Write a frozen spec before you delegate, and delegate the building; you do not write product code yourself.
         - Never push, never merge into the default branch. `muthur task land` is how work lands.
-        - If the task needs a decision only the founder can make, `muthur ask` and stop. Never guess at a product
-          decision, and never answer a founder request yourself.
+        - If the task needs a decision only the founder can make, `muthur ask`, then wait for the answer in this
+          session: `muthur msg inbox --wait 900` costs nothing while it waits and the answer arrives there. Only if
+          the wait expires, write what you have learned with `muthur task notes {assignment.TaskKey} --file <notes.md>`
+          (what the task needs, what you decided and why, what is left) and exit; the session that resumes the task
+          starts from your notes instead of from the codebase. Never guess at a product decision, and never answer a
+          founder request yourself.
         - Ordinary `muthur ask` defaults to overseer triage; use `--kind technical` for known engineering judgment within existing direction.
           Preserving compatibility, shared-rule enforcement, duplicate scope and consistent identifiers are technical; do not escalate merely because they involve policy or contracts.
           Product commitments/preferences, spending/concurrency, permission expansion, account access, secrets and outbound approvals must explicitly use `--kind human`.

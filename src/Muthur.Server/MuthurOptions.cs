@@ -44,6 +44,13 @@ public sealed class MuthurOptions
     public int ConductorSessionMinutes { get; set; } = 45;
     /// <summary>Failed verdicts on one task before the conductor stops restaffing it and asks the founder.</summary>
     public int ConductorMaxAttempts { get; set; } = 3;
+    /// <summary>
+    /// The catalog tier the conductor staffs validators from. A validator exercises a frozen spec's verification;
+    /// that is implementer-shaped work, and staffing it from the mastermind tier made every task cost two
+    /// mastermind cold starts on the happy path. When the tier named here has no candidate the launcher falls
+    /// back to mastermind rather than leave the task unvalidated.
+    /// </summary>
+    public string ConductorValidatorTier { get; set; } = "implementer";
     public int ConductorIntervalSeconds { get; set; } = 60;
     /// <summary>The interval the conductor actually runs at: a floor, so a small number cannot turn it into a spin.</summary>
     public int EffectiveConductorIntervalSeconds => Math.Max(MinimumConductorIntervalSeconds, ConductorIntervalSeconds);

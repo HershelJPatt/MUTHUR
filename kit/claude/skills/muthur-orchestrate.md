@@ -8,6 +8,9 @@ Task requested: $ARGUMENTS (if empty or "next", take the most urgent backlog tas
 
 {{core:orchestrate.md}}
 
+In Claude Code the orchestrate reference is `reference.md` in this skill's directory
+(`.claude/skills/muthur-orchestrate/reference.md`).
+
 ## In Claude Code
 
 - **Native isolation:** delegation uses the Agent tool: `muthur-implementer` (Opus, frozen spec) or

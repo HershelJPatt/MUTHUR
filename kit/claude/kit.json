@@ -14,6 +14,10 @@
       "to": ".claude/skills/muthur-orchestrate/SKILL.md"
     },
     {
+      "from": "../core/orchestrate-reference.md",
+      "to": ".claude/skills/muthur-orchestrate/reference.md"
+    },
+    {
       "from": "skills/muthur-validate.md",
       "to": ".claude/skills/muthur-validate/SKILL.md"
     },

@@ -85,7 +85,36 @@ public sealed partial class TaskService(Ledger ledger, LeasePolicy leases, ITask
             var events = await db.Events.Where(e => e.TaskId == task.Id).OrderBy(e => e.Seq).ToListAsync(ct);
             var validations = await Validations.ForTasksAsync(db, [task.Id], ct);
             return new TaskDetailDto(await Validations.MapAsync(db, task, validations.GetValueOrDefault(task.Id), ct), events.Select(e => e.ToDto()).ToList(),
-                await IncidentService.ForTaskAsync(db, task.Id, ct));
+                await IncidentService.ForTaskAsync(db, task.Id, ct), await NotesAsync(db, task.Id, ct));
+        }, ct);
+
+    /// <summary>The owner's working notes on a task, or null when none were written.</summary>
+    public static Task<string?> NotesAsync(MuthurDb db, int taskId, CancellationToken ct) =>
+        db.Meta.Where(e => e.Key == MetaEntry.TaskNotes(taskId)).Select(e => e.Value).SingleOrDefaultAsync(ct);
+
+    /// <summary>
+    /// Replaces the owner's working notes. Only the owner: the notes are one session's understanding handed to
+    /// the next session on the same task, and nobody else's account of the work belongs in that slot. Blank
+    /// clears them. The size cap keeps the resume prompt a prompt and not a transcript.
+    /// </summary>
+    public Task<TaskDto> SetNotesAsync(Caller caller, string id, TaskNotesRequest request, CancellationToken ct = default) =>
+        ledger.MutateAsync(caller, async m =>
+        {
+            var task = await LoadAsync(m.Db, id, ct);
+            RequireOwnerOrFounder(task, caller);
+            var notes = request.Notes?.Trim() ?? "";
+            if (notes.Length > TaskNotesRequest.MaxChars)
+                throw Fail.Rule("notes_too_long", $"Notes are {notes.Length} characters; the limit is {TaskNotesRequest.MaxChars}. Keep what the next session needs, not the transcript.");
+            var key = MetaEntry.TaskNotes(task.Id);
+            var entry = await m.Db.Meta.SingleOrDefaultAsync(e => e.Key == key, ct);
+            if (notes.Length == 0)
+            {
+                if (entry is not null) { m.Db.Meta.Remove(entry); m.Record("task.notes_cleared", task.Id); }
+            }
+            else if (entry is null) { m.Db.Meta.Add(new MetaEntry { Key = key, Value = notes }); m.Record("task.notes_set", task.Id, new { chars = notes.Length }); }
+            else if (entry.Value != notes) { entry.Value = notes; m.Record("task.notes_set", task.Id, new { chars = notes.Length }); }
+            task.UpdatedAt = m.Now;
+            return await Validations.MapAsync(m.Db, task, null, ct);
         }, ct);
 
     /// <summary>Atomic: mutations are serialized, so of two racing claims exactly one sees a claimable task.</summary>

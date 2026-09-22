@@ -73,7 +73,7 @@ public sealed class ValidatorSessionLauncher(
     IProcessRunner processes,
     ILogger<ValidatorSessionLauncher> logger, TimeProvider? clock = null, ITaskLander? lander = null, KnowledgeService? knowledge = null) : IValidatorSessionLauncher
 {
-    private const string Tier = "mastermind";
+    private const string FallbackTier = "mastermind";
 
     public async Task StartAsync(ConductorAssignment assignment, CancellationToken ct = default)
     {
@@ -81,9 +81,9 @@ public sealed class ValidatorSessionLauncher(
         if (repo is null || !Directory.Exists(repo))
             throw new ValidatorLaunchException($"Project '{assignment.Project}' has no repository on disk.");
 
-        var candidates = await CandidatesAsync(assignment.AvoidHarness, ct);
+        var (tier, candidates) = await CandidatesAsync(assignment.AvoidHarness, ct);
         if (candidates.Count == 0)
-            throw new ValidatorLaunchException($"No available {Tier} candidate to validate {assignment.TaskKey}.");
+            throw new ValidatorLaunchException($"No available {options.ConductorValidatorTier} or {FallbackTier} candidate to validate {assignment.TaskKey}.");
 
         var capabilities = await SessionCommands.CapabilitiesAsync(ledger, lander, assignment.TaskId,
             "conductor-validator", options.DataDir, optional: false, ct);
@@ -110,7 +110,7 @@ public sealed class ValidatorSessionLauncher(
                 ScratchDirectory: scratch,
                 ReasoningEffort: candidate.ReasoningEffort,
                 Capabilities: capabilities),
-            candidate => IdentityFor(assignment, candidate, ct),
+            candidate => IdentityFor(assignment, candidate, ct, tier),
             TimeSpan.FromMinutes(options.ConductorSessionMinutes),
             candidate => MarkLimitedAsync(candidate.Account, ct),
             ct);
@@ -155,13 +155,13 @@ public sealed class ValidatorSessionLauncher(
     /// It is registered for the candidate that is about to run — a fall-through to another vendor must not leave
     /// the ledger saying the first one did the work.
     /// </summary>
-    internal async Task<AgentIdentity> IdentityFor(ConductorAssignment assignment, HarnessCandidate candidate, CancellationToken ct)
+    internal async Task<AgentIdentity> IdentityFor(ConductorAssignment assignment, HarnessCandidate candidate, CancellationToken ct, string tier = FallbackTier)
     {
         var name = IdentityName(assignment.TaskKey, assignment.RoleKey);
         // A tier entry may leave the model blank to mean "the harness's own default"; the ledger still needs a word.
         var model = candidate.Model is { Length: > 0 } ? candidate.Model : "default";
         var registration = await agents.RegisterConductorSessionAsync(
-            new RegisterAgentRequest(name, candidate.Harness, model, Tier, candidate.Account), ct);
+            new RegisterAgentRequest(name, candidate.Harness, model, tier, candidate.Account), ct);
         return new AgentIdentity(name, registration.Token);
     }
 
@@ -196,11 +196,18 @@ public sealed class ValidatorSessionLauncher(
     /// Candidates for the tier, with the harness that built the task moved to the back rather than removed:
     /// a different vendor checking the work is a preference, and validating beats not validating.
     /// </summary>
-    private async Task<IReadOnlyList<HarnessCandidate>> CandidatesAsync(string? avoid, CancellationToken ct)
+    /// <summary>The configured tier first, mastermind when it is empty or limited out: a cheaper validator, never a missing one.</summary>
+    internal async Task<(string Tier, IReadOnlyList<HarnessCandidate> Candidates)> CandidatesAsync(string? avoid, CancellationToken ct)
     {
-        var tiers = await harnesses.TiersAsync(Tier, ct);
-        return Prefer(tiers.SelectMany(t => t.Candidates).Where(c => !c.Limited)
-            .Select(c => new HarnessCandidate(c.Harness, c.Model, c.Account, c.ReasoningEffort)).ToList(), avoid);
+        var wanted = string.IsNullOrWhiteSpace(options.ConductorValidatorTier) ? FallbackTier : options.ConductorValidatorTier.Trim().ToLowerInvariant();
+        foreach (var tier in new[] { wanted, FallbackTier }.Distinct())
+        {
+            var tiers = await harnesses.TiersAsync(tier, ct);
+            var available = tiers.SelectMany(t => t.Candidates).Where(c => !c.Limited)
+                .Select(c => new HarnessCandidate(c.Harness, c.Model, c.Account, c.ReasoningEffort)).ToList();
+            if (available.Count > 0) return (tier, Prefer(available, avoid));
+        }
+        return (wanted, []);
     }
 
     /// <summary>

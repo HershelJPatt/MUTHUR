@@ -54,6 +54,9 @@ public static class TaskEndpoints
         app.MapPost(Routes.Tasks + "/{id}/attended", (HttpContext http, string id, AttendedRequest request, TaskService tasks, CancellationToken ct) =>
             tasks.SetAttendedAsync(http.GetCaller(), id, request, ct));
 
+        app.MapPost(Routes.Tasks + "/{id}/notes", (HttpContext http, string id, TaskNotesRequest request, TaskService tasks, CancellationToken ct) =>
+            tasks.SetNotesAsync(http.GetCaller(), id, request, ct));
+
         app.MapPost(Routes.Tasks + "/{id}/hold", (HttpContext http, string id, HoldRequest request, TaskService tasks, CancellationToken ct) =>
             tasks.SetHoldAsync(http.GetCaller(), id, request, ct));
 

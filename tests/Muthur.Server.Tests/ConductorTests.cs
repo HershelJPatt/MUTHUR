@@ -88,6 +88,14 @@ public sealed class ConductorTests : IDisposable
         Assert.Equal(0, Conductor.RunningCount);
     }
 
+    /// <summary>Until no integration runner is out. It is not a session, so <see cref="SettledAsync"/> does not see it.</summary>
+    private async Task IntegrationSettledAsync()
+    {
+        var deadline = Environment.TickCount64 + 30_000;
+        while ((await Conductor.StatusAsync()).Sessions.Any(s => s.Role == ConductorService.IntegrationRole) && Environment.TickCount64 < deadline) await Task.Yield();
+        Assert.DoesNotContain((await Conductor.StatusAsync()).Sessions, s => s.Role == ConductorService.IntegrationRole);
+    }
+
     /// <summary>One rejection: the checker takes the role, votes no, and the task goes back to its owner.</summary>
     private static async Task RejectAsync(HttpClient checker, string id, string evidence)
     {
@@ -1365,7 +1373,7 @@ public sealed class ConductorTests : IDisposable
         var thrown = await Assert.ThrowsAsync<ValidatorLaunchException>(() => RealLauncher().StartAsync(
             new ConductorAssignment(1, "T-1", "a task", "demo", "win-validator", null)));
 
-        Assert.Contains("No available mastermind candidate", thrown.Message);
+        Assert.Contains("No available implementer or mastermind candidate", thrown.Message);
     }
 
     [Fact]
@@ -2897,7 +2905,12 @@ public sealed class ConductorTests : IDisposable
         Assert.DoesNotContain(await EventsAsync(), e => e.Type == "conductor.landed");
 
         OwnerGoesQuiet();
-        Assert.Equal(0, await Conductor.RunPassAsync());   // no slot left for a session, and a land needs none
+        // No slot left for a session, and a land needs none. The one thing the pass does start is an integration
+        // runner for the second task: a script, not a model, so it takes no seat under the ceiling either. There
+        // is no CLI to run it here, so it fails to launch and the candidate below is supplied by hand.
+        Assert.Equal(1, await Conductor.RunPassAsync());
+        await IntegrationSettledAsync();
+        Assert.Contains(await EventsAsync(), e => e.Type == "conductor.staffing" && e.TaskId == second);
 
         var founder = _hub.Founder();
         Assert.Equal(TaskState.Done, (await founder.GetTaskAsync(first)).Task.State);

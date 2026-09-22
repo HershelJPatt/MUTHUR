@@ -12,6 +12,8 @@ public sealed class MetaEntry
     public const string ConductorEnabled = "conductor_enabled";
     /// <summary>Sessions the conductor may run at once, as digits ("4"). Absent means Muthur:ConductorMaxSessions.</summary>
     public const string ConductorSessions = "conductor_sessions";
+    /// <summary>The owner's working notes on one task, by task id: what a resuming session reads instead of re-deriving.</summary>
+    public static string TaskNotes(int taskId) => $"task_notes:{taskId}";
     /// <summary>A lower ceiling for the hours nobody is watching, as "22:00-07:00@1" in local time. Absent means none.</summary>
     public const string ConductorUnattended = "conductor_unattended";
     /// <summary>

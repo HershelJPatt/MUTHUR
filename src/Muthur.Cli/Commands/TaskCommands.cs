@@ -9,6 +9,17 @@ public static class TaskCommands
 {
     private static Argument<string> Id() => new("id") { Description = "Task id, e.g. T-12." };
 
+    /// <summary>Notes need content or --clear, and never both; decided here so a forgotten flag is an exit 2, not a silent clear.</summary>
+    internal static (string Code, string Message)? NotesRefusal(string? text, bool clear)
+    {
+        var supplied = !string.IsNullOrWhiteSpace(text);
+        if (supplied && clear) return ("notes_required", "Pass --file or --notes, or --clear, not both.");
+        if (!supplied && !clear) return ("notes_required", "Give the notes: --file <notes.md> or --notes \"<text>\", or --clear to remove them.");
+        if (supplied && text!.Length > TaskNotesRequest.MaxChars)
+            return ("notes_too_long", $"Notes are {text.Length} characters; the limit is {TaskNotesRequest.MaxChars}. Keep what the next session needs.");
+        return null;
+    }
+
     /// <summary>
     /// The branch of the repository holding <paramref name="path"/>, or null when there is not one to name —
     /// outside a repository, or on a detached HEAD, where git answers with the word "HEAD" and not a branch.
@@ -173,6 +184,24 @@ public static class TaskCommands
         implemented.SetAction(async (parse, ct) => Output.Emit(parse, await HubClient.For(parse).PostAsync(
             Routes.TaskAction(parse.GetValue(implementedId)!, "implemented"), new ImplementedRequest(parse.GetValue(branch)!), MuthurJsonContext.Default.ImplementedRequest, ct)));
         task.Subcommands.Add(implemented);
+
+        var notesId = Id();
+        var notesFile = new Option<string?>("--file") { Description = "Markdown file holding the notes." };
+        var notesText = new Option<string?>("--notes") { Description = "The notes inline." };
+        var notesClear = new Option<bool>("--clear") { Description = "Remove the notes." };
+        var notes = new Command("notes", "Leave your working notes on a task you own, for the session that resumes it. Replaces what was there.")
+            { notesId, notesFile, notesText, notesClear };
+        notes.SetAction(async (parse, ct) =>
+        {
+            var file = parse.GetValue(notesFile);
+            var text = file is not null ? await File.ReadAllTextAsync(file, ct) : parse.GetValue(notesText);
+            if (NotesRefusal(text, parse.GetValue(notesClear)) is { } refusal)
+                return Output.Error(refusal.Code, refusal.Message, ExitCodes.RuleViolation);
+            return Output.Emit(parse, await HubClient.For(parse).PostAsync(
+                Routes.TaskAction(parse.GetValue(notesId)!, "notes"),
+                new TaskNotesRequest(parse.GetValue(notesClear) ? "" : text!), MuthurJsonContext.Default.TaskNotesRequest, ct));
+        });
+        task.Subcommands.Add(notes);
 
         var revalidateId = Id();
         var revalidateReason = new Option<string>("--reason") { Required = true };

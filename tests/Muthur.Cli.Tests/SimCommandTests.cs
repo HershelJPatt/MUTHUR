@@ -19,8 +19,43 @@ public sealed class SimCommandTests
 
         Assert.Contains(sim.Subcommands, c => c.Name == "agent");
         Assert.Contains(sim.Subcommands, c => c.Name == "run");
-        var parsed = root.Parse(["sim", "run", "--tasks", "3", "--pace", "0", "--auto-answer", "0", "--keep"]);
+        var parsed = root.Parse(["sim", "run", "--tasks", "3", "--pace", "0", "--auto-answer", "0", "--ask-wait", "5", "--keep"]);
         Assert.Empty(parsed.Errors);
+        Assert.Empty(root.Parse(["sim", "agent", "--report", "r.txt", "--cd", ".", "--ask-wait", "5"]).Errors);
+    }
+
+    [Fact]
+    public void The_ask_wait_comes_from_the_flag_then_the_run_then_a_minute()
+    {
+        Assert.Equal(5, SimCommands.AskWait(5));
+        var was = Environment.GetEnvironmentVariable(SimCommands.AskWaitVariable);
+        try
+        {
+            Environment.SetEnvironmentVariable(SimCommands.AskWaitVariable, "12");
+            Assert.Equal(12, SimCommands.AskWait(null));
+            Environment.SetEnvironmentVariable(SimCommands.AskWaitVariable, null);
+            Assert.Equal(60, SimCommands.AskWait(null));
+        }
+        finally { Environment.SetEnvironmentVariable(SimCommands.AskWaitVariable, was); }
+    }
+
+    /// <summary>
+    /// The sessions log is the run's token proxy: every scripted session writes what it was handed, in bytes, and
+    /// the report divides by cold starts. A malformed line is skipped, never a crash at the end of a run.
+    /// </summary>
+    [Fact]
+    public void Prompt_bytes_are_summed_from_the_sessions_log()
+    {
+        var path = Path.Combine(Path.GetTempPath(), "muthur-tests", Guid.NewGuid().ToString("n") + ".log");
+        Directory.CreateDirectory(Path.GetDirectoryName(path)!);
+        try
+        {
+            File.WriteAllText(path, "orchestrator\tT-1\t4000\nvalidator\tT-1\t1500\ngarbage\norchestrator\tT-2\tnotanumber\n");
+
+            Assert.Equal((2, 5500L), SimCommands.PromptBytes(path));
+            Assert.Equal((0, 0L), SimCommands.PromptBytes(path + ".missing"));
+        }
+        finally { File.Delete(path); }
     }
 
     [Theory]

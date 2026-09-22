@@ -16,8 +16,12 @@ internal sealed record SessionBrief(string Kind, string Task, string? Role);
 /// <c>sim: plain</c>, <c>sim: ask</c> (a founder question first, so the task crosses Needs you) or
 /// <c>sim: bounce</c> (a wrong first implementation, so validation fails once and the task comes back).
 /// </summary>
-internal sealed partial class SimSession(HubClient hub, IProcessRunner processes, string repo, int pace, CancellationToken ct)
+internal sealed partial class SimSession(HubClient hub, IProcessRunner processes, string repo, int pace, int askWait, CancellationToken ct)
 {
+    /// <summary>The notes an orchestrator leaves when it has to stop on an unanswered question: what a resuming session reads first.</summary>
+    internal static string Notes(string id) =>
+        $"# {id} working notes\n\nBecame the expert: the task writes `{id}.txt` at the repository root.\nAsked the founder CSV or JSON; waiting on the answer.\nLeft: write the spec and the file once the answer is in.\n";
+
     /// <summary>Why this session must not run: a home or URL that could be the organization's own.</summary>
     internal static string? Refusal(string? home, string url)
     {
@@ -75,7 +79,18 @@ internal sealed partial class SimSession(HubClient hub, IProcessRunner processes
         {
             var ask = await hub.PostAsync(Routes.Requests,
                 new AskRequest($"{id}: should the export be CSV or JSON?", id, ["csv", "json"], "human"), MuthurJsonContext.Default.AskRequest, ct);
-            return ask.IsSuccess ? $"STATUS: done\nNOTES: asked the founder about {id} and checkpointed; a later session resumes it" : Failed("ask", ask);
+            if (!ask.IsSuccess) return Failed("ask", ask);
+            // The procedure: wait for the answer here, where the understanding already is. The wait costs nothing;
+            // a new session would cost the whole read phase again. Only an expired wait leaves notes and exits.
+            var answered = askWait > 0 && (await hub.GetAsync($"{Routes.Inbox}?wait={askWait}", ct)).IsSuccess
+                && (await DetailAsync(id))?.Events.Any(e => e.Type == "request.answered") == true;
+            if (!answered)
+            {
+                var notes = await hub.PostAsync(Routes.TaskAction(id, "notes"), new TaskNotesRequest(Notes(id)), MuthurJsonContext.Default.TaskNotesRequest, ct);
+                return notes.IsSuccess
+                    ? $"STATUS: done\nNOTES: asked the founder about {id}, no answer in {askWait}s; left notes and exited so a later session resumes from them"
+                    : Failed("notes", notes);
+            }
         }
 
         var branch = BranchFor(id);

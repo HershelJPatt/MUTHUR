@@ -11,6 +11,10 @@
       "to": ".muthur/procedures/orchestrate.md"
     },
     {
+      "from": "../core/orchestrate-reference.md",
+      "to": ".muthur/procedures/orchestrate-reference.md"
+    },
+    {
       "from": "../core/implementer.md",
       "to": ".muthur/procedures/implementer.md"
     },

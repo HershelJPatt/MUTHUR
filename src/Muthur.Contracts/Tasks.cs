@@ -33,6 +33,16 @@ public sealed record CancelTaskRequest(string? Reason = null);
 /// <param name="Reason">Why a human is needed. Null clears the flag.</param>
 public sealed record AttendedRequest(string? Reason);
 
+/// <summary>
+/// The owner's working notes on a task: what it learned becoming the expert, what it decided and why, what is
+/// left. Written before a session stops on a question or a limit, read by the session that resumes the task, so
+/// the resumption starts from understanding rather than from the codebase. At most <see cref="MaxChars"/>.
+/// </summary>
+public sealed record TaskNotesRequest(string Notes)
+{
+    public const int MaxChars = 8000;
+}
+
 public sealed record TaskDto(
     string Id,
     string Project,
@@ -85,7 +95,7 @@ public sealed record ValidationQueueDto(
     int Claimed,
     DateTimeOffset? OldestWaitingSince);
 
-public sealed record TaskDetailDto(TaskDto Task, IReadOnlyList<EventDto> Events, IReadOnlyList<TaskIncidentDto>? Incidents = null);
+public sealed record TaskDetailDto(TaskDto Task, IReadOnlyList<EventDto> Events, IReadOnlyList<TaskIncidentDto>? Incidents = null, string? Notes = null);
 
 public sealed record EventDto(
     long Seq,

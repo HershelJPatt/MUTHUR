@@ -51,11 +51,16 @@ public sealed class KitInstallTests : IDisposable
         return await parse.InvokeAsync();
     }
 
+    /// <summary>
+    /// The rule lives in the procedure every session loads; the verification paths it points at live in the
+    /// reference installed beside it, which a session reads when it reaches step 3. Both halves have to arrive
+    /// on every harness, and the procedure has to say where the other half is.
+    /// </summary>
     [Theory]
-    [InlineData("claude", ".claude/skills/muthur-orchestrate/SKILL.md")]
-    [InlineData("codex", ".muthur/procedures/orchestrate.md")]
-    [InlineData("generic", ".muthur/procedures/orchestrate.md")]
-    public async Task Every_harness_installs_the_orchestrate_procedure_with_the_headless_rule(string harness, string procedure)
+    [InlineData("claude", ".claude/skills/muthur-orchestrate/SKILL.md", ".claude/skills/muthur-orchestrate/reference.md")]
+    [InlineData("codex", ".muthur/procedures/orchestrate.md", ".muthur/procedures/orchestrate-reference.md")]
+    [InlineData("generic", ".muthur/procedures/orchestrate.md", ".muthur/procedures/orchestrate-reference.md")]
+    public async Task Every_harness_installs_the_orchestrate_procedure_with_the_headless_rule(string harness, string procedure, string reference)
     {
         var repo = NewRepository();
 
@@ -63,12 +68,21 @@ public sealed class KitInstallTests : IDisposable
 
         var installed = Path.Combine(repo, procedure);
         Assert.True(File.Exists(installed), $"The {harness} kit installed no {procedure}.");
+        var installedReference = Path.Combine(repo, reference);
+        Assert.True(File.Exists(installedReference), $"The {harness} kit installed no {reference}.");
 
         var procedureText = File.ReadAllText(installed);
+        foreach (var phrase in new[] { "before implementation submission", "is a defect in the spec",
+            "Verification a conductor-started session can run", "muthur msg inbox --wait 900", "muthur task notes T-n --file" })
+            Assert.Contains(phrase, procedureText, StringComparison.Ordinal);
+        Assert.DoesNotContain("checkpoint your task evidence", procedureText, StringComparison.Ordinal);
+
+        var referenceText = File.ReadAllText(installedReference);
         foreach (var phrase in new[] { "HTTP-only assertions", "Connector-driven UI", "Installed headless interaction",
             "needs: headless-browser", "needs: browser", "before implementation submission",
-            "shared two-session ceiling", "is a defect in the spec" })
-            Assert.Contains(phrase, procedureText, StringComparison.Ordinal);
+            "shared two-session ceiling", "Protected agent definitions", "Decision routing", "Delegation lessons" })
+            Assert.Contains(phrase, referenceText, StringComparison.Ordinal);
+        Assert.DoesNotContain("checkpoint your task evidence", referenceText, StringComparison.Ordinal);
 
         var template = File.ReadAllText(Path.Combine(repo, "specs", "_TEMPLATE.md"));
         Assert.Contains("needs: headless-browser", template, StringComparison.Ordinal);

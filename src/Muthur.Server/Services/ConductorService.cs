@@ -32,9 +32,10 @@ public interface IValidatorSessionLauncher
 /// intact. A session told to start the second kind from nothing designs a task that is already designed.
 /// </param>
 /// <param name="PreviousOwner">Who last held it, out of the ledger, since the sweep cleared the column. Null if nothing says.</param>
+/// <param name="Notes">The previous owner's working notes, when it left any: the understanding the resuming session starts from.</param>
 public sealed record OrchestratorAssignment(
     int TaskId, string TaskKey, string TaskTitle, string Project, bool Resuming = false, string? PreviousOwner = null,
-    string? LatestDecisions = null, string? WorkUnitContext = null);
+    string? LatestDecisions = null, string? WorkUnitContext = null, string? Notes = null);
 
 /// <summary>Starts one orchestrator session. Faked in tests; the real one launches a harness through <c>AgentLauncher</c>.</summary>
 public interface IOrchestratorSessionLauncher
@@ -238,8 +239,21 @@ public sealed partial class ConductorService(
         return await StatusAsync(ct);
     }
 
-    /// <summary>Sessions the conductor believes it has running, by "T-n/role".</summary>
-    public int RunningCount { get { lock (_running) return _running.Count; } }
+    /// <summary>The role part of an integration runner's key. A script, not a model: it holds no seat under the ceiling.</summary>
+    internal const string IntegrationRole = "#integration";
+
+    /// <summary>
+    /// Model sessions the conductor believes it has running, by "T-n/role" — what the ceiling counts.
+    /// <para>
+    /// The integration runner is the installed CLI checking a candidate deterministically. It spends no tokens, and
+    /// charging it a seat meant a two-seat hub ran one orchestrator while a merge check took the other: the
+    /// ceiling is the founder's word on how many model sessions may spend at once, and this was never one.
+    /// </para>
+    /// </summary>
+    public int RunningCount { get { lock (_running) return _running.Count(k => !k.EndsWith("/" + IntegrationRole, StringComparison.Ordinal)); } }
+
+    /// <summary>Whether an integration runner is out. One at a time: <see cref="IntegrationService.NextAsync"/> serializes the candidates anyway.</summary>
+    private bool IntegrationRunning { get { lock (_running) return _running.Any(k => k.EndsWith("/" + IntegrationRole, StringComparison.Ordinal)); } }
 
     /// <summary>Which pairs those sessions are for. "Enabled, 2 running" does not say which two.</summary>
     private List<ConductorSessionDto> Sessions()
@@ -865,7 +879,8 @@ public sealed partial class ConductorService(
                 var unitPacket = await TaskUnitContext.ReadAsync(db, task, ct);
                 plan.Add(new OrchestratorAssignment(task.Id, Wire.TaskId(task.Id), task.Title, task.Project?.Key ?? "",
                     resuming, resuming ? owners.GetValueOrDefault(task.Id) : null,
-                    unitPacket.LatestDecisions, TaskUnitContext.Format(unitPacket)));
+                    unitPacket.LatestDecisions, TaskUnitContext.Format(unitPacket),
+                    resuming ? await TaskService.NotesAsync(db, task.Id, ct) : null));
             }
             return plan;
         }, ct);
@@ -1133,19 +1148,19 @@ public sealed partial class ConductorService(
                 (await ProbeReservationsAsync(db, ct)).Count(r => !r.Released) + (await WorkerReservationsAsync(db, ct)).Count(r => !r.Released), ct);
 
             var started = 0;
-            if (integrations is not null && integrationService is not null && RunningCount < ceiling)
+            if (integrations is not null && integrationService is not null && !IntegrationRunning)
             {
                 var budget = await ledger.ReadAsync((db, now) => BudgetBlockedAsync(db, now, ct), ct);
                 var task = await integrationService.NextAsync(budget, ct);
                 if (task is not null)
                 {
                     var taskKey = Wire.TaskId(task.Id);
-                    var key = taskKey + "/#integration";
+                    var key = taskKey + "/" + IntegrationRole;
                     bool reserved;
-                    lock (_running) reserved = _running.Count < ceiling && _running.Add(key);
+                    lock (_running) reserved = _running.Add(key);
                     if (reserved)
                     {
-                        await ledger.MutateAsync(Caller.System, m => { m.Record("conductor.staffing", task.Id, new { role = "#integration" }); return Task.CompletedTask; }, ct);
+                        await ledger.MutateAsync(Caller.System, m => { m.Record("conductor.staffing", task.Id, new { role = IntegrationRole }); return Task.CompletedTask; }, ct);
                         Track(RunIntegrationAsync(taskKey, task.Id, key));
                         started++;
                     }
@@ -1177,7 +1192,7 @@ public sealed partial class ConductorService(
                 var key = $"{assignment.TaskKey}/{assignment.RoleKey}";
                 lock (_running)
                 {
-                    if (_running.Count >= ceiling) break;
+                    if (RunningCount >= ceiling) break;
                     if (!_running.Add(key)) continue;
                 }
 
@@ -1207,7 +1222,7 @@ public sealed partial class ConductorService(
                 var key = OrchestratorKey(assignment.TaskKey);
                 lock (_running)
                 {
-                    if (_running.Count >= ceiling) break;
+                    if (RunningCount >= ceiling) break;
                     if (!_running.Add(key)) continue;
                 }
 
@@ -1499,10 +1514,17 @@ public sealed partial class ConductorService(
 /// <summary>Runs conductor passes. Off unless the founder turned it on.</summary>
 public sealed class ConductorWorker(IServiceProvider services, MuthurOptions options, TimeProvider clock, ILogger<ConductorWorker> logger) : BackgroundService
 {
+    /// <summary>
+    /// How long a woken pass waits for the rest of the burst. A session exiting writes several events in as many
+    /// mutations, and one pass after the last of them is worth more than one pass after the first.
+    /// </summary>
+    internal static readonly TimeSpan Settle = TimeSpan.FromSeconds(1);
+
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
     {
         try
         {
+            var trigger = services.GetRequiredService<ConductorTrigger>();
             while (!stoppingToken.IsCancellationRequested)
             {
                 try
@@ -1514,7 +1536,9 @@ public sealed class ConductorWorker(IServiceProvider services, MuthurOptions opt
                 {
                     logger.LogError(ex, "Conductor pass failed.");
                 }
-                await Task.Delay(TimeSpan.FromSeconds(options.EffectiveConductorIntervalSeconds), clock, stoppingToken);
+                // Events run the loop; the interval is the sweep for what no event announces.
+                if (await trigger.WaitAsync(TimeSpan.FromSeconds(options.EffectiveConductorIntervalSeconds), clock, stoppingToken))
+                    await Task.Delay(Settle, clock, stoppingToken);
             }
         }
         finally

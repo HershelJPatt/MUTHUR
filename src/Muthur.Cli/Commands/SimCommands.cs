@@ -20,6 +20,9 @@ namespace Muthur.Cli.Commands;
 public static class SimCommands
 {
     public const string PaceVariable = "MUTHUR_SIM_PACE";
+    public const string AskWaitVariable = "MUTHUR_SIM_ASK_WAIT";
+    /// <summary>Where every scripted session logs what it was handed: one "kind task promptBytes" line each, the run's token proxy.</summary>
+    public const string SessionsLog = "sim-sessions.log";
     private const string Role = "win-validator";
     private const string Project = "sim";
 
@@ -33,36 +36,46 @@ public static class SimCommands
         var report = new Option<string>("--report") { Required = true, Description = "File the session writes its STATUS line to; the sim harness reads it." };
         var cd = new Option<string>("--cd") { Required = true, Description = "The project repository the session works in." };
         var pace = new Option<int?>("--pace") { Description = $"Milliseconds between steps (default ${PaceVariable}, else 1500) so the board can be watched." };
+        var askWait = new Option<int?>("--ask-wait") { Description = $"Seconds an orchestrator waits in-session for the founder's answer before leaving notes and exiting (default ${AskWaitVariable}, else 60)." };
         var agent = new Command("agent", "One scripted session, run by the sim harness with the prompt on stdin. Refuses a home or URL that could be a real hub.")
-            { report, cd, pace };
-        agent.SetAction((parse, ct) => AgentAsync(parse, parse.GetValue(report)!, parse.GetValue(cd)!, Pace(parse.GetValue(pace)), processes, ct));
+            { report, cd, pace, askWait };
+        agent.SetAction((parse, ct) => AgentAsync(parse, parse.GetValue(report)!, parse.GetValue(cd)!, Pace(parse.GetValue(pace)), AskWait(parse.GetValue(askWait)), processes, ct));
         sim.Subcommands.Add(agent);
 
         var tasks = new Option<int>("--tasks") { DefaultValueFactory = _ => 6, Description = "Tasks to seed. The second asks the founder a question first; the third is built wrong once." };
         var runPace = new Option<int>("--pace") { DefaultValueFactory = _ => 1500, Description = "Milliseconds between a session's steps." };
         var answer = new Option<int>("--auto-answer") { DefaultValueFactory = _ => 20, Description = "Seconds before the founder question is answered for you; 0 leaves it on Needs you for a person." };
+        var runAskWait = new Option<int>("--ask-wait") { DefaultValueFactory = _ => 60, Description = "Seconds an orchestrator waits in-session for the answer before leaving notes and exiting. Below --auto-answer exercises the resume-from-notes path." };
         var minutes = new Option<int>("--minutes") { DefaultValueFactory = _ => 20, Description = "Give up watching after this long." };
         var port = new Option<int>("--port") { DefaultValueFactory = _ => 0, Description = "Loopback port for the scratch hub (default: a free one)." };
         var keep = new Option<bool>("--keep") { Description = "Leave the scratch hub running and its files in place when done." };
         var run = new Command("run", "Start a scratch hub on the sim harness, seed tasks, turn the conductor on and stream the ledger until every task is done.")
-            { tasks, runPace, answer, minutes, port, keep };
+            { tasks, runPace, answer, runAskWait, minutes, port, keep };
         run.SetAction((parse, ct) => RunAsync(parse, new RunOptions(parse.GetValue(tasks), parse.GetValue(runPace), parse.GetValue(answer),
-            parse.GetValue(minutes), parse.GetValue(port), parse.GetValue(keep)), processes, ct));
+            parse.GetValue(minutes), parse.GetValue(port), parse.GetValue(keep), parse.GetValue(runAskWait)), processes, ct));
         sim.Subcommands.Add(run);
     }
 
     internal static int Pace(int? explicitPace) =>
         explicitPace ?? (int.TryParse(Environment.GetEnvironmentVariable(PaceVariable), NumberStyles.Integer, CultureInfo.InvariantCulture, out var fromEnv) ? fromEnv : 1500);
 
-    private static async Task<int> AgentAsync(ParseResult parse, string reportFile, string repo, int pace, IProcessRunner processes, CancellationToken ct)
+    internal static int AskWait(int? explicitWait) =>
+        explicitWait ?? (int.TryParse(Environment.GetEnvironmentVariable(AskWaitVariable), NumberStyles.Integer, CultureInfo.InvariantCulture, out var fromEnv) ? fromEnv : 60);
+
+    private static async Task<int> AgentAsync(ParseResult parse, string reportFile, string repo, int pace, int askWait, IProcessRunner processes, CancellationToken ct)
     {
-        if (SimSession.Refusal(Environment.GetEnvironmentVariable(MuthurEnvironment.HomeVariable), MuthurEnvironment.Url) is { } why)
+        var home = Environment.GetEnvironmentVariable(MuthurEnvironment.HomeVariable);
+        if (SimSession.Refusal(home, MuthurEnvironment.Url) is { } why)
             return Output.Error("sim_refused", why, ExitCodes.RuleViolation);
         var prompt = await Console.In.ReadToEndAsync(ct);
         if (SimSession.Parse(prompt) is not { } brief)
             return Output.Error("sim_prompt_unrecognized", "The prompt names no task, or neither an orchestrator nor a validator session.", ExitCodes.RuleViolation);
+        // What a model would have read before its first action, in bytes: the closest thing to a token count the sim has.
+        try { await File.AppendAllTextAsync(Path.Combine(home!, SessionsLog), $"{brief.Kind}\t{brief.Task}\t{Encoding.UTF8.GetByteCount(prompt)}\n", ct); }
+        catch (IOException) { }
 
-        var session = new SimSession(HubClient.For(parse), processes, repo, pace, ct);
+        // The inbox wait blocks server-side for up to --ask-wait seconds; the client must outlast it.
+        var session = new SimSession(HubClient.For(parse, TimeSpan.FromSeconds(askWait + 30)), processes, repo, pace, askWait, ct);
         var status = brief.Kind == "validator" ? await session.ValidateAsync(brief.Task, brief.Role!) : await session.OrchestrateAsync(brief.Task);
         Directory.CreateDirectory(Path.GetDirectoryName(Path.GetFullPath(reportFile))!);
         await File.WriteAllTextAsync(reportFile, status, ct);
@@ -70,7 +83,7 @@ public static class SimCommands
         return ExitCodes.Ok;
     }
 
-    internal sealed record RunOptions(int Tasks, int Pace, int AutoAnswerSeconds, int Minutes, int Port, bool Keep);
+    internal sealed record RunOptions(int Tasks, int Pace, int AutoAnswerSeconds, int Minutes, int Port, bool Keep, int AskWaitSeconds = 60);
 
     /// <summary>Every tier staffed by the sim harness; the local models are absent rather than disabled, since there is nothing to toggle back.</summary>
     internal const string Catalog = """
@@ -112,6 +125,7 @@ public static class SimCommands
         Environment.SetEnvironmentVariable(MuthurEnvironment.TokenVariable, null);
         Environment.SetEnvironmentVariable(Globals.AgentVariable, null);
         Environment.SetEnvironmentVariable(PaceVariable, o.Pace.ToString(CultureInfo.InvariantCulture));
+        Environment.SetEnvironmentVariable(AskWaitVariable, o.AskWaitSeconds.ToString(CultureInfo.InvariantCulture));
         Environment.SetEnvironmentVariable("Muthur__ConductorIntervalSeconds", "5");
         Environment.SetEnvironmentVariable("PATH", AppContext.BaseDirectory.TrimEnd('\\', '/') + Path.PathSeparator + Environment.GetEnvironmentVariable("PATH"));
 
@@ -165,10 +179,12 @@ public static class SimCommands
 
             stderr.WriteLine($"sim: hub {url}  home {home}");
             stderr.WriteLine($"sim: board {url}/   needs you {url}/needs-you   stream {url}/stream");
-            stderr.WriteLine($"sim: {seeded.Count} tasks seeded ({string.Join(", ", seeded)}); the conductor looks every 5s. Ctrl+C stops the run.");
+            var status = await founder.GetAsync(Routes.Conductor, ct);
+            var sweep = status.IsSuccess ? JsonSerializer.Deserialize(status.Body, MuthurJsonContext.Default.ConductorStatusDto)?.IntervalSeconds : null;
+            stderr.WriteLine($"sim: {seeded.Count} tasks seeded ({string.Join(", ", seeded)}); the conductor wakes on ledger events and sweeps every {sweep?.ToString(CultureInfo.InvariantCulture) ?? "?"}s. Ctrl+C stops the run.");
 
             var watch = Stopwatch.StartNew();
-            var report = await WatchAsync(founder, seeded, o, watch, stderr, ct);
+            var report = await WatchAsync(founder, seeded, o, watch, stderr, Path.Combine(home, SessionsLog), ct);
             Console.Out.WriteLine(report);
             return ExitCodes.Ok;
         }
@@ -219,11 +235,29 @@ public static class SimCommands
     private sealed class Phases
     {
         public DateTimeOffset? Added, Claimed, Implemented, Verdict, Landed;
-        public int Sessions, Bounces, Questions;
+        public int Sessions, Validators, Bounces, Questions;
+        /// <summary>Model sessions started for this task: every one is a cold start that reads the task from nothing.</summary>
+        public int ColdStarts => Sessions + Validators;
+        /// <summary>Seconds the task spent waiting on the hub between phases — none of it work, all of it schedule.</summary>
+        public double? Wait => Added is { } a && Claimed is { } c && Implemented is { } i && Verdict is { } v && Landed is { } l
+            ? (c - a + (v - i) + (l - v)).TotalSeconds : null;
+    }
+
+    /// <summary>Reads the sessions log the agents wrote: prompt bytes by session kind.</summary>
+    internal static (int Sessions, long Bytes) PromptBytes(string path)
+    {
+        if (!File.Exists(path)) return (0, 0);
+        var sessions = 0; long bytes = 0;
+        foreach (var line in File.ReadAllLines(path))
+        {
+            var parts = line.Split('\t');
+            if (parts.Length == 3 && long.TryParse(parts[2], NumberStyles.Integer, CultureInfo.InvariantCulture, out var n)) { sessions++; bytes += n; }
+        }
+        return (sessions, bytes);
     }
 
     /// <summary>Streams the ledger to stderr until every seeded task is done, answering the founder question if asked to, and returns the friction report.</summary>
-    private static async Task<string> WatchAsync(HubClient founder, IReadOnlyList<string> seeded, RunOptions o, Stopwatch watch, TextWriter stderr, CancellationToken ct)
+    private static async Task<string> WatchAsync(HubClient founder, IReadOnlyList<string> seeded, RunOptions o, Stopwatch watch, TextWriter stderr, string sessionsLog, CancellationToken ct)
     {
         var phases = seeded.ToDictionary(id => id, _ => new Phases());
         var answered = new HashSet<int>();
@@ -243,6 +277,7 @@ public static class SimCommands
                     {
                         case "task.added": p.Added ??= e.At; break;
                         case "task.claimed": p.Claimed ??= e.At; p.Sessions++; break;
+                        case "validation.claimed": p.Validators++; break;
                         case "task.implemented": p.Implemented = e.At; break;
                         case "task.validated": p.Verdict = e.At; break;
                         case "task.validation_failed": p.Verdict = e.At; p.Bounces++; break;
@@ -274,16 +309,29 @@ public static class SimCommands
         using (var json = new Utf8JsonWriter(buffer, new JsonWriterOptions { Indented = true }))
         {
             json.WriteStartObject();
+            var landed = phases.Values.Count(p => p.Landed is not null);
+            var coldStarts = phases.Values.Sum(p => p.ColdStarts);
+            var (promptSessions, promptBytes) = PromptBytes(sessionsLog);
+            var waits = phases.Values.Where(p => p.Wait is not null).Select(p => p.Wait!.Value).ToList();
             json.WriteBoolean("complete", done);
             json.WriteNumber("modelCalls", 0);
-            json.WriteNumber("landed", phases.Values.Count(p => p.Landed is not null));
+            json.WriteNumber("landed", landed);
             json.WriteNumber("seconds", Math.Round(watch.Elapsed.TotalSeconds, 1));
+            // The two numbers tuning is judged on: what a task costs in cold starts (each one a full context load
+            // for a model) and in seconds spent waiting on the schedule rather than on work.
+            json.WriteNumber("coldStarts", coldStarts);
+            if (landed > 0) json.WriteNumber("coldStartsPerLanded", Math.Round((double)coldStarts / landed, 2));
+            json.WriteNumber("promptBytes", promptBytes);
+            if (promptSessions > 0) json.WriteNumber("promptBytesPerColdStart", promptBytes / promptSessions);
+            if (waits.Count > 0) json.WriteNumber("waitSecondsPerLanded", Math.Round(waits.Average(), 1));
             json.WriteStartArray("tasks");
             foreach (var (id, p) in phases)
             {
                 json.WriteStartObject();
                 json.WriteString("task", id);
                 json.WriteNumber("sessions", p.Sessions);
+                json.WriteNumber("validators", p.Validators);
+                json.WriteNumber("coldStarts", p.ColdStarts);
                 json.WriteNumber("questions", p.Questions);
                 json.WriteNumber("bounces", p.Bounces);
                 Seconds(json, "backlogToClaim", p.Added, p.Claimed);
@@ -291,6 +339,7 @@ public static class SimCommands
                 Seconds(json, "implementedToVerdict", p.Implemented, p.Verdict);
                 Seconds(json, "verdictToLanded", p.Verdict, p.Landed);
                 Seconds(json, "total", p.Added, p.Landed);
+                if (p.Wait is { } wait) json.WriteNumber("wait", Math.Round(wait, 1)); else json.WriteNull("wait");
                 json.WriteEndObject();
             }
             json.WriteEndArray();
