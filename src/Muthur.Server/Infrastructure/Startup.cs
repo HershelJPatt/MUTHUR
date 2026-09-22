@@ -87,6 +87,7 @@ public static class Startup
         builder.Services.AddSingleton<IIntegrationSessionLauncher, IntegrationSessionLauncher>();
         builder.Services.AddSingleton<IOrchestratorSessionLauncher, OrchestratorSessionLauncher>();
         builder.Services.AddSingleton<ConductorService>();
+        builder.Services.AddSingleton<ConductorWake>();
         builder.Services.AddSingleton<OverseerService>();
         builder.Services.AddSingleton<CollisionService>();
         builder.Services.AddSingleton<IPullRequestOpener, GhPullRequestOpener>();

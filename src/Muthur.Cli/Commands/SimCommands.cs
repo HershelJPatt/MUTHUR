@@ -112,7 +112,7 @@ public static class SimCommands
         Environment.SetEnvironmentVariable(MuthurEnvironment.TokenVariable, null);
         Environment.SetEnvironmentVariable(Globals.AgentVariable, null);
         Environment.SetEnvironmentVariable(PaceVariable, o.Pace.ToString(CultureInfo.InvariantCulture));
-        Environment.SetEnvironmentVariable("Muthur__ConductorIntervalSeconds", "5");
+        Environment.SetEnvironmentVariable("Muthur__ConductorIntervalSeconds", "15");
         Environment.SetEnvironmentVariable("PATH", AppContext.BaseDirectory.TrimEnd('\\', '/') + Path.PathSeparator + Environment.GetEnvironmentVariable("PATH"));
 
         async Task<ProcessResult> Git(params string[] arguments)
@@ -165,7 +165,7 @@ public static class SimCommands
 
             stderr.WriteLine($"sim: hub {url}  home {home}");
             stderr.WriteLine($"sim: board {url}/   needs you {url}/needs-you   stream {url}/stream");
-            stderr.WriteLine($"sim: {seeded.Count} tasks seeded ({string.Join(", ", seeded)}); the conductor looks every 5s. Ctrl+C stops the run.");
+            stderr.WriteLine($"sim: {seeded.Count} tasks seeded ({string.Join(", ", seeded)}); the conductor wakes on each handoff and otherwise looks every 15s. Ctrl+C stops the run.");
 
             var watch = Stopwatch.StartNew();
             var report = await WatchAsync(founder, seeded, o, watch, stderr, ct);

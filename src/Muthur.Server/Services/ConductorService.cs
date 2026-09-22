@@ -1496,8 +1496,11 @@ public sealed partial class ConductorService(
         }, ct);
 }
 
-/// <summary>Runs conductor passes. Off unless the founder turned it on.</summary>
-public sealed class ConductorWorker(IServiceProvider services, MuthurOptions options, TimeProvider clock, ILogger<ConductorWorker> logger) : BackgroundService
+/// <summary>
+/// Runs conductor passes: one at start, one whenever a task crosses a handoff (<see cref="ConductorWake"/>), and
+/// one every interval as the fallback for whatever the wake-up misses. Off unless the founder turned it on.
+/// </summary>
+public sealed class ConductorWorker(IServiceProvider services, MuthurOptions options, ConductorWake wake, ILogger<ConductorWorker> logger) : BackgroundService
 {
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
     {
@@ -1514,7 +1517,8 @@ public sealed class ConductorWorker(IServiceProvider services, MuthurOptions opt
                 {
                     logger.LogError(ex, "Conductor pass failed.");
                 }
-                await Task.Delay(TimeSpan.FromSeconds(options.EffectiveConductorIntervalSeconds), clock, stoppingToken);
+                var reason = await wake.WaitAsync(TimeSpan.FromSeconds(options.EffectiveConductorIntervalSeconds), stoppingToken);
+                if (reason is not null) logger.LogDebug("Conductor woken by {Event}.", reason);
             }
         }
         finally
