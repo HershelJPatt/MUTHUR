@@ -55,8 +55,13 @@ public static class WorkerEnvironment
         {
             if (!File.Exists(path) && !Directory.Exists(path)) continue;   // nothing there for the restore to want
             if (Readable(path, CodexSandboxGroup) == false)
+            {
+                // Granted on the containing directory for a file, so the whole NuGet folder (config plus any fallback
+                // folders beside it) becomes readable in one command rather than one per file.
+                var grantOn = Directory.Exists(path) ? path : Path.GetDirectoryName(path) ?? path;
                 return new EnvironmentFinding(harness, CodexSandboxGroup, path, "no access-control entry grants that group read access",
-                    $"icacls \"{path}\" /grant \"{CodexSandboxGroup}:(OI)(CI)(RX)\"");
+                    $"icacls \"{grantOn}\" /grant \"{CodexSandboxGroup}:(OI)(CI)(RX)\"");
+            }
         }
         return null;
     }
