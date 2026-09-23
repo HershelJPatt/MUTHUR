@@ -118,8 +118,10 @@ public sealed class WorkerLauncher(IProcessRunner processes, Func<string, (strin
                 var invocation = adapter.Build(request);
                 // Build is intentionally after reservation: adapters may write settings files.
                 cleanup = WorkerCleanup.CleanupUncertain;
+                var environment = new Dictionary<string, string>(request.GitEnvironment ?? new Dictionary<string, string>());
+                foreach (var pair in invocation.Environment ?? new Dictionary<string, string>()) environment[pair.Key] = pair.Value;
                 var result = await contained.RunAsync(executable.FileName, [.. executable.Prefix, .. invocation.Arguments],
-                    request.WorkingDirectory, invocation.Stdin, timeout, ct, Scrubbed, request.GitEnvironment);
+                    request.WorkingDirectory, invocation.Stdin, timeout, ct, Scrubbed, environment);
                 started = result.Started; cleanup = result.Cleanup; exitCode = result.Result.ExitCode;
                 outcome = adapter.Interpret(request, result.Result);
                 failure = SessionWorkspace.FailureKind(result.Result, outcome);

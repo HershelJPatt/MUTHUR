@@ -78,6 +78,7 @@ public sealed class AgentLauncher(IProcessRunner processes, Func<string, (string
             using var lifetime = CancellationTokenSource.CreateLinkedTokenSource(ct);
             var environment = new Dictionary<string, string>(extraEnvironment ?? new Dictionary<string, string>());
             foreach (var pair in request.GitEnvironment ?? new Dictionary<string, string>()) environment[pair.Key] = pair.Value;
+            foreach (var pair in invocation.Environment ?? new Dictionary<string, string>()) environment[pair.Key] = pair.Value;
             foreach (var pair in EnvironmentFor(identity)) environment[pair.Key] = pair.Value;
             var running = processes.RunAsync(executable.FileName, [.. executable.Prefix, .. invocation.Arguments],
                 request.WorkingDirectory, invocation.Stdin, timeout, lifetime.Token,

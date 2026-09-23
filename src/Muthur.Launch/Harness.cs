@@ -20,7 +20,8 @@ public sealed record WorkerRequest(
     int? MaxTurns = null);
 
 /// <summary>A process to start: executable, arguments, and the prompt on stdin.</summary>
-public sealed record HarnessInvocation(string FileName, IReadOnlyList<string> Arguments, string Stdin);
+/// <param name="Environment">Variables the adapter needs set on the process beyond what the launcher supplies, or null.</param>
+public sealed record HarnessInvocation(string FileName, IReadOnlyList<string> Arguments, string Stdin, IReadOnlyDictionary<string, string>? Environment = null);
 
 /// <param name="CostUsd">What the harness reported for the run, or null when it reports none.</param>
 /// <param name="TotalTokens">For harnesses that print only one number (Codex prints "tokens used"), the total; null when input and output are known separately.</param>

@@ -89,7 +89,22 @@ public sealed partial class CodexAdapter(string name, string? openSourceProvider
             arguments.Add($"model_reasoning_effort=\"{effort}\"");
         }
         arguments.Add("-"); // prompt on stdin
-        return new HarnessInvocation("codex", arguments, request.Prompt);
+        return new HarnessInvocation("codex", arguments, request.Prompt, openSourceProvider is null ? null : BareHome(request));
+    }
+
+    /// <summary>
+    /// A local model runs from a Codex home of its own, with nothing in it. The user's home carries plugins,
+    /// hooks and marketplaces, and every one of them is a tool definition the model reads before the prompt:
+    /// measured on gemma4:26b, one word of answer cost 16,393 tokens and 27 s from the user's home and 8,871
+    /// tokens and 5 s from an empty one — and from the full home the model answered a question about Google Drive
+    /// that nobody asked. The hosted Codex harness keeps the user's home, because that is where its login lives.
+    /// </summary>
+    private static IReadOnlyDictionary<string, string> BareHome(WorkerRequest request)
+    {
+        var home = Path.Combine(request.ScratchDirectory, "codex-home");
+        Directory.CreateDirectory(home);
+        File.WriteAllText(Path.Combine(home, "config.toml"), "sandbox_mode = \"workspace-write\"\n\n[features]\nhooks = false\n");
+        return new Dictionary<string, string> { ["CODEX_HOME"] = home };
     }
 
     public WorkerOutcome Interpret(WorkerRequest request, ProcessResult result)

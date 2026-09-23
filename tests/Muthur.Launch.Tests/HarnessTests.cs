@@ -25,6 +25,19 @@ public sealed class HarnessTests : IDisposable
     }
 
     [Fact]
+    public void A_local_model_runs_from_a_bare_codex_home_and_the_hosted_one_keeps_the_users()
+    {
+        var local = Harnesses.Find("codex-oss")!.Build(Request(model: "gemma4:26b"));
+        var home = Assert.Contains("CODEX_HOME", local.Environment!);
+        Assert.StartsWith(_scratch, home);
+        var config = File.ReadAllText(Path.Combine(home, "config.toml"));
+        Assert.Contains("hooks = false", config);
+        Assert.DoesNotContain("plugins", config);
+
+        Assert.Null(Harnesses.Find("codex")!.Build(Request()).Environment);
+    }
+
+    [Fact]
     public void Claude_receives_a_turn_cap_only_when_the_catalog_sets_one()
     {
         var capped = new ClaudeAdapter().Build(Request() with { MaxTurns = 40 }).Arguments.ToList();
