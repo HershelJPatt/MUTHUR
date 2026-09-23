@@ -211,6 +211,16 @@ public static class WorkerCommands
         if (!tiers.IsSuccess) return Output.Emit(parse, tiers);
         var catalog = JsonSerializer.Deserialize(tiers.Body, MuthurJsonContext.Default.IReadOnlyListTierDto) ?? [];
         var candidates = Candidates(catalog, o.Harness);
+        // 1b. A recorded recommendation moves its candidate to the front. Advisory: routing being down, stale
+        // or naming a candidate that is no longer in the catalog changes the order and never the outcome.
+        var policyVersion = "catalog-order-v1";
+        try
+        {
+            var routing = await hub.GetAsync(Routes.Routing(o.Task!), ct);
+            if (routing.IsSuccess && LatestRecommendation(routing.Body) is { } recommendation)
+                (candidates, policyVersion) = Prefer(candidates, recommendation);
+        }
+        catch (Exception ex) when (ex is JsonException or InvalidOperationException) { }
         var local = o.Tier.Equals("local-implementer", StringComparison.OrdinalIgnoreCase) ||
             o.Tier.Equals("utility", StringComparison.OrdinalIgnoreCase);
         if (local) candidates = [.. candidates.Where(c => c.Account == "local").Take(1)];
@@ -339,7 +349,7 @@ public static class WorkerCommands
             InputTokens: final.Outcome.InputTokens, OutputTokens: final.Outcome.OutputTokens,
             CacheReadTokens: final.Outcome.CacheReadTokens, TotalTokens: final.Outcome.TotalTokens,
             RunId: final.RunId, Status: status, FailureKind: failureKind, BaseCommit: assignment.BaseCommit, HeadCommit: headCommit,
-            SpecBlob: assignment.SpecBlob, ExitCode: final.ExitCode, WorkKind: workKind, PolicyVersion: "catalog-order-v1", ReasoningEffort: EffortFor(final.Candidate, workKind, o.Effort),
+            SpecBlob: assignment.SpecBlob, ExitCode: final.ExitCode, WorkKind: workKind, PolicyVersion: policyVersion, ReasoningEffort: EffortFor(final.Candidate, workKind, o.Effort),
             Attempts: attempts.Select(a => new WorkerAttemptReport(a.Candidate.Harness, a.Candidate.Model, a.Candidate.Account,
                 a.RunId, a.ReservationId, a.Started, a.FailureKind, a.Cleanup?.ToString())).ToArray()), MuthurJsonContext.Default.WorkerRunReport, ct);
             if (!reported.IsSuccess) reportError = reported.Body;
@@ -409,6 +419,24 @@ public static class WorkerCommands
         [.. catalog.SelectMany(t => t.Candidates)
             .Where(c => !c.Limited && (harness is null || string.Equals(c.Harness, harness, StringComparison.OrdinalIgnoreCase)))
             .Select(c => new HarnessCandidate(c.Harness, c.Model, c.Account, c.ReasoningEffort))];
+
+    /// <summary>The newest recorded recommendation for the task that names a catalog position, or null when none does.</summary>
+    internal static RoutingReport? LatestRecommendation(string body) =>
+        (JsonSerializer.Deserialize(body, MuthurJsonContext.Default.IReadOnlyListRoutingSnapshot) ?? [])
+            .OrderByDescending(s => s.Sequence).Select(s => s.Report).FirstOrDefault(r => r.RecommendedCatalogPosition is not null);
+
+    /// <summary>
+    /// The recommended candidate first, the rest in catalog order behind it, and the policy that produced the
+    /// order. A recommendation is matched by identity, not by position: the catalog may have been edited since
+    /// it was recorded, and a position that now names a different model is no recommendation at all.
+    /// </summary>
+    internal static (IReadOnlyList<HarnessCandidate> Candidates, string PolicyVersion) Prefer(IReadOnlyList<HarnessCandidate> candidates, RoutingReport recommendation)
+    {
+        var chosen = recommendation.Candidates.FirstOrDefault(c => c.CatalogPosition == recommendation.RecommendedCatalogPosition);
+        var index = chosen is null ? -1 : candidates.ToList().FindIndex(c => c.Harness == chosen.Harness && c.Model == chosen.Model && c.Account == chosen.Account);
+        if (index < 0) return (candidates, "catalog-order-v1");
+        return ([candidates[index], .. candidates.Where((_, i) => i != index)], recommendation.PolicyVersion);
+    }
 
     /// <summary>
     /// What one candidate is asked to do. The deny list is this command's own policy, never the project's. The

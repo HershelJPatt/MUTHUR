@@ -12,14 +12,17 @@ public sealed class RoutingService(Ledger ledger)
     {
         if (hours is < 1 or > 720) throw Fail.Rule("routing_window", "Hours must be between 1 and 720.");
         var from = now.AddHours(-hours);
-        var events = await db.Events.Where(e => e.At >= from && e.At <= now && (e.Type == "worker.finished" || e.Type == "worker.failed")).OrderBy(e => e.Seq).ToListAsync(ct);
+        var events = await db.Events.Where(e => e.At >= from && e.At <= now && (e.Type == "worker.finished" || e.Type == "worker.failed" || e.Type == "validation.failed"))
+            .OrderBy(e => e.Seq).ToListAsync(ct);
+        var failures = events.Where(e => e.Type == "validation.failed" && e.TaskId is not null)
+            .Select(e => new ValidationFailureDto(Wire.TaskId(e.TaskId!.Value), e.At)).ToList();
         var done = await TaskDependencies.CompletedAsync(db, ct);
         var tasks = await db.Tasks.Include(t => t.Project).Where(t => t.State == TaskState.Backlog).ToListAsync(ct);
         var ready = new List<TaskDto>();
         foreach (var task in tasks.Where(t => t.DependsOn.All(done.Contains)).OrderByDescending(t => t.Priority).ThenBy(t => t.CreatedAt).ThenBy(t => t.Id))
             ready.Add(await Validations.MapAsync(db, task, null, ct));
         return new RoutingHistory(from, now, await db.Events.Select(e => (long?)e.Seq).MaxAsync(ct) ?? 0, ReceiptsService.Runs(events), ready,
-            await db.Tasks.CountAsync(t => t.State == TaskState.Validating, ct));
+            await db.Tasks.CountAsync(t => t.State == TaskState.Validating, ct), failures);
     }, ct);
 
     public Task<RoutingSnapshot> RecordAsync(Caller caller, string taskId, RoutingReport report, CancellationToken ct = default) => ledger.MutateAsync(caller, async m =>

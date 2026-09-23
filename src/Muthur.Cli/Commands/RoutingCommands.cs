@@ -23,7 +23,7 @@ public static class RoutingCommands
             var baseRef = new Option<string>("--base") { Required = true };
             var defaultBranch = new Option<string>("--default-branch") { Required = true };
             var tier = new Option<string>("--tier") { DefaultValueFactory = _ => "implementer" };
-            var hours = new Option<int>("--hours") { DefaultValueFactory = _ => 168 };
+            var hours = new Option<int>("--hours") { DefaultValueFactory = _ => DefaultHours, Description = "The window the rates are measured over (default 14 days)." };
             var command = new Command(name, name == "report" ? "Inspect suitability without mutations or probes." : "Record this owner-generated observation snapshot.") { task, spec, baseRef, defaultBranch, tier, hours };
             command.SetAction(async (p, ct) =>
             {
@@ -61,14 +61,9 @@ public static class RoutingCommands
                             Capabilities = new(requirements, "worker-run", Path.Combine(MuthurEnvironment.Home, "capabilities"), assignment.BaseCommit, repo),
                         };
                         var inspection = await new CapabilityEvaluator(process).InspectAsync(Harnesses.Find(c.Harness), request, ct);
-                        var runs = history.Runs.Where(r => r.Tier == "implementer" && r.Worker == c.Harness + "/" + c.Model && r.Account == c.Account
-                            && r.ReasoningEffort == c.ReasoningEffort && r.WorkKind == kind && kind != "unknown").ToList();
-                        runs = runs.Where(r => r.RunId is null).Concat(runs.Where(r => r.RunId is not null).GroupBy(r => r.RunId).Select(g => g.MaxBy(r => r.At)!)).ToList();
-                        rows.Add(new(c.Harness, c.Model, c.Account, c.ReasoningEffort, rows.Count, inspection.Match.Allowed, !c.Limited,
+                        rows.Add(Candidate(c, rows.Count, inspection.Match.Allowed,
                             requirements.Count == 0 ? "Legacy unchecked; no demonstrated capabilities required." : JsonSerializer.Serialize(inspection, CapabilityJsonContext.Default.CapabilityInspection),
-                            0, null, null, null, null, null, runs.Count(r => r.Success), runs.Count(r => !r.Success),
-                            runs.Select(r => $"task:{r.Task};run:{r.RunId ?? "unknown"};revision:{r.HeadCommit ?? "unknown"}").ToList(),
-                            ["Independent per-worker correctness, false approvals, actual starts and comparable end-to-end outcomes are unknown; reported success is not product completion."]));
+                            history, kind));
                     }
                     var chosen = RoutingPolicy.Recommend(rows);
                     var report = new RoutingReport(1, "measured-quality-v1", DateTimeOffset.UtcNow, p.GetValue(task)!, assignment.BaseCommit, assignment.SpecBlob, kind,
@@ -83,5 +78,28 @@ public static class RoutingCommands
             });
             group.Subcommands.Add(command);
         }
+    }
+
+    /// <summary>Fourteen days: long enough for five comparable outcomes per candidate on a hub that lands a few tasks a day.</summary>
+    internal const int DefaultHours = 336;
+
+    /// <summary>
+    /// One catalog entry with what the window measured about it on this kind of work. A spec with no work-kind
+    /// line has no comparable outcomes at all, so the report says so and the policy falls back to catalog order.
+    /// </summary>
+    internal static RoutingCandidate Candidate(HarnessCandidateDto c, int position, bool eligible, string evidence, RoutingHistory history, string kind)
+    {
+        var runs = kind == "unknown" ? [] : RoutingMeasures.Comparable(history.Runs, c.Harness, c.Model, kind);
+        var measure = RoutingMeasures.Measure(runs, history.ValidationFailures ?? []);
+        var missing = new List<string>();
+        if (kind == "unknown") missing.Add("The spec declares no work-kind, so no outcome is comparable to it.");
+        if (measure.Comparable < 5) missing.Add($"{measure.Comparable} comparable outcomes on {kind} work; five are needed before measured quality ranks.");
+        if (measure.MeanCostUsd is null) missing.Add("No run reported a cost.");
+        if (history.ValidationFailures is null) missing.Add("The hub did not report failed verdicts, so false approvals are unmeasured.");
+        return new(c.Harness, c.Model, c.Account, c.ReasoningEffort, position, eligible, !c.Limited, evidence,
+            measure.Comparable, measure.Starts, measure.FalseApprovalRate, measure.DoneRate, measure.BlockedRate, measure.MedianSeconds,
+            runs.Count(r => r.Success), runs.Count(r => !r.Success),
+            runs.Select(r => $"task:{r.Task};run:{r.RunId ?? "unknown"};revision:{r.HeadCommit ?? "unknown"}").ToList(),
+            missing, measure.MeanCostUsd);
     }
 }

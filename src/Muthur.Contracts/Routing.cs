@@ -3,9 +3,16 @@ namespace Muthur.Contracts;
 public sealed record RoutingCandidate(string Harness, string Model, string? Account, string? ReasoningEffort, int CatalogPosition,
     bool Eligible, bool Available, string EligibilityEvidence, int ComparableOutcomes, int? ActualStarts,
     decimal? FalseApprovalRate, decimal? IndependentSuccessRate, decimal? ReworkRate, double? EndToEndSeconds,
-    int ReportedSuccesses, int ReportedFailures, IReadOnlyList<string> Evidence, IReadOnlyList<string> MissingData);
+    int ReportedSuccesses, int ReportedFailures, IReadOnlyList<string> Evidence, IReadOnlyList<string> MissingData,
+    decimal? MeanCostUsd = null);
+
+/// <summary>One <c>validation.failed</c> verdict: what turns a worker's "done" into a false approval when it comes later on the same task.</summary>
+public sealed record ValidationFailureDto(string Task, DateTimeOffset At);
+
+/// <param name="ValidationFailures">Every failed verdict in the window, oldest first; null from a hub older than the field.</param>
 public sealed record RoutingHistory(DateTimeOffset From, DateTimeOffset To, long LedgerBoundary,
-    IReadOnlyList<WorkerRunDto> Runs, IReadOnlyList<TaskDto> ReadyTasks, int PendingValidation);
+    IReadOnlyList<WorkerRunDto> Runs, IReadOnlyList<TaskDto> ReadyTasks, int PendingValidation,
+    IReadOnlyList<ValidationFailureDto>? ValidationFailures = null);
 public sealed record RoutingReport(int SchemaVersion, string PolicyVersion, DateTimeOffset GeneratedAt, string Task,
     string BaseCommit, string SpecBlob, string WorkKind, DateTimeOffset From, DateTimeOffset To, long LedgerBoundary,
     IReadOnlyList<string> Requirements, IReadOnlyList<RoutingCandidate> Candidates, int? RecommendedCatalogPosition,

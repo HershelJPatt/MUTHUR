@@ -44,8 +44,11 @@ public static class RoutingPolicy
         if (actionable.Any(c => c.ComparableOutcomes < 5 || c.ActualStarts is null or <= 0 || c.FalseApprovalRate is null
             || c.IndependentSuccessRate is null || c.ReworkRate is null || c.EndToEndSeconds is null))
             return (actionable[0].CatalogPosition, "Catalog-order fallback: fewer than five comparable independently observed outcomes or missing ranking dimensions.");
+        // Cost is the last measured tiebreak and an unpriced candidate sorts after a priced one: a harness that
+        // reports nothing is not free, it is unknown.
         var selected = actionable.OrderBy(c => c.FalseApprovalRate).ThenByDescending(c => c.IndependentSuccessRate)
-            .ThenBy(c => c.ReworkRate).ThenBy(c => c.EndToEndSeconds).ThenBy(c => c.CatalogPosition).First();
-        return (selected.CatalogPosition, "Measured quality: false approvals, independent success per actual start, rework, elapsed time, then stable catalog order.");
+            .ThenBy(c => c.ReworkRate).ThenBy(c => c.EndToEndSeconds).ThenBy(c => c.MeanCostUsd is null).ThenBy(c => c.MeanCostUsd)
+            .ThenBy(c => c.CatalogPosition).First();
+        return (selected.CatalogPosition, "Measured quality: false approvals, independent success per actual start, rework, elapsed time, mean cost, then stable catalog order.");
     }
 }

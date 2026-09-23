@@ -16,6 +16,7 @@ namespace Muthur.Contracts;
 [JsonSerializable(typeof(IReadOnlyList<LessonDto>))]
 [JsonSerializable(typeof(RoutingCandidate))]
 [JsonSerializable(typeof(RoutingHistory))]
+[JsonSerializable(typeof(ValidationFailureDto))]
 [JsonSerializable(typeof(RoutingReport))]
 [JsonSerializable(typeof(RoutingSnapshot))]
 [JsonSerializable(typeof(IReadOnlyList<RoutingSnapshot>))]
