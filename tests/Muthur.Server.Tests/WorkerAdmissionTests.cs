@@ -315,6 +315,49 @@ public sealed class WorkerAdmissionTests : IDisposable
     }
 
     [Fact]
+    public async Task A_running_orchestrators_first_worker_rides_in_its_own_seat()
+    {
+        await _hub.AddProjectAsync(repoPath: _repo.Path);
+        File.WriteAllText(Path.Combine(_hub.DataDir, MuthurEnvironment.HarnessFile),
+            """{"tiers":{"worker":[{"harness":"fixture","model":"model","account":"account"}],"mastermind":[{"harness":"fixture","model":"model","account":"account"}]}}""");
+        var founder = _hub.Founder();
+        var agents = _hub.Services.GetRequiredService<AgentService>();
+        var orchestrators = new Dictionary<string, HttpClient>();
+        _hub.Orchestrators.Block = true;
+        // The fake session claims as the identity the real launcher registers, so the hub can tell it from a standing agent.
+        _hub.Orchestrators.Claim = async a =>
+        {
+            var registration = await agents.RegisterConductorSessionAsync(new(OrchestratorSessionLauncher.IdentityName(a.TaskKey), "fixture", "model", "mastermind", "account"));
+            var session = _hub.CreateClient(registration.Token);
+            (await session.ClaimAsync(a.TaskKey)).EnsureSuccessStatusCode();
+            lock (orchestrators) orchestrators[a.TaskKey] = session;
+        };
+        var first = await founder.AddTaskAsync("First");
+        await founder.AddTaskAsync("Second");
+        await Conductor.SetOrchestratorsAsync(Caller.Founder, true);
+        try
+        {
+            Assert.Equal(2, await Conductor.RunPassAsync());   // both seats of the default ceiling are orchestrators
+            // The claim happens inside the started session, after the pass has returned: wait for it, never sleep.
+            var session = await Eventually.TrueAsync(() =>
+            {
+                lock (orchestrators) return Task.FromResult(orchestrators.GetValueOrDefault(first.Id));
+            }, "the fake orchestrator never claimed its task");
+            var owned = (await _hub.Founder().GetTaskAsync(first.Id)).Task;
+            Assert.Equal((OrchestratorSessionLauncher.IdentityName(first.Id), TaskState.InProgress), (owned.Owner, owned.State));
+            WorkerAdmissionRequest Request() => new(first.Id, "worker", "fixture", "model", "account", Guid.NewGuid().ToString("N"), new string('a', 64));
+
+            var granted = await Granted(session, Request());                       // its own worker: no seat needed
+            Assert.True(granted.MayExecute);
+            await Code(await Admit(session, Request()), "worker_capacity_exhausted");   // a second one in parallel does
+            (await Release(session, granted.ReservationId)).EnsureSuccessStatusCode();
+            Assert.True((await Granted(session, Request())).MayExecute);           // and the seat comes back with it
+            Assert.Equal(2, (await Conductor.StatusAsync()).Running);
+        }
+        finally { await Conductor.StopSessionsAsync(); }
+    }
+
+    [Fact]
     public async Task Simultaneous_admissions_share_capacity_and_release_restores_exactly_one_slot()
     {
         var (client, request) = await Setup();

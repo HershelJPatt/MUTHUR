@@ -405,19 +405,23 @@ public sealed partial class ConductorService(
         await ledger.ReadAsync((db, now) => BudgetBlockedAsync(db, now, ct), ct);
         var ceiling = await CeilingAsync(ct);
         List<ConductorSessionDto> sessions;
+        var nestedWorkers = 0;
         await _pass.WaitAsync(ct);
         try
         {
             sessions = Sessions();
-            sessions.AddRange(await ledger.ReadAsync(async (db, _) => (await WorkerReservationsAsync(db, ct))
-                .Where(r => !r.Released).Select(r => new ConductorSessionDto(r.Request.Task, "#full-worker:" + r.Id)).ToList(), ct));
+            // A worker riding in its orchestrator's seat is listed, so the founder sees it, but it takes no seat of its
+            // own: the running count below is seats, and SeatedWorkers is the one rule for what a worker occupies.
+            var workers = await ledger.ReadAsync(async (db, _) => (await WorkerReservationsAsync(db, ct)).Where(r => !r.Released).ToList(), ct);
+            nestedWorkers = workers.Count - SeatedWorkers(workers);
+            sessions.AddRange(workers.Select(r => new ConductorSessionDto(r.Request.Task, (Nested(r) ? "#nested-worker:" : "#full-worker:") + r.Id)));
             sessions.AddRange(await ledger.ReadAsync(async (db, _) => (await ProbeReservationsAsync(db, ct))
                 .Where(r => !r.Released).Select(r => new ConductorSessionDto(r.Request.Task, "#capability-probe:" + r.Id)).ToList(), ct));
         }
         finally { _pass.Release(); }
         return new(
             await EnabledAsync(ct),
-            sessions.Count,
+            sessions.Count - nestedWorkers,
             options.ConductorMaxSessions,
             options.ConductorSessionMinutes,
             options.ConductorMaxAttempts,
@@ -1176,7 +1180,7 @@ public sealed partial class ConductorService(
             // Read once per pass: the founder may move it mid-pass, and a ceiling that changes under the loop
             // would let a pass start more sessions than either number allows.
             var ceiling = (await CeilingAsync(ct)).Sessions - await ledger.ReadAsync(async (db, _) =>
-                (await ProbeReservationsAsync(db, ct)).Count(r => !r.Released) + (await WorkerReservationsAsync(db, ct)).Count(r => !r.Released), ct);
+                (await ProbeReservationsAsync(db, ct)).Count(r => !r.Released) + SeatedWorkers(await WorkerReservationsAsync(db, ct)), ct);
 
             var started = 0;
             if (integrations is not null && integrationService is not null && !IntegrationRunning)

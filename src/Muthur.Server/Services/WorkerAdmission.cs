@@ -9,7 +9,30 @@ namespace Muthur.Server.Services;
 
 public sealed partial class ConductorService
 {
-    private sealed record WorkerReservation(string Id, WorkerAdmissionRequest Request, Guid? OwnerId, bool Released, DateTimeOffset AdmittedAt);
+    private sealed record WorkerReservation(string Id, WorkerAdmissionRequest Request, Guid? OwnerId, bool Released, DateTimeOffset AdmittedAt, string? OwnerName = null);
+
+    /// <summary>
+    /// Whether this reservation rides in its orchestrator's seat: the owner is the conductor-started orchestrator of
+    /// the task and that session is still running. An orchestrator waiting on `worker run` is a session sitting in
+    /// a foreground call, spending nothing, so its first worker is the seat's real occupant rather than a second
+    /// one. The sim showed what the other reading costs: two orchestrators fill a two-seat ceiling and neither
+    /// can admit the worker it exists to run, so nothing lands until one of them stalls.
+    /// </summary>
+    private bool Nested(WorkerReservation reservation)
+    {
+        if (reservation.OwnerName != OrchestratorSessionLauncher.IdentityName(reservation.Request.Task)) return false;
+        lock (_running) return _running.Contains(OrchestratorKey(reservation.Request.Task));
+    }
+
+    /// <summary>Unreleased worker reservations that occupy a seat of their own: one nested worker per running orchestrator is free.</summary>
+    private int SeatedWorkers(IEnumerable<WorkerReservation> reservations)
+    {
+        var nestedFor = new HashSet<string>(StringComparer.Ordinal);
+        var seated = 0;
+        foreach (var r in reservations.Where(r => !r.Released))
+            if (!(Nested(r) && nestedFor.Add(r.Request.Task))) seated++;
+        return seated;
+    }
 
     private static async Task<List<WorkerReservation>> WorkerReservationsAsync(MuthurDb db, CancellationToken ct)
     {
@@ -26,7 +49,7 @@ public sealed partial class ConductorService
             }
             reservations.Add(id, new(id, new(Text(e.PayloadJson, "task")!, Text(e.PayloadJson, "tier")!,
                 Text(e.PayloadJson, "harness")!, Text(e.PayloadJson, "model")!, Text(e.PayloadJson, "account")!,
-                Text(e.PayloadJson, "runId")!, Text(e.PayloadJson, "inputHash")!), e.ActorAgentId, false, e.At));
+                Text(e.PayloadJson, "runId")!, Text(e.PayloadJson, "inputHash")!), e.ActorAgentId, false, e.At, Text(e.PayloadJson, "ownerName")));
         }
         return [.. reservations.Values];
     }
@@ -73,7 +96,10 @@ public sealed partial class ConductorService
                 if (await m.Db.AccountLimits.AnyAsync(a => a.Account == request.Account && a.LimitedUntil > m.Now, token))
                     throw Fail.Rule("worker_account_limited", "The worker account is limited.");
                 var ceiling = (await CeilingAsync(m.Db, m.Now, token)).Sessions;
-                if (RunningCount + reservations.Count(r => !r.Released) + (await ProbeReservationsAsync(m.Db, token)).Count(r => !r.Released) >= ceiling)
+                var proposed = new WorkerReservation("", request, caller.AgentId, false, m.Now, agent?.Name);
+                var ridesInItsSeat = Nested(proposed) && !reservations.Any(r => !r.Released && r.Request.Task == request.Task && Nested(r));
+                if (!ridesInItsSeat &&
+                    RunningCount + SeatedWorkers(reservations) + (await ProbeReservationsAsync(m.Db, token)).Count(r => !r.Released) >= ceiling)
                     throw Fail.Rule("worker_capacity_exhausted", "The shared session ceiling is full.");
                 if ((await BudgetBlockedAsync(m.Db, m.Now, token)).Contains(OrchestratorKey(Wire.TaskId(task.Id))))
                     throw Fail.Rule("worker_budget_exhausted", "The task's daily orchestrator session budget is exhausted.");
