@@ -62,11 +62,18 @@ public static class Validations
                 if (value.ValueKind != JsonValueKind.String) throw new JsonException();
                 return value.GetString();
             }
-            return Serialize(new ValidationChecksDto(Command("build"), Command("test"), verification.Commands, verification.RequiresJudgment));
+            bool Flag(string name)
+            {
+                if (!document.RootElement.TryGetProperty(name, out var value) || value.ValueKind == JsonValueKind.Null) return false;
+                if (value.ValueKind is not (JsonValueKind.True or JsonValueKind.False)) throw new JsonException();
+                return value.GetBoolean();
+            }
+            return Serialize(new ValidationChecksDto(Command("build"), Command("test"), verification.Commands, verification.RequiresJudgment,
+                Flag("checksOnlyValidation")));
         }
         catch (JsonException)
         {
-            throw Fail.Rule("validation_config_invalid", "Committed muthur.project.json must be a JSON object with string build/test commands. Fix it, commit, and resubmit the implementation.");
+            throw Fail.Rule("validation_config_invalid", "Committed muthur.project.json must be a JSON object with string build/test commands and, if present, a boolean checksOnlyValidation. Fix it, commit, and resubmit the implementation.");
         }
     }
 

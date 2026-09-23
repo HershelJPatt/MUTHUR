@@ -44,9 +44,7 @@ public sealed class IntegrationRunner(IProcessRunner processes, IIntegrationClie
         var phase = "construction";
         IReadOnlyList<string> conflictFiles = [];
         IReadOnlyList<string> landedSince = [];
-        var scrub = Environment.GetEnvironmentVariables().Keys.Cast<string>()
-            .Where(k => k.StartsWith("MUTHUR", StringComparison.OrdinalIgnoreCase) || k.StartsWith("Muthur__", StringComparison.OrdinalIgnoreCase)
-                || k.StartsWith("OPENAI", StringComparison.OrdinalIgnoreCase) || k.StartsWith("ANTHROPIC", StringComparison.OrdinalIgnoreCase)).ToArray();
+        var scrub = Shell.Scrub();
         async Task<ProcessResult> Git(params string[] args) => await processes.RunAsync("git", args, repo, timeout: TimeSpan.FromMinutes(2), ct: deadline.Token, scrubEnvironment: scrub);
         static string Output(ProcessResult r)
         {
@@ -99,8 +97,7 @@ public sealed class IntegrationRunner(IProcessRunner processes, IIntegrationClie
             {
                 if (string.IsNullOrWhiteSpace(command)) throw new IOException("Required integration command is missing.");
                 if (checks.Any(r => r.ExitCode != 0)) { checks.Add(new(name, command, null, 0, null, null, true)); continue; }
-                var shell = OperatingSystem.IsWindows() ? "pwsh" : "/bin/sh";
-                var arguments = OperatingSystem.IsWindows() ? new[] { "-NoProfile", "-NonInteractive", "-Command", command } : new[] { "-c", command };
+                var (shell, arguments) = Shell.Command(command);
                 var watch = Stopwatch.StartNew();
                 var result = await processes.RunAsync(shell, arguments, worktree, timeout: TimeSpan.FromSeconds(assignment.SessionTimeoutSeconds),
                     ct: deadline.Token, scrubEnvironment: scrub);

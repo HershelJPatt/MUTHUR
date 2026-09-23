@@ -26,8 +26,21 @@ public sealed record ValidationSubjectDto(
 /// <c>RequiresJudgment</c> defaults to true so a subject frozen before specs carried a Verification section keeps
 /// getting a validator session.
 /// </summary>
+/// <param name="ChecksOnlyValidation">
+/// The project's <c>checksOnlyValidation</c> switch as committed in <c>muthur.project.json</c> at the implementation
+/// commit. It lives in the committed file rather than on the project row so that it is versioned with the build and
+/// test commands it hands the verdict to, and a round is judged by the policy its own commit declared.
+/// </param>
 public sealed record ValidationChecksDto(string? Build, string? Test, IReadOnlyList<string>? Commands = null,
-    bool RequiresJudgment = true);
+    bool RequiresJudgment = true, bool ChecksOnlyValidation = false)
+{
+    // A list member would make two copies of the same pinned policy unequal; the commands are compared as values.
+    public bool Equals(ValidationChecksDto? other) => other is not null && Build == other.Build && Test == other.Test
+        && RequiresJudgment == other.RequiresJudgment && ChecksOnlyValidation == other.ChecksOnlyValidation
+        && (Commands ?? []).SequenceEqual(other.Commands ?? [], StringComparer.Ordinal);
+
+    public override int GetHashCode() => HashCode.Combine(Build, Test, RequiresJudgment, ChecksOnlyValidation, (Commands ?? []).Count);
+}
 public sealed record ValidatorBriefDigestDto(string Role, string Sha256);
 public sealed record ValidationEnvironmentDto(string ProjectKey, string DefaultBranch, string LandingMode,
     IReadOnlyList<ValidatorBriefDigestDto> Briefs);

@@ -167,7 +167,7 @@ public static class SimCommands
             await Git("config", "commit.gpgsign", "false");
             await Git("config", "core.autocrlf", "false");
             await File.WriteAllTextAsync(Path.Combine(repo, ProjectContext.FileName),
-                """{ "key": "sim", "build": "echo sim build", "test": "echo sim test", "notes": "A scratch project driven by muthur sim run." }""", ct);
+                """{ "key": "sim", "build": "echo sim build", "test": "echo sim test", "checksOnlyValidation": true, "notes": "A scratch project driven by muthur sim run." }""", ct);
             await File.WriteAllTextAsync(Path.Combine(repo, "README.md"), "# sim\n\nA throwaway repository the sim lands tasks into.\n", ct);
             Directory.CreateDirectory(Path.Combine(repo, "specs"));
             await File.WriteAllTextAsync(Path.Combine(repo, "specs", "_TEMPLATE.md"), "# T-n — title\n\n## Goal\n\n## Verification\n", ct);

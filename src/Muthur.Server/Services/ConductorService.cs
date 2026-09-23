@@ -5,6 +5,7 @@ using Muthur.Contracts;
 using Muthur.Core;
 using Muthur.Core.Entities;
 using Muthur.Data;
+using Muthur.Launch;
 using Muthur.Server.Auth;
 
 namespace Muthur.Server.Services;
@@ -12,6 +13,14 @@ namespace Muthur.Server.Services;
 /// <summary>One validator session the conductor intends to start.</summary>
 /// <param name="AvoidHarness">The harness that built the task, if known: a different vendor checks the work where one is free.</param>
 public sealed record ConductorAssignment(int TaskId, string TaskKey, string TaskTitle, string Project, string RoleKey, string? AvoidHarness);
+
+/// <summary>
+/// One (task, validator role) pair the conductor will decide by running the subject's checks instead of staffing a
+/// session: the project switched checks-only validation on at the implementation commit, and the spec declared
+/// nothing that takes judgment. Takes no seat under the ceiling and reserves nothing.
+/// </summary>
+public sealed record DeterministicVerdict(int TaskId, string TaskKey, string RoleKey, Guid SubjectId,
+    string RepositoryPath, string ImplementationSha, IReadOnlyList<string> Commands);
 
 /// <summary>Starts one validator session. Faked in tests; the real one launches a harness through <c>AgentLauncher</c>.</summary>
 public interface IValidatorSessionLauncher
@@ -73,7 +82,9 @@ public sealed partial class ConductorService(
     HarnessService harnesses,
     OverseerService? overseer = null,
     IIntegrationSessionLauncher? integrations = null,
-    IntegrationService? integrationService = null)
+    IntegrationService? integrationService = null,
+    IProcessRunner? processes = null,
+    AgentService? agents = null)
 {
     private readonly SemaphoreSlim _pass = new(1, 1);
     private readonly HashSet<string> _running = [];
@@ -705,13 +716,29 @@ public sealed partial class ConductorService(
     /// What the conductor would staff right now, most urgent first. Separated from starting anything so the
     /// decision can be tested without launching a process.
     /// </summary>
-    public async Task<IReadOnlyList<ConductorAssignment>> PlanAsync(CancellationToken ct = default)
+    public async Task<IReadOnlyList<ConductorAssignment>> PlanAsync(CancellationToken ct = default) => (await PlanValidationAsync(ct)).Sessions;
+
+    /// <summary>
+    /// The pairs the conductor would decide by running their checks right now, most urgent first. Separated from
+    /// <see cref="PlanAsync"/> for the same reason that is separated from starting anything: the decision that a
+    /// pair needs no model is the one worth testing without a shell.
+    /// </summary>
+    public async Task<IReadOnlyList<DeterministicVerdict>> PlanDeterministicAsync(CancellationToken ct = default) => (await PlanValidationAsync(ct)).Deterministic;
+
+    /// <summary>
+    /// The pending pair goes to the checks when its commit switched checks-only validation on and its spec declared
+    /// nothing that takes judgment; every other pair is a session. A pair a validator has claimed is neither.
+    /// </summary>
+    private static bool DecidedByChecks(WorkTask task) =>
+        task.CurrentSubject?.ToDto().RequiredChecks is { ChecksOnlyValidation: true, RequiresJudgment: false };
+
+    private async Task<(IReadOnlyList<ConductorAssignment> Sessions, IReadOnlyList<DeterministicVerdict> Deterministic)> PlanValidationAsync(CancellationToken ct)
     {
-        if (!await EnabledAsync(ct)) return [];
-        if (await StaffingWaitAsync(ct, validators: true) is not null) return [];
+        if (!await EnabledAsync(ct)) return ([], []);
+        if (await StaffingWaitAsync(ct, validators: true) is not null) return ([], []);
         // Callers that already know staffing is on pass it in; PlanAsync on its own re-reads it.
 
-        return await ledger.ReadAsync<IReadOnlyList<ConductorAssignment>>(async (db, now) =>
+        return await ledger.ReadAsync<(IReadOnlyList<ConductorAssignment>, IReadOnlyList<DeterministicVerdict>)>(async (db, now) =>
         {
 
             // Only 'validating'. A blocked task is waiting on the founder, and staffing it would waste a session
@@ -724,13 +751,13 @@ public sealed partial class ConductorService(
             foreach (var task in tasks)
                 if (await Validations.CompatibleAsync(db, task, ct)) compatible.Add(task);
             tasks = compatible;
-            if (tasks.Count == 0) return [];
+            if (tasks.Count == 0) return ([], []);
 
             var ids = tasks.Select(t => t.Id).ToList();
             var pending = await db.TaskValidations
                 .Where(v => ids.Contains(v.TaskId) && v.Verdict == Verdict.Pending)
                 .ToListAsync(ct);
-            if (pending.Count == 0) return [];
+            if (pending.Count == 0) return ([], []);
 
             // Free slots, not "is it held at all": a validator role is a skill several agents may hold at once.
             var holds = await db.RoleHolds.Include(h => h.Agent).Where(h => h.LeaseExpires > now).ToListAsync(ct);
@@ -779,6 +806,7 @@ public sealed partial class ConductorService(
                 .ToDictionaryAsync(x => x.TaskId, x => x.Model, ct);
 
             var plan = new List<ConductorAssignment>();
+            var deterministic = new List<DeterministicVerdict>();
             foreach (var task in tasks)
             {
                 if (cap.GetValueOrDefault(task.Id) is { HeadMoved: false } state &&
@@ -790,6 +818,17 @@ public sealed partial class ConductorService(
                     if (incidentSuppressions.Any(s => s.TaskId == Wire.TaskId(task.Id) && s.Assignment == validation.ValidatorKey)) continue;
                     if (claimed.Contains((task.Id, validation.ValidatorKey))) continue;   // someone is already on it
                     if (!capacities.TryGetValue(validation.ValidatorKey, out var capacity)) continue;   // a role that no longer exists
+                    // Decided by the checks, not by a session: no slot, no budget, no stall to consider.
+                    if (DecidedByChecks(task))
+                    {
+                        var subject = task.CurrentSubject!;
+                        var checks = subject.ToDto().RequiredChecks;
+                        deterministic.Add(new DeterministicVerdict(task.Id, Wire.TaskId(task.Id), validation.ValidatorKey, subject.Id,
+                            subject.RepositoryPath, subject.ImplementationSha,
+                            new[] { checks.Build, checks.Test }.Concat(checks.Commands ?? []).OfType<string>()
+                                .Select(c => c.Trim()).Where(c => c.Length > 0).Distinct(StringComparer.Ordinal).ToList()));
+                        continue;
+                    }
                     // A session that cannot take the role is a session that does nothing.
                     if (liveHolders.GetValueOrDefault(validation.ValidatorKey) >= capacity) continue;
                     var key = $"{Wire.TaskId(task.Id)}/{validation.ValidatorKey}";
@@ -811,7 +850,7 @@ public sealed partial class ConductorService(
                     liveHolders[validation.ValidatorKey] = liveHolders.GetValueOrDefault(validation.ValidatorKey) + 1;
                 }
             }
-            return plan;
+            return (plan, deterministic);
         }, ct);
     }
 
@@ -1222,7 +1261,12 @@ public sealed partial class ConductorService(
                     catch { lock (_running) _running.Remove(overseerKey); throw; }
                 }
             }
-            foreach (var assignment in await PlanAsync(ct))
+            // Before any session, and outside the ceiling: a verdict the checks can give is given here, in this
+            // pass, and never costs a seat. The pairs a session has to decide are planned in the same read.
+            var (sessions, deterministic) = await PlanValidationAsync(ct);
+            foreach (var verdict in deterministic) await RunChecksAsync(verdict, ct);
+
+            foreach (var assignment in sessions)
             {
                 var key = $"{assignment.TaskKey}/{assignment.RoleKey}";
                 lock (_running)
@@ -1280,6 +1324,47 @@ public sealed partial class ConductorService(
             return started;
         }
         finally { _pass.Release(); }
+    }
+
+    /// <summary>
+    /// Integration's checks, once, before landing, as the verdict: the subject's required commands run in a
+    /// detached worktree at its implementation commit, and all-zero exits pass the pair while anything else fails
+    /// it with the same evidence shape a model validator leaves — one line per command with its exit code, then
+    /// the output tails. Recorded under one registered identity so the ledger says who decided, and always
+    /// preceded by <c>validation.checks_run</c>: silence is the failure mode this repo has already paid for.
+    /// </summary>
+    private async Task RunChecksAsync(DeterministicVerdict verdict, CancellationToken ct)
+    {
+        if (processes is null || agents is null) return;
+        var identity = await agents.DeterministicValidatorAsync(ct);
+        var caller = new Caller(CallerKind.Founder, null, identity.Name, AgentService.DeterministicValidatorModel);
+        var run = await new ChecksRunner(processes).RunAsync(verdict.RepositoryPath, verdict.ImplementationSha, verdict.SubjectId,
+            verdict.Commands, TimeSpan.FromMinutes(options.ConductorSessionMinutes), ct);
+        await ledger.MutateAsync(caller, m =>
+        {
+            m.Record("validation.checks_run", verdict.TaskId, new
+            {
+                task = verdict.TaskKey, subject = verdict.SubjectId, role = verdict.RoleKey, commands = verdict.Commands,
+                seconds = Math.Round(run.Elapsed.TotalSeconds, 1), passed = run.Passed,
+            });
+            return Task.CompletedTask;
+        }, ct);
+        var evidence = $"Checks-only validation at {verdict.ImplementationSha}: {(run.Passed ? "every command exited 0" : "a command did not exit 0")}.\n" + run.Evidence();
+        try
+        {
+            await lifecycle.VerdictAsync(caller, verdict.TaskKey, new VerdictRequest(verdict.RoleKey, evidence, verdict.SubjectId),
+                run.Passed ? Verdict.Yes : Verdict.No, ct);
+            _lastAction = $"{(run.Passed ? "passed" : "failed")} {verdict.TaskKey} for {verdict.RoleKey} by its checks";
+        }
+        catch (MuthurException ex)
+        {
+            // The round closed under the run — another verdict, a revalidate. Not this pair's failure, and said so.
+            await ledger.MutateAsync(Caller.System, m =>
+            {
+                m.Record("validation.checks_discarded", verdict.TaskId, new { role = verdict.RoleKey, subject = verdict.SubjectId, code = ex.Code });
+                return Task.CompletedTask;
+            }, ct);
+        }
     }
 
     private async Task RunOverseerAsync(OverseerService.Assignment assignment, string key)
