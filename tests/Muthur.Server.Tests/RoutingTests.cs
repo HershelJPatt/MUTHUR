@@ -1,7 +1,9 @@
 using System.Net;
 using System.Net.Http.Json;
 using Muthur.Contracts;
+using Microsoft.Extensions.DependencyInjection;
 using Muthur.Launch;
+using Muthur.Server.Services;
 
 namespace Muthur.Server.Tests;
 
@@ -42,6 +44,26 @@ public sealed class RoutingTests : IDisposable
         Assert.Empty(history.Runs);
         Assert.NotNull(history.ValidationFailures);
         Assert.Empty(history.ValidationFailures);
+    }
+
+    [Fact]
+    public async Task A_disabled_candidate_is_never_staffed()
+    {
+        // The shipped catalog lists pi in both implementer tiers, switched off until its row decides the seat.
+        var shipped = await hub.Founder().GetFromJsonAsync(Routes.Tiers, MuthurJsonContext.Default.IReadOnlyListTierDto);
+        Assert.Contains("\"harness\": \"pi\"", File.ReadAllText(Path.Combine(hub.DataDir, MuthurEnvironment.HarnessFile)));
+        Assert.DoesNotContain(shipped!.SelectMany(t => t.Candidates), c => c.Harness == "pi");
+        Assert.Empty(Assert.Single(shipped!, t => t.Tier == "local-implementer").Candidates);
+
+        // Leading the tier does not change that: the conductor's validator staffing reads the same catalog.
+        File.WriteAllText(Path.Combine(hub.DataDir, MuthurEnvironment.HarnessFile), """
+            { "tiers": { "implementer": [
+                { "harness": "pi", "model": "gemma4:26b", "account": "local", "enabled": false },
+                { "harness": "claude", "model": "sonnet", "account": "a" } ] } }
+            """);
+        var (tier, candidates) = await ActivatorUtilities.CreateInstance<ValidatorSessionLauncher>(hub.Services).CandidatesAsync(null, CancellationToken.None);
+        Assert.Equal("implementer", tier);
+        Assert.Equal(["claude"], candidates.Select(c => c.Harness));
     }
 
     /// <summary>

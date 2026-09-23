@@ -70,7 +70,7 @@ public sealed class DoctorAgentCheck(AgentService agents, HarnessService harness
         // Ordinal throughout: 'Claude' is not 'claude', and a check that pretended otherwise would hide the
         // class of typo it exists to catch.
         var harness = agent.Harness;
-        bool? hasKit = kits?.Contains(harness, StringComparer.Ordinal);
+        bool? hasKit = kits?.Contains(KitDirectory.KitFor(harness), StringComparer.Ordinal);
         bool? inCatalog = catalog?.Contains(harness, StringComparer.Ordinal);
 
         return (hasKit, inCatalog) switch

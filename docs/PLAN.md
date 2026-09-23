@@ -128,6 +128,14 @@ Exact flags, subagent support and local-model wiring per harness are verified ag
   "utility": [ { "harness": "codex-oss", "model": "<ollama model>", "account": "local" } ] }
 ```
 
+Optional keys on a candidate: `reasoningEffort` (the ceiling `RoutingPolicy.EffortFor` works under), `maxTurns`
+(a turn cap where the harness has one; absent or non-positive means none), `enabled` (`false` keeps the entry as a
+toggle that is never staffed) and `contextWindow` (the model's window in tokens, for a harness that must be told it:
+pi writes it into the scratch model catalog of a local model, default 32768, so a model served with a 64 K window is
+not compacted at 32 K; absent or non-positive means the default). `contextWindow` is what pi believes, not what the
+server gives: Ollama's own window is `OLLAMA_CONTEXT_LENGTH` on the Ollama server, and the two should agree. On pi a
+model named `provider/id` is hosted and runs from the user's own pi directory; a bare id is a local Ollama model.
+
 **Harness-agnostic worker spawn.** `muthur worker run --tier implementer --spec specs/T-1.md`:
 creates the git worktree, picks the first available candidate for the tier, launches that harness headless
 with the implementer prompt + spec, captures the result, returns `{branch, summary, exit}`. The worker gets

@@ -497,6 +497,68 @@ public sealed class WorkerLauncherTests : IDisposable
         Assert.Contains("MUTHUR_AGENT", started.Scrubbed!);
         Assert.Contains("MUTHUR_TOKEN", started.Scrubbed!);
     }
+
+    [Fact]
+    public async Task A_pi_worker_lands_its_unit_through_the_guard()
+    {
+        // What worker run hands a pi candidate: the worker deny list, the composed assignment, a worktree of its own.
+        string[] denied = ["muthur *", "muthur.exe *", "git push*", "git merge*", "git rebase*", "gh *"];
+        var worktree = Directory.CreateDirectory(Path.Combine(_scratch, "worktree")).FullName;
+        var assignment = new WorkerAssignment(_scratch, "task/T-1", new string('a', 40), "main", "specs/T-1.md", new string('b', 40), "worker/T-1-a", worktree);
+        var prompt = WorkerPrompt.Compose("# Contract", "specs/T-1.md", "A", "worker/T-1-a", ["dotnet test"], null, assignment);
+        var pi = new PiWorker();
+
+        var attempt = Assert.Single(await new WorkerLauncher(pi, Installed, workerProcesses: new ContainedFixture(pi), admission: AdmittedFixture.Context(_scratch))
+            .RunAsync([new("pi", "gemma4:26b", "local")], c => new(worktree, prompt, c.Model, null, [], denied, Path.Combine(_scratch, "scratch")),
+                TimeSpan.FromMinutes(1), _ => Task.CompletedTask));
+
+        Assert.True(attempt.Outcome.Success, attempt.Outcome.Report);
+        Assert.Equal("done", WorkerReport.Status(attempt.Outcome.Report));
+        Assert.Equal("unit", File.ReadAllText(Path.Combine(worktree, "unit.txt")));
+        Assert.Equal(["printf unit > unit.txt"], pi.Ran);
+        Assert.Contains(PiGuard.BlockMarker, pi.Refused);
+        Assert.Equal(1200, attempt.Outcome.InputTokens);
+        var args = pi.Arguments!.ToList();
+        Assert.Equal("read,bash,edit,write,grep,find,ls", args[args.IndexOf("--tools") + 1]);
+        Assert.Contains(WorkerPrompt.VerifiedMarker, File.ReadAllText(args[args.IndexOf("--system-prompt") + 1]));
+    }
+
+    /// <summary>
+    /// pi as the launcher sees it, playing a worker that tries the denied push and then does its unit. The guard it was
+    /// handed decides the push, by <see cref="PiGuard.Denies"/> (the extension's rule in C#) over the patterns the
+    /// rendered extension names; a refusal goes into the stream the way pi reports a blocked tool call.
+    /// </summary>
+    private sealed class PiWorker : IProcessRunner
+    {
+        public IReadOnlyList<string>? Arguments { get; private set; }
+        public List<string> Ran { get; } = [];
+        public string Refused { get; private set; } = "";
+
+        public Task<ProcessResult> RunAsync(string fileName, IReadOnlyList<string> arguments, string workingDirectory, string? stdin = null,
+            TimeSpan? timeout = null, CancellationToken ct = default, IReadOnlyCollection<string>? scrubEnvironment = null, IReadOnlyDictionary<string, string>? environment = null)
+        {
+            Assert.Equal("pi", fileName);
+            Arguments = arguments;
+            var args = arguments.ToList();
+            var guard = File.ReadAllText(args[args.IndexOf("-e") + 1]);
+            var patterns = System.Text.RegularExpressions.Regex.Matches(guard, "const denied: string\\[\\] = \\[(.*)\\];").Single().Groups[1].Value
+                .Split(", ").Select(p => System.Text.Json.JsonSerializer.Deserialize<string>(p)!).ToList();
+            var stream = new System.Text.StringBuilder();
+            foreach (var command in new[] { "git add -A && git push origin HEAD", "printf unit > unit.txt" })
+            {
+                if (PiGuard.Denies(patterns, command))
+                {
+                    Refused = $"{PiGuard.BlockMarker} \"{command}\"";
+                    stream.AppendLine(System.Text.Json.JsonSerializer.Serialize(Refused));
+                    continue;
+                }
+                Ran.Add(command);
+                File.WriteAllText(Path.Combine(workingDirectory, "unit.txt"), "unit");
+            }
+            stream.AppendLine("""{"type":"message_end","message":{"role":"assistant","content":[{"type":"text","text":"STATUS: done"}],"stopReason":"stop","usage":{"input":1200,"output":80,"cacheRead":0}}}""");
+            return Task.FromResult(new ProcessResult(0, stream.ToString(), ""));
+        }
+    }
 }
 
 public sealed class WorkerReportTests

@@ -37,6 +37,14 @@ public static class KitDirectory
     }
 
     /// <summary>
+    /// The kit a harness reads its procedures from. The Codex kit is AGENTS.md-shaped, so it serves the Codex
+    /// local-provider variant and pi, which reads AGENTS.md too; every other harness has a kit of its own name.
+    /// </summary>
+    public static string KitFor(string harness) =>
+        harness.StartsWith("codex", StringComparison.OrdinalIgnoreCase) || harness.Equals("pi", StringComparison.OrdinalIgnoreCase)
+            ? "codex" : harness;
+
+    /// <summary>
     /// The harnesses that kit has procedures for: its immediate subdirectories holding a <see cref="Manifest"/>,
     /// in ordinal order.
     /// <para>

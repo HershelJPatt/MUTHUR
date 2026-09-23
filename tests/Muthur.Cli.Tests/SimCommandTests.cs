@@ -32,9 +32,9 @@ public sealed class SimCommandTests
     {
         var reports = new[]
         {
-            """{"seconds":40.0,"landed":6,"coldStartsPerLanded":1.5,"modelTokens":100,"modelCacheReadTokens":10,"modelSeconds":5.0}""",
-            """{"seconds":50.0,"landed":6,"coldStartsPerLanded":1.7,"modelTokens":120,"modelCacheReadTokens":20,"modelSeconds":7.0}""",
-            """{"seconds":30.0,"landed":0,"modelTokens":80,"modelCacheReadTokens":0,"modelSeconds":3.0}""",
+            """{"seconds":40.0,"landed":6,"coldStartsPerLanded":1.5,"freshTokens":100,"cacheReadTokens":10,"modelSeconds":5.0}""",
+            """{"seconds":50.0,"landed":6,"coldStartsPerLanded":1.7,"freshTokens":120,"cacheReadTokens":20,"modelSeconds":7.0}""",
+            """{"seconds":30.0,"landed":0,"freshTokens":80,"cacheReadTokens":0,"modelSeconds":3.0}""",
         };
 
         using var doc = System.Text.Json.JsonDocument.Parse(SimCommands.Aggregate(reports));
@@ -51,6 +51,11 @@ public sealed class SimCommandTests
         Assert.Equal(1.6, cold.GetProperty("median").GetDouble());
         Assert.Equal(1.5, cold.GetProperty("min").GetDouble());
         Assert.Equal(1.7, cold.GetProperty("max").GetDouble());
+
+        // The token fields are the ones the report writes today (fresh and cache reads apart), not the old modelTokens.
+        Assert.Equal(100, root.GetProperty("freshTokens").GetProperty("median").GetDouble());
+        Assert.Equal(20, root.GetProperty("cacheReadTokens").GetProperty("max").GetDouble());
+        Assert.False(root.TryGetProperty("modelTokens", out _));
 
         Assert.Equal(3, root.GetProperty("rows").GetArrayLength());
     }
@@ -236,6 +241,25 @@ public sealed class SimCommandTests
         Assert.False(scripted.RealHarness);
         Assert.Null(scripted.Kit);
         Assert.Equal(SimCommands.Catalog, SimCommands.CatalogFor(scripted));
+    }
+
+    [Fact]
+    public void A_pi_run_on_a_hosted_model_passes_the_provider_through_and_is_not_local()
+    {
+        var hosted = new SimCommands.RunOptions(2, 0, 20, 20, 0, false, Harness: "pi", Model: "anthropic/claude-sonnet-5", Effort: "low");
+        Assert.Equal("codex", hosted.Kit);
+        using var doc = System.Text.Json.JsonDocument.Parse(SimCommands.CatalogFor(hosted));
+        var mastermind = Assert.Single(doc.RootElement.GetProperty("tiers").GetProperty("mastermind").EnumerateArray());
+        Assert.Equal(("pi", "anthropic/claude-sonnet-5", "anthropic-api"),
+            (mastermind.GetProperty("harness").GetString(), mastermind.GetProperty("model").GetString(), mastermind.GetProperty("account").GetString()));
+        // The model reaches the adapter as written, so pi runs from the user's own directory, with its credentials.
+        var scratch = Directory.CreateTempSubdirectory("muthur-tests-pi-").FullName;
+        try { Assert.Null(Muthur.Launch.Harnesses.Find("pi")!.Build(new(scratch, "", mastermind.GetProperty("model").GetString()!, null, [], [], scratch)).Environment); }
+        finally { Directory.Delete(scratch, recursive: true); }
+
+        var local = new SimCommands.RunOptions(2, 0, 20, 20, 0, false, Harness: "pi", Model: "gemma4:26b");
+        using var localDoc = System.Text.Json.JsonDocument.Parse(SimCommands.CatalogFor(local));
+        Assert.Equal("local", localDoc.RootElement.GetProperty("tiers").GetProperty("mastermind")[0].GetProperty("account").GetString());
     }
 
     /// <summary>Model calls, tokens and seconds come off the same rows the receipts read; scripted rows and starts that never ran count nothing.</summary>

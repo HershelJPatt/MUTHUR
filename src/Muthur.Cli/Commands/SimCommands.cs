@@ -50,10 +50,10 @@ public static class SimCommands
         var minutes = new Option<int>("--minutes") { DefaultValueFactory = _ => 20, Description = "Give up watching after this long." };
         var port = new Option<int>("--port") { DefaultValueFactory = _ => 0, Description = "Loopback port for the scratch hub (default: a free one)." };
         var keep = new Option<bool>("--keep") { Description = "Leave the scratch hub running and its files in place when done." };
-        var harness = new Option<string?>("--harness") { Description = "Staff the mastermind and implementer tiers on a real harness (claude, codex, codex-oss) instead of the scripted one; validation stays deterministic. The matching kit is installed into the scratch repository." };
-        var runModel = new Option<string?>("--model") { Description = "The model for --harness, e.g. gemma4:26b on codex-oss." };
+        var harness = new Option<string?>("--harness") { Description = "Staff the mastermind and implementer tiers on a real harness (claude, codex, codex-oss, pi) instead of the scripted one; validation stays deterministic. The matching kit is installed into the scratch repository." };
+        var runModel = new Option<string?>("--model") { Description = "The model for --harness, e.g. gemma4:26b on codex-oss or pi. On pi, provider/id (anthropic/claude-sonnet-5) runs hosted from your own pi directory." };
         var effort = new Option<string?>("--effort") { Description = "Reasoning effort for --harness (low, medium, high)." };
-        var repeat = new Option<int>("--repeat") { DefaultValueFactory = _ => 1, Description = "Run the fixture this many times sequentially, a fresh scratch hub each time, and print one report with the median and min/max of seconds, coldStartsPerLanded, modelTokens, modelCacheReadTokens, modelSeconds and landed across the runs, plus every run's own row. The default of 1 is today's single-run report, unchanged." };
+        var repeat = new Option<int>("--repeat") { DefaultValueFactory = _ => 1, Description = "Run the fixture this many times sequentially, a fresh scratch hub each time, and print one report with the median and min/max of seconds, coldStartsPerLanded, freshTokens, cacheReadTokens, freshTokensPerLanded, modelSeconds and landed across the runs, plus every run's own row. The default of 1 is today's single-run report, unchanged." };
         var run = new Command("run", "Start a scratch hub on the sim harness, seed tasks, turn the conductor on and stream the ledger until every task is done.")
             { tasks, runPace, answer, runAskWait, minutes, port, keep, harness, runModel, effort, repeat };
         run.SetAction((parse, ct) => RunAsync(parse, new RunOptions(parse.GetValue(tasks), parse.GetValue(runPace), parse.GetValue(answer),
@@ -109,10 +109,8 @@ public static class SimCommands
         /// <summary>Whether the mastermind and implementer tiers run a real model rather than the scripted session.</summary>
         public bool RealHarness => Harness is { Length: > 0 } && !Harness.Equals("sim", StringComparison.OrdinalIgnoreCase);
 
-        /// <summary>The kit a real harness reads its procedures from: the Codex kit serves the local-provider variant too.</summary>
-        public string? Kit => !RealHarness ? null
-            : Harness!.StartsWith("codex", StringComparison.OrdinalIgnoreCase) || Harness.Equals("pi", StringComparison.OrdinalIgnoreCase) ? "codex"   // pi reads AGENTS.md too
-            : Harness.ToLowerInvariant();
+        /// <summary>The kit a real harness reads its procedures from.</summary>
+        public string? Kit => !RealHarness ? null : KitDirectory.KitFor(Harness!.ToLowerInvariant());
     }
 
     /// <summary>
@@ -136,7 +134,9 @@ public static class SimCommands
     /// <summary>
     /// The catalog for a run: the scripted one, or one that staffs both model tiers on a real harness. The limited
     /// scripted candidate stays at the head of the implementer tier either way, so the fall-through is still measured;
-    /// the real candidate's account is "local", which is what the worker launcher's local-tier rules key on.
+    /// the real candidate's account is "local", which is what the worker launcher's local-tier rules key on. A model
+    /// named "provider/id" is hosted, not local: it runs on "provider-api", and the model passes through untouched, so
+    /// pi keeps the user's own agent directory, where that provider's credentials live.
     /// </summary>
     internal static string CatalogFor(RunOptions o)
     {
@@ -149,7 +149,7 @@ public static class SimCommands
                 json.WriteStartObject();
                 json.WriteString("harness", o.Harness!.ToLowerInvariant());
                 json.WriteString("model", o.Model ?? "");
-                json.WriteString("account", "local");
+                json.WriteString("account", o.Model?.IndexOf('/') is > 0 and var slash ? o.Model[..slash] + "-api" : "local");
                 if (o.Effort is { Length: > 0 } effort) json.WriteString("reasoningEffort", effort);
                 json.WriteEndObject();
             }
@@ -200,7 +200,7 @@ public static class SimCommands
     }
 
     /// <summary>What the report's numbers are judged on across repeats: median and spread, not just the last run.</summary>
-    private static readonly string[] AggregatedFields = ["seconds", "coldStartsPerLanded", "modelTokens", "modelCacheReadTokens", "modelSeconds", "landed"];
+    private static readonly string[] AggregatedFields = ["seconds", "coldStartsPerLanded", "freshTokens", "cacheReadTokens", "freshTokensPerLanded", "modelSeconds", "landed"];
 
     /// <summary>One run's field values, read off each report a run's field is present in; a missing field is skipped, not zero-filled.</summary>
     internal static string Aggregate(IReadOnlyList<string> reports)
