@@ -45,6 +45,7 @@ public sealed class HarnessTests : IDisposable
         Assert.Equal(["sim", "agent", "--report", Path.Combine(_scratch, "sim-report.txt"), "--cd", "C:/repo/.worktrees/w1", "--model", "scripted"], invocation.Arguments);
         Assert.Equal("do the unit", invocation.Stdin);
         Assert.Null(Harnesses.Find("sim")!.WorkerNote);
+        Assert.Equal("muthur", Harnesses.Find("sim")!.CapabilityExecutable);
     }
 
     [Theory]

@@ -15,6 +15,9 @@ public sealed class SimAdapter : IHarnessAdapter
 
     public string? WorkerNote => null;
 
+    /// <summary>The worker launcher resolves this on PATH before it reserves a seat; the CLI is its own harness.</summary>
+    public string? CapabilityExecutable => "muthur";
+
     private static string ReportFile(WorkerRequest request) => Path.Combine(request.ScratchDirectory, "sim-report.txt");
 
     public HarnessInvocation Build(WorkerRequest request) =>
