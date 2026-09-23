@@ -433,11 +433,42 @@ public sealed partial class ConductorService(
             await ledger.ReadAsync((db, _) => IncidentService.EffectiveAsync(db, ct), ct));
     }
 
-    private async Task<string?> StaffingWaitAsync(CancellationToken ct)
+    /// <summary>
+    /// Why nothing can be staffed right now, or null. Orchestrators come from the mastermind tier; validators from
+    /// their configured tier with mastermind as the fallback, so a validator wait needs both tiers dry. A tier with
+    /// no candidates at all is not a wait — that is a catalog problem, and the launcher says so when it runs.
+    /// </summary>
+    private async Task<string?> StaffingWaitAsync(CancellationToken ct, bool validators = false)
     {
-        var candidates = (await harnesses.TiersAsync("mastermind", ct)).SelectMany(t => t.Candidates).ToList();
+        var tiers = (validators ? new[] { options.ConductorValidatorTier, "mastermind" } : ["mastermind"])
+            .Distinct(StringComparer.OrdinalIgnoreCase).ToList();
+        var candidates = new List<HarnessCandidateDto>();
+        foreach (var tier in tiers)
+            candidates.AddRange((await harnesses.TiersAsync(tier, ct)).SelectMany(t => t.Candidates));
         if (candidates.Count == 0 || candidates.Any(c => !c.Limited)) return null;
-        return $"All mastermind accounts are limited; earliest retry {candidates.Min(c => c.LimitedUntil):O}.";
+        var earliest = candidates.Min(c => c.LimitedUntil);
+        await AnnounceStaffingWaitAsync(string.Join("+", tiers), earliest, ct);
+        return $"All {string.Join(" and ", tiers)} accounts are limited; earliest retry {earliest:O}.";
+    }
+
+    private readonly Dictionary<string, DateTimeOffset?> _announcedWaits = new(StringComparer.Ordinal);
+
+    /// <summary>
+    /// One <c>conductor.skipped</c> per wait window, not one per pass: the ledger is where the founder learns the
+    /// organization is sitting idle on quota, and sixty identical rows an hour would bury the one that says so.
+    /// </summary>
+    private async Task AnnounceStaffingWaitAsync(string tiers, DateTimeOffset? until, CancellationToken ct)
+    {
+        lock (_announcedWaits)
+        {
+            if (_announcedWaits.TryGetValue(tiers, out var announced) && announced == until) return;
+            _announcedWaits[tiers] = until;
+        }
+        await ledger.MutateAsync(Caller.Founder, m =>
+        {
+            m.Record("conductor.skipped", payload: new { reason = "accounts_limited", tiers, until });
+            return Task.CompletedTask;
+        }, ct);
     }
 
     private async Task<IReadOnlyList<LandingWaitDto>> LandingWaitsAsync(CancellationToken ct)
@@ -673,7 +704,7 @@ public sealed partial class ConductorService(
     public async Task<IReadOnlyList<ConductorAssignment>> PlanAsync(CancellationToken ct = default)
     {
         if (!await EnabledAsync(ct)) return [];
-        if (await StaffingWaitAsync(ct) is not null) return [];
+        if (await StaffingWaitAsync(ct, validators: true) is not null) return [];
         // Callers that already know staffing is on pass it in; PlanAsync on its own re-reads it.
 
         return await ledger.ReadAsync<IReadOnlyList<ConductorAssignment>>(async (db, now) =>

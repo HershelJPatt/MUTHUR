@@ -43,17 +43,40 @@ public sealed class HarnessService(Ledger ledger, MuthurOptions options)
         return ledger.MutateAsync(caller, m => ApplyAsync(m, request.Account.Trim(), request.Until, ct), ct);
     }
 
-    /// <summary>Automatic exhaustion never clears or shortens an existing account limit.</summary>
+    /// <summary>The longest an automatic limit grows to; a founder-set limit can be anything.</summary>
+    internal const int MaxBackoffHours = 8;
+
+    /// <summary>
+    /// Automatic exhaustion never clears or shortens an existing account limit, and it backs off: the second time an
+    /// account runs dry within a day the limit is two hours, then four, then eight. One hour was the whole of the
+    /// rule once, and the ledger shows what that bought: a session started into the same exhausted account every
+    /// pass for six hours, each one a cold start that read its prompt and printed the quota banner.
+    /// </summary>
     internal static async Task ExhaustedAsync(Mutation m, string account, CancellationToken ct)
     {
         var existing = await m.Db.AccountLimits.SingleOrDefaultAsync(l => l.Account == account, ct);
-        var until = m.Now.AddHours(1);
+        var since = m.Now.AddHours(-24);
+        var recent = await m.Db.Events.Where(e => e.Type == "account.limited" && e.At >= since).Select(e => e.PayloadJson).ToListAsync(ct);
+        var attempt = 1 + recent.Count(json => IsAutomaticFor(json, account));
+        var hours = Math.Min(MaxBackoffHours, 1 << (attempt - 1));
+        var until = m.Now.AddHours(hours);
         if (existing?.LimitedUntil > until) return;
-        await ApplyAsync(m, account, until, ct);
+        await ApplyAsync(m, account, until, ct, attempt);
+    }
+
+    private static bool IsAutomaticFor(string payloadJson, string account)
+    {
+        try
+        {
+            using var doc = JsonDocument.Parse(payloadJson);
+            return doc.RootElement.TryGetProperty("account", out var a) && a.GetString() == account &&
+                doc.RootElement.TryGetProperty("automatic", out var auto) && auto.ValueKind == JsonValueKind.True;
+        }
+        catch (JsonException) { return false; }
     }
 
     /// <summary>Shared with <see cref="AgentService"/>: an agent reporting itself limited also limits its account.</summary>
-    public static async Task ApplyAsync(Mutation m, string account, DateTimeOffset? until, CancellationToken ct)
+    public static async Task ApplyAsync(Mutation m, string account, DateTimeOffset? until, CancellationToken ct, int? attempt = null)
     {
         var existing = await m.Db.AccountLimits.SingleOrDefaultAsync(l => l.Account == account, ct);
         if (until is null || until <= m.Now)
@@ -71,7 +94,9 @@ public sealed class HarnessService(Ledger ledger, MuthurOptions options)
         existing.LimitedUntil = until.Value;
         existing.ReportedBy = m.Caller.Name;
         existing.ReportedAt = m.Now;
-        m.Record("account.limited", payload: new { account, until, by = m.Caller.Name });
+        m.Record("account.limited", payload: attempt is { } n
+            ? new { account, until, by = m.Caller.Name, automatic = true, attempt = n }
+            : new { account, until, by = m.Caller.Name });
     }
 
     public Task RecordWorkerRunAsync(Caller caller, WorkerRunReport report, CancellationToken ct = default)

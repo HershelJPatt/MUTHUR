@@ -112,6 +112,121 @@ public sealed class ReliabilityTests : IDisposable
     }
 
     [Fact]
+    public async Task Automatic_limits_back_off_within_a_day_and_never_shorten_a_founder_limit()
+    {
+        _ = _hub.Server;
+        var harnesses = _hub.Services.GetRequiredService<HarnessService>();
+        var launcher = ActivatorUtilities.CreateInstance<OrchestratorSessionLauncher>(_hub.Services);
+        async Task<DateTimeOffset?> Until() =>
+            (await harnesses.TiersAsync("mastermind")).Single().Candidates.First(c => c.Account == "a").LimitedUntil;
+        File.WriteAllText(Path.Combine(_hub.DataDir, MuthurEnvironment.HarnessFile),
+            """{ "tiers": { "mastermind": [ { "harness": "claude", "model": "opus", "account": "a" } ] } }""");
+
+        var start = _hub.Clock.GetUtcNow();
+        await launcher.MarkLimitedAsync("a", default);
+        Assert.Equal(start.AddHours(1), await Until());
+        _hub.Clock.Advance(TimeSpan.FromHours(1) + TimeSpan.FromSeconds(1));
+        await launcher.MarkLimitedAsync("a", default);
+        Assert.Equal(_hub.Clock.GetUtcNow().AddHours(2), await Until());
+        _hub.Clock.Advance(TimeSpan.FromHours(2) + TimeSpan.FromSeconds(1));
+        await launcher.MarkLimitedAsync("a", default);
+        Assert.Equal(_hub.Clock.GetUtcNow().AddHours(4), await Until());
+        _hub.Clock.Advance(TimeSpan.FromHours(4) + TimeSpan.FromSeconds(1));
+        await launcher.MarkLimitedAsync("a", default);
+        Assert.Equal(_hub.Clock.GetUtcNow().AddHours(8), await Until());
+        _hub.Clock.Advance(TimeSpan.FromHours(8) + TimeSpan.FromSeconds(1));
+        await launcher.MarkLimitedAsync("a", default);
+        Assert.Equal(_hub.Clock.GetUtcNow().AddHours(HarnessService.MaxBackoffHours), await Until());   // capped, not sixteen
+
+        // A day later the count starts over, and a founder's longer limit is never shortened by the automatic one.
+        _hub.Clock.Advance(TimeSpan.FromHours(30));
+        var longer = _hub.Clock.GetUtcNow().AddDays(2);
+        await harnesses.ReportLimitAsync(Caller.Founder, new AccountLimitRequest("a", longer));
+        await launcher.MarkLimitedAsync("a", default);
+        Assert.Equal(longer, await Until());
+        var limited = (await _hub.Founder().GetFromJsonAsync(Routes.Events, MuthurJsonContext.Default.IReadOnlyListEventDto))!
+            .Where(e => e.Type == "account.limited").ToList();
+        Assert.Equal(1, limited[0].Payload.GetProperty("attempt").GetInt32());
+        Assert.Equal(2, limited[1].Payload.GetProperty("attempt").GetInt32());
+        Assert.True(limited[0].Payload.GetProperty("automatic").GetBoolean());
+    }
+
+    private async Task<string> ValidatingTaskOnTwoTiersAsync()
+    {
+        _hub.Settings["Muthur:ConductorEnabled"] = "true";
+        await _hub.AddProjectAsync(repoPath: _repo.Path, validators: ["win-validator"]);
+        (await _hub.Founder().PutAsJsonAsync(Routes.Roles, new DefineRoleRequest("win-validator", "Check it", true))).EnsureSuccessStatusCode();
+        File.WriteAllText(Path.Combine(_hub.DataDir, MuthurEnvironment.HarnessFile),
+            """
+            { "tiers": {
+                "mastermind":  [ { "harness": "claude", "model": "opus", "account": "a" } ],
+                "implementer": [ { "harness": "codex",  "model": "gpt",  "account": "b" } ] } }
+            """);
+        var owner = await _hub.RegisterAgentAsync("owner");
+        var task = await owner.AddTaskAsync("Validate me");
+        (await owner.ClaimAsync(task.Id)).EnsureSuccessStatusCode();
+        (await owner.PostActionAsync(task.Id, "spec", new SetSpecRequest(_repo.WriteSpec(task.Id)))).EnsureSuccessStatusCode();
+        _repo.BranchWithFile("task/T-1-feature", "feature.txt", "feature\n");
+        (await owner.PostActionAsync(task.Id, "implemented", new ImplementedRequest("task/T-1-feature"))).EnsureSuccessStatusCode();
+        return task.Id;
+    }
+
+    private async Task<IReadOnlyList<EventDto>> SkippedAsync() =>
+        (await _hub.Founder().GetFromJsonAsync(Routes.Events, MuthurJsonContext.Default.IReadOnlyListEventDto))!
+            .Where(e => e.Type == "conductor.skipped").ToList();
+
+    [Fact]
+    public async Task Validators_wait_only_when_their_own_tier_and_the_fallback_are_both_limited()
+    {
+        await ValidatingTaskOnTwoTiersAsync();
+        var conductor = _hub.Services.GetRequiredService<ConductorService>();
+        var launcher = ActivatorUtilities.CreateInstance<ValidatorSessionLauncher>(_hub.Services);
+
+        Assert.Single(await conductor.PlanAsync());
+        await launcher.MarkLimitedAsync("b", default);
+        Assert.Single(await conductor.PlanAsync());          // mastermind is the fallback, so validation still goes ahead
+        await launcher.MarkLimitedAsync("a", default);
+        Assert.Empty(await conductor.PlanAsync());
+        Assert.Empty(await conductor.PlanAsync());
+        var skipped = Assert.Single(await SkippedAsync());    // once per window, not once per pass
+        Assert.Equal("accounts_limited", skipped.Payload.GetProperty("reason").GetString());
+        Assert.Equal("implementer+mastermind", skipped.Payload.GetProperty("tiers").GetString());
+        _hub.Clock.Advance(TimeSpan.FromHours(1) + TimeSpan.FromSeconds(1));
+        Assert.Single(await conductor.PlanAsync());
+        Assert.Single(await SkippedAsync());
+    }
+
+    [Fact]
+    public async Task A_session_that_runs_dry_is_not_restarted_every_pass()
+    {
+        await ValidatingTaskOnTwoTiersAsync();
+        var launcher = ActivatorUtilities.CreateInstance<ValidatorSessionLauncher>(_hub.Services);
+        // What the real launcher does when every candidate prints the quota banner: limits each account, then reports
+        // a session that ran and produced nothing.
+        _hub.Validators.OnStart = async _ =>
+        {
+            await launcher.MarkLimitedAsync("b", default);
+            await launcher.MarkLimitedAsync("a", default);
+        };
+        _hub.Validators.Throw = new ValidatorSessionException("ERROR: You've hit your usage limit.");
+        var conductor = _hub.Services.GetRequiredService<ConductorService>();
+
+        var starts = new List<TimeSpan>();
+        var begin = _hub.Clock.GetUtcNow();
+        for (var minute = 0; minute < 200; minute++)
+        {
+            var before = _hub.Validators.Started.Count;
+            await conductor.RunPassAsync();
+            await Eventually.TrueAsync(async () => (await conductor.StatusAsync()).Sessions.Count == 0 ? "settled" : null, "a session never settled");
+            if (_hub.Validators.Started.Count > before) starts.Add(_hub.Clock.GetUtcNow() - begin);
+            _hub.Clock.Advance(TimeSpan.FromMinutes(1));
+        }
+
+        // 1 h, then 2 h of backoff: three starts in 200 minutes, where one per pass would have been two hundred.
+        Assert.Equal([TimeSpan.Zero, TimeSpan.FromMinutes(60), TimeSpan.FromMinutes(180)], starts);
+    }
+
+    [Fact]
     public async Task Dependencies_survive_restart_prevent_claims_and_wake_only_after_landing()
     {
         _hub.Settings["Muthur:ConductorEnabled"] = "true";

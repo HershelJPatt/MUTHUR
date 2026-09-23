@@ -35,6 +35,24 @@ public sealed class LifecycleTests : IDisposable
         return (owner, task.Id);
     }
 
+    [Theory]
+    [InlineData(false, true)]
+    [InlineData(true, false)]
+    public async Task Ready_for_validation_is_posted_to_the_role_only_when_a_person_staffs_it(bool conductorOn, bool posted)
+    {
+        _hub.Settings["Muthur:ConductorEnabled"] = conductorOn ? "true" : "false";
+        await _hub.AddProjectAsync(repoPath: _repo.Path, validators: ["win-validator"]);
+        await DefineRolesAsync("win-validator");
+        var (owner, id) = await ImplementableTaskAsync();
+        var win = await _hub.RegisterAgentAsync("win");
+        (await win.PostAsync(Routes.RoleAction("win-validator", "take"), null)).EnsureSuccessStatusCode();
+
+        (await owner.PostActionAsync(id, "implemented", new ImplementedRequest("task/T-1-feature"))).EnsureSuccessStatusCode();
+
+        var inbox = (await win.GetFromJsonAsync(Routes.Inbox, MuthurJsonContext.Default.InboxDto))!;
+        Assert.Equal(posted, inbox.Messages.Any(m => m.Body.Contains("ready for validation")));
+    }
+
     [Fact]
     public async Task A_task_lands_only_after_every_required_validator_says_yes()
     {

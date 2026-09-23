@@ -11,6 +11,10 @@ public sealed class LifecycleService(Ledger ledger, LeasePolicy leases, ITaskLan
 {
     private readonly SemaphoreSlim _landing = new(1, 1);
 
+    private async Task<bool> ConductorStaffsValidatorsAsync(Mutation m, CancellationToken ct) =>
+        await m.Db.Meta.Where(e => e.Key == MetaEntry.ConductorEnabled).Select(e => e.Value).SingleOrDefaultAsync(ct)
+            is { } stored ? stored == "true" : options.ConductorEnabled;
+
     /// <summary>The owner declares the work built, reviewed and tested. Validators take it from here.</summary>
     public async Task<TaskDto> ImplementedAsync(Caller caller, string id, ImplementedRequest request, CancellationToken ct = default)
     {
@@ -47,9 +51,12 @@ public sealed class LifecycleService(Ledger ledger, LeasePolicy leases, ITaskLan
             task.ClaimExpires = null;
             task.UpdatedAt = m.Now;
             m.Record("task.implemented", task.Id, new { branch, head, spec = task.SpecPath, validators = required, subject = subject.ToDto() });
-            foreach (var validator in required)
-                MessageService.PostFromHub(m, Recipient.Role, validator,
-                    $"{Wire.TaskId(task.Id)} \"{task.Title}\" is ready for validation on branch {branch}.", task.Id);
+            // A human-staffed validator waits on its role's inbox for this; the conductor reads the ledger and staffs the
+            // role itself, and a post nobody will ever read is exactly the kind of message the inbox is judged on.
+            if (!await ConductorStaffsValidatorsAsync(m, ct))
+                foreach (var validator in required)
+                    MessageService.PostFromHub(m, Recipient.Role, validator,
+                        $"{Wire.TaskId(task.Id)} \"{task.Title}\" is ready for validation on branch {branch}.", task.Id);
             if (required.Count == 0)
                 m.Record("task.validated", task.Id, new { note = "project requires no validators" });
 

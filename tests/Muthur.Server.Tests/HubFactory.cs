@@ -161,9 +161,13 @@ public sealed class FakeValidatorSessions : IValidatorSessionLauncher
     /// <summary>When set, the real launcher answers instead, so a test can see how it actually fails.</summary>
     public IValidatorSessionLauncher? Delegate { get; set; }
 
+    /// <summary>When set, runs before anything else a start does: what a real session did to the hub before it exited.</summary>
+    public Func<ConductorAssignment, Task>? OnStart { get; set; }
+
     public async Task StartAsync(ConductorAssignment assignment, CancellationToken ct = default)
     {
         lock (_started) _started.Add(assignment);
+        if (OnStart is { } onStart) await onStart(assignment);
         if (Throw is { } failure) throw failure;
         if (Delegate is { } real) await real.StartAsync(assignment, ct);
         if (Block) await _release.WaitAsync(ct);
