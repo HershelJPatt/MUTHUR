@@ -27,6 +27,7 @@ public sealed class RequestService(Ledger ledger, LeasePolicy leases)
                 if (task.State is not (TaskState.InProgress or TaskState.Blocked))
                     throw Fail.Rule("not_in_progress", $"{Wire.TaskId(task.Id)} is '{task.State.ToWire()}'; only in-progress work can be blocked on a founder.");
                 TaskService.RequireOwnerOrFounder(task, caller);
+                await RequireUnansweredAsync(m.Db, task, request.Question, ct);
                 if (task.State == TaskState.InProgress)
                 {
                     task.State = TaskState.Blocked;
@@ -52,6 +53,26 @@ public sealed class RequestService(Ledger ledger, LeasePolicy leases)
             return ToDto(entity, task?.Title) with { Kind = request.Kind, RouteReason = DefaultReason(request.Kind) };
         }, ct);
     }
+
+    /// <summary>
+    /// Asking again what a task already has an answer to blocks it a second time for nothing (the 2026-09-23 pi
+    /// run's founder-question fixture). Refused, with the earlier answer in the message so the session reads it.
+    /// </summary>
+    private static async Task RequireUnansweredAsync(MuthurDb db, WorkTask task, string question, CancellationToken ct)
+    {
+        var asked = Comparable(question);
+        var answered = await db.FounderRequests.Where(r => r.TaskId == task.Id && r.Status == RequestStatus.Answered)
+            .OrderBy(r => r.Id).ToListAsync(ct);
+        if (answered.FirstOrDefault(r => Comparable(r.Question) == asked) is { } earlier)
+            throw Fail.Rule("question_already_answered",
+                $"{Wire.TaskId(task.Id)} already asked this as request #{earlier.Id} (\"{earlier.Question}\") and the answer was: {earlier.Answer} " +
+                "Fold that answer into the spec's Decisions or Context and carry on; ask again only about something it does not settle.");
+    }
+
+    /// <summary>A question as the comparison sees it: lower case, punctuation gone, runs of whitespace one space.</summary>
+    private static string Comparable(string question) =>
+        string.Join(' ', new string([.. question.ToLowerInvariant().Select(c => char.IsPunctuation(c) || char.IsSymbol(c) ? ' ' : c)])
+            .Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries));
 
     public Task<FounderRequestDto> AnswerAsync(Caller caller, int id, AnswerRequest request, CancellationToken ct = default)
     {

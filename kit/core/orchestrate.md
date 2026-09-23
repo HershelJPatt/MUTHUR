@@ -30,7 +30,8 @@ session silent for longer than the claim lease looks dead: the hub returns its t
    the change will be verified before you write a word of spec. If the task is ambiguous in a way only a
    founder can settle, ask and wait for the answer in this session in one command:
    `muthur ask "<question>" --task T-n --option ... --option ... --wait 900`. It costs nothing while it waits,
-   is not polling, and prints the request answered or still open.
+   is not polling, and prints the request answered or still open. An answer goes into the spec's Context (or a
+   Decisions section) before you set the spec; asking the same question again is refused with the earlier answer.
    Only when it comes back still open, write your working notes with `muthur task notes T-n --file <notes.md>`
    (what the task needs, what you decided and why, what is left) and exit; the session that resumes the task
    starts from your notes instead of from the codebase. Do not guess at product decisions (`--kind`

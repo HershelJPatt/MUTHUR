@@ -121,6 +121,52 @@ public sealed class MessagingTests : IDisposable
         Assert.Equal(HttpStatusCode.Conflict, again.StatusCode);
     }
 
+    /// <summary>A claimed task whose owner asked <paramref name="question"/> and the founder answered <paramref name="answer"/>.</summary>
+    private async Task<(HttpClient Agent, string TaskId)> AnsweredAsync(string question, string answer)
+    {
+        await _hub.AddProjectAsync();
+        var agent = await _hub.RegisterAgentAsync("asker");
+        var task = await agent.AddTaskAsync("Pricing page");
+        (await agent.ClaimAsync(task.Id)).EnsureSuccessStatusCode();
+        var asked = await agent.PostAsJsonAsync(Routes.Requests, new AskRequest(question, task.Id, ["monthly", "annual"]));
+        var request = (await asked.Content.ReadFromJsonAsync(MuthurJsonContext.Default.FounderRequestDto))!;
+        (await _hub.Founder().PostAsJsonAsync(Routes.RequestAction(request.Id, "answer"), new AnswerRequest(answer))).EnsureSuccessStatusCode();
+        Assert.Equal(TaskState.InProgress, (await agent.GetTaskAsync(task.Id)).Task.State);
+        return (agent, task.Id);
+    }
+
+    /// <summary>
+    /// The 2026-09-23 founder-question fixture: the orchestrator asked again after its question was answered yes,
+    /// blocking the task a second time. The repeat is refused with the answer in hand and the task stays in progress.
+    /// </summary>
+    [Theory]
+    [InlineData("Should the marker file end with a newline?")]
+    [InlineData("  should the MARKER file   end with a newline  ")]
+    [InlineData("Should the marker file end with a newline?!")]
+    public async Task Asking_again_what_the_task_already_has_an_answer_to_is_refused_with_the_answer(string repeat)
+    {
+        var (agent, taskId) = await AnsweredAsync("Should the marker file end with a newline?", "Yes, one trailing newline.");
+
+        var again = await agent.PostAsJsonAsync(Routes.Requests, new AskRequest(repeat, taskId));
+
+        Assert.Equal(HttpStatusCode.UnprocessableEntity, again.StatusCode);
+        var error = await again.ReadErrorAsync();
+        Assert.Equal("question_already_answered", error.Code);
+        Assert.Contains("Yes, one trailing newline.", error.Message);
+        Assert.Equal(TaskState.InProgress, (await agent.GetTaskAsync(taskId)).Task.State);
+    }
+
+    [Fact]
+    public async Task A_genuinely_different_second_question_is_still_asked()
+    {
+        var (agent, taskId) = await AnsweredAsync("Should the marker file end with a newline?", "Yes.");
+
+        var again = await agent.PostAsJsonAsync(Routes.Requests, new AskRequest("Should the marker file be committed on main?", taskId));
+
+        again.EnsureSuccessStatusCode();
+        Assert.Equal(TaskState.Blocked, (await agent.GetTaskAsync(taskId)).Task.State);
+    }
+
     [Fact]
     public async Task A_waiting_inbox_ends_the_moment_the_hub_stops()
     {
