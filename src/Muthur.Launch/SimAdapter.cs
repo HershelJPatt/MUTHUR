@@ -5,7 +5,9 @@ namespace Muthur.Launch;
 /// reads the same prompt a model would and drives the task through the same API. Everything else — conductor,
 /// leases, validation, integration, landing — is the real product. Its job is to show the flow on a scratch hub
 /// and to be the one end-to-end fixture of the loop; it is never staffed on a hub that holds real work, and the
-/// agent itself refuses a home or URL that could be one.
+/// agent itself refuses a home or URL that could be one. The catalog model travels with the invocation so one
+/// candidate can play an account out of quota, and a non-zero exit that reads like a limit is treated as one,
+/// exactly as the real adapters treat their CLIs.
 /// </summary>
 public sealed class SimAdapter : IHarnessAdapter
 {
@@ -16,7 +18,7 @@ public sealed class SimAdapter : IHarnessAdapter
     private static string ReportFile(WorkerRequest request) => Path.Combine(request.ScratchDirectory, "sim-report.txt");
 
     public HarnessInvocation Build(WorkerRequest request) =>
-        new("muthur", ["sim", "agent", "--report", ReportFile(request), "--cd", request.WorkingDirectory], request.Prompt);
+        new("muthur", ["sim", "agent", "--report", ReportFile(request), "--cd", request.WorkingDirectory, "--model", request.Model], request.Prompt);
 
     public WorkerOutcome Interpret(WorkerRequest request, ProcessResult result)
     {
@@ -26,6 +28,6 @@ public sealed class SimAdapter : IHarnessAdapter
 
         var text = result.Ok ? (report.Length > 0 ? report : "The scripted session wrote no report.") : $"Process exited with code {result.ExitCode}: {result.Message}";
         if (!result.Ok && report.Length > 0) text += "\n\nFinal report from this attempt:\n" + report;
-        return new WorkerOutcome(false, text, RateLimited: false);
+        return new WorkerOutcome(false, text, RateLimited: !result.Ok && Harnesses.LooksRateLimited(result.StdErr + result.StdOut));
     }
 }

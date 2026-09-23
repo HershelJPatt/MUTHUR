@@ -42,7 +42,7 @@ public sealed class HarnessTests : IDisposable
         var invocation = Harnesses.Find("sim")!.Build(Request(model: "scripted"));
 
         Assert.Equal("muthur", invocation.FileName);
-        Assert.Equal(["sim", "agent", "--report", Path.Combine(_scratch, "sim-report.txt"), "--cd", "C:/repo/.worktrees/w1"], invocation.Arguments);
+        Assert.Equal(["sim", "agent", "--report", Path.Combine(_scratch, "sim-report.txt"), "--cd", "C:/repo/.worktrees/w1", "--model", "scripted"], invocation.Arguments);
         Assert.Equal("do the unit", invocation.Stdin);
         Assert.Null(Harnesses.Find("sim")!.WorkerNote);
     }
@@ -62,6 +62,24 @@ public sealed class HarnessTests : IDisposable
         Assert.Equal(success, outcome.Success);
         Assert.False(outcome.RateLimited);
         if (report is not null) Assert.Contains(report.Split(" | ")[0], outcome.Report, StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    /// The sim's out-of-quota candidate fails the way a real CLI does: a non-zero exit with the limit on stderr. Only
+    /// that combination is a limit; a clean exit that mentions one, or a crash that does not, is not.
+    /// </summary>
+    [Theory]
+    [InlineData(1, "", "ERROR: You've hit your usage limit.", true)]
+    [InlineData(1, "rate limit reached", "", true)]
+    [InlineData(1, "", "boom", false)]
+    [InlineData(0, "", "usage limit", false)]
+    public void A_sim_session_is_rate_limited_only_on_a_failing_exit_that_says_so(int exit, string stdout, string stderr, bool limited)
+    {
+        var outcome = Harnesses.Find("sim")!.Interpret(Request(model: "limited"), new ProcessResult(exit, stdout, stderr));
+
+        Assert.Equal(limited, outcome.RateLimited);
+        Assert.False(outcome.Success);
+        if (exit != 0) Assert.Contains($"exited with code {exit}", outcome.Report, StringComparison.Ordinal);
     }
 
     [Fact]
