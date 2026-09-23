@@ -109,7 +109,9 @@ public static class SimCommands
         public bool RealHarness => Harness is { Length: > 0 } && !Harness.Equals("sim", StringComparison.OrdinalIgnoreCase);
 
         /// <summary>The kit a real harness reads its procedures from: the Codex kit serves the local-provider variant too.</summary>
-        public string? Kit => !RealHarness ? null : Harness!.StartsWith("codex", StringComparison.OrdinalIgnoreCase) ? "codex" : Harness.ToLowerInvariant();
+        public string? Kit => !RealHarness ? null
+            : Harness!.StartsWith("codex", StringComparison.OrdinalIgnoreCase) || Harness.Equals("pi", StringComparison.OrdinalIgnoreCase) ? "codex"   // pi reads AGENTS.md too
+            : Harness.ToLowerInvariant();
     }
 
     /// <summary>

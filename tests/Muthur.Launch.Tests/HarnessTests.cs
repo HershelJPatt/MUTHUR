@@ -48,6 +48,50 @@ public sealed class HarnessTests : IDisposable
     }
 
     [Fact]
+    public void Pi_runs_print_json_from_a_scratch_agent_directory_for_a_local_model()
+    {
+        var invocation = Harnesses.Find("pi")!.Build(Request(model: "gemma4:26b", effort: "low"));
+        Assert.Equal("pi", invocation.FileName);
+        var args = invocation.Arguments.ToList();
+        foreach (var flag in new[] { "--print", "--no-session", "--no-approve", "--offline", "--no-extensions" }) Assert.Contains(flag, args);
+        Assert.Equal("json", args[args.IndexOf("--mode") + 1]);
+        Assert.Equal("ollama", args[args.IndexOf("--provider") + 1]);
+        Assert.Equal("ollama/gemma4:26b", args[args.IndexOf("--model") + 1]);
+        Assert.Equal("low", args[args.IndexOf("--thinking") + 1]);
+        Assert.Equal("do the unit", invocation.Stdin);
+        var home = Assert.Contains(PiAdapter.AgentDirectoryVariable, invocation.Environment!);
+        Assert.Contains("\"gemma4:26b\"", File.ReadAllText(Path.Combine(home, "models.json")));
+
+        var hosted = Harnesses.Find("pi")!.Build(Request(model: "anthropic/claude-opus-5"));
+        Assert.Null(hosted.Environment);
+        Assert.Equal("off", hosted.Arguments[hosted.Arguments.ToList().IndexOf("--thinking") + 1]);
+    }
+
+    [Fact]
+    public void Pi_events_yield_the_final_text_and_summed_usage()
+    {
+        var stdout = """
+            {"type":"session","version":3,"id":"x"}
+            {"type":"message_end","message":{"role":"user","content":[{"type":"text","text":"hi"}]}}
+            {"type":"message_end","message":{"role":"assistant","stopReason":"toolUse","content":[{"type":"toolCall","name":"bash"}],"usage":{"input":856,"output":23,"cacheRead":0,"cacheWrite":0,"totalTokens":879,"cost":{"total":0}}}}
+            {"type":"message_end","message":{"role":"toolResult","content":[{"type":"text","text":"## master"}]}}
+            {"type":"message_end","message":{"role":"assistant","stopReason":"stop","content":[{"type":"text","text":"STATUS: done\nBRANCH: x"}],"usage":{"input":53,"output":4,"cacheRead":1300,"cacheWrite":0,"totalTokens":1357,"cost":{"total":0.012}}}}
+            {"type":"agent_end"}
+            """;
+        var outcome = Harnesses.Find("pi")!.Interpret(Request(), new ProcessResult(0, stdout, ""));
+        Assert.True(outcome.Success);
+        Assert.StartsWith("STATUS: done", outcome.Report);
+        Assert.Contains("BRANCH: x", outcome.Report);
+        Assert.Equal((909, 27, 1300), (outcome.InputTokens, outcome.OutputTokens, outcome.CacheReadTokens));
+        Assert.Equal(0.012m, outcome.CostUsd);
+
+        var errored = Harnesses.Find("pi")!.Interpret(Request(), new ProcessResult(0,
+            """{"type":"message_end","message":{"role":"assistant","stopReason":"error","content":[{"type":"text","text":"rate limit reached"}]}}""", ""));
+        Assert.False(errored.Success);
+        Assert.True(errored.RateLimited);
+    }
+
+    [Fact]
     public void Claude_receives_a_turn_cap_only_when_the_catalog_sets_one()
     {
         var capped = new ClaudeAdapter().Build(Request() with { MaxTurns = 40 }).Arguments.ToList();

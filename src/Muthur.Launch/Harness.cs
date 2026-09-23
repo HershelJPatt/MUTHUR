@@ -57,6 +57,7 @@ public static class Harnesses
         new ClaudeAdapter(),
         new CodexAdapter("codex", openSourceProvider: null),
         new CodexAdapter("codex-oss", openSourceProvider: "ollama"),
+        new PiAdapter(),
         new SimAdapter(),
     ];
 
