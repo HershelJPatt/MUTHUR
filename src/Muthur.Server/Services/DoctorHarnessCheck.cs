@@ -24,11 +24,16 @@ public sealed class DoctorHarnessCheck(AgentService agents, HarnessService harne
 
         var standing = (await agents.ListAsync(ct)).Where(a => !a.ConductorStaffed)
             .Select(a => a.Harness).ToHashSet(StringComparer.Ordinal);
-        return [.. tiers.SelectMany(t => t.Candidates).Select(c => c.Harness)
-            .Distinct(StringComparer.Ordinal)
+        var named = tiers.SelectMany(t => t.Candidates).Select(c => c.Harness).Distinct(StringComparer.Ordinal).ToList();
+        var checks = named
             .Where(h => !kits.Contains(h, StringComparer.Ordinal) && !standing.Contains(h))
             .Select(h => new CheckDto("harness", h, CheckStatus.Warn,
                 $"Harness '{h}' has a tier entry in harnesses.json but no kit, so a session started on it gets no procedures. "
-                + $"Add kit/{h}/kit.json, or correct the spelling in harnesses.json."))];
+                + $"Add kit/{h}/kit.json, or correct the spelling in harnesses.json."))
+            .ToList();
+        // The same check worker run makes before it reserves a seat, so the founder hears about it from doctor first.
+        checks.AddRange(named.Select(h => WorkerEnvironment.Check(h)).OfType<EnvironmentFinding>()
+            .Select(f => new CheckDto("harness", f.Harness, CheckStatus.Warn, f.Message)));
+        return checks;
     }
 }

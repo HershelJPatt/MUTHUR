@@ -275,11 +275,13 @@ public static class WorkerCommands
             return WorkerPrompt.Compose(contract, assignment.SpecPath, o.Unit, branchName, verify, notes, assignment);
         }
 
-        // 4. Run, falling through candidates whose account turns out to be exhausted.
-        var attempts = await new WorkerLauncher(processes, workerProcesses: contained,
+        // 4. Run, falling through candidates whose account turns out to be exhausted. A candidate whose sandbox
+        // identity is known to fail the build is refused here, before any seat is reserved, and the report says why.
+        var (usable, refused) = WorkerEnvironment.Partition(candidates);
+        IReadOnlyList<WorkerAttempt> attempts = usable.Count == 0 ? refused : [.. refused, .. await new WorkerLauncher(processes, workerProcesses: contained,
             admission: new(new WorkerAdmissionClient(hub), o.Task!, o.Tier, repo, assignment.BaseCommit, assignment.SpecBlob,
                 assignment.SpecPath, o.Unit, o.Parent, branchName), prepare: Prepare, setupCleanupConfirmed: () => setup.CleanupConfirmed).RunAsync(
-            candidates,
+            usable,
             c => RequestFor(c, worktree, PromptFor(c), gitCommon, [.. DefaultAllowed, .. extraAllowed], scratch) with
             {
                 Capabilities = new(requirements, "worker-run", Path.Combine(MuthurEnvironment.Home, "capabilities"), assignment.BaseCommit, repo),
@@ -293,7 +295,7 @@ public static class WorkerCommands
                     if (!limited.IsSuccess) throw new InvalidOperationException(limited.Body);
                 }
             },
-            ct);
+            ct)];
 
         var executionCancelled = ct.IsCancellationRequested;
         using var reportBudget = new CancellationTokenSource(TimeSpan.FromSeconds(30));

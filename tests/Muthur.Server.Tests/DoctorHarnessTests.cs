@@ -59,6 +59,23 @@ public sealed class DoctorHarnessTests : IDisposable
     }
 
     [Fact]
+    public async Task A_codex_candidate_whose_sandbox_cannot_read_the_nuget_configuration_is_a_warning_with_the_fix()
+    {
+        if (!OperatingSystem.IsWindows() || !WorkerEnvironment.RequiredReadable().Any(p => File.Exists(p) || Directory.Exists(p))) return;
+        var original = WorkerEnvironment.Readable;
+        WorkerEnvironment.Readable = (_, _) => false;
+        try
+        {
+            KitFor("codex");
+            Catalog("""{"tiers":{"implementer":[{"harness":"codex","model":"gpt","account":"b"}]}}""");
+            var check = Assert.Single((await ReportAsync()).Checks, c => c.Category == "harness" && c.Detail.Contains("icacls", StringComparison.Ordinal));
+            Assert.Equal(CheckStatus.Warn, check.Status);
+            Assert.Contains(WorkerEnvironment.CodexSandboxGroup, check.Detail);
+        }
+        finally { WorkerEnvironment.Readable = original; }
+    }
+
+    [Fact]
     public async Task A_known_kit_is_silent()
     {
         Catalog();
