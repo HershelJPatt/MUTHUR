@@ -90,6 +90,14 @@ internal sealed partial class SimSession(HubClient hub, IProcessRunner processes
         $"# {id} — {title}\n\n## Goal\n\nWrite `{id}.txt` at the repository root containing exactly `{id}`.\n\n## Units\n\n- Unit A: write the file.\n\n" +
         $"## Verification\n\n`git show <branch>:{id}.txt` prints `{id}`.\n\n## Sim\n\ncontent: {content}\n{(block ? BlockLine + "\n" : "")}";
 
+    private async Task<string?> AttachSpecAsync(string id, string branch)
+    {
+        var spec = await hub.PostAsync(Routes.TaskAction(id, "spec"), new SetSpecRequest($"specs/{id}.md", branch), MuthurJsonContext.Default.SetSpecRequest, ct);
+        if (!spec.IsSuccess) return Failed("spec", spec);
+        await StepAsync();
+        return null;
+    }
+
     private Task StepAsync() => pace > 0 ? Task.Delay(pace, ct) : Task.CompletedTask;
 
     private static string Failed(string step, ApiResult result) => $"STATUS: failed\nNOTES: {step} answered {result.Status}: {result.Body}";
@@ -145,12 +153,10 @@ internal sealed partial class SimSession(HubClient hub, IProcessRunner processes
         {
             if (await CommitSpecAsync(worktree, id, Spec(id, detail.Task.Title, content, block), "write the spec") is { } problem) return problem;
             await StepAsync();
-            if (detail.Task.SpecPath is null)
-            {
-                var spec = await hub.PostAsync(Routes.TaskAction(id, "spec"), new SetSpecRequest($"specs/{id}.md", branch), MuthurJsonContext.Default.SetSpecRequest, ct);
-                if (!spec.IsSuccess) return Failed("spec", spec);
-                await StepAsync();
-            }
+            // Attached after every commit of it, not only the first: the hub freezes the attached digest, and an
+            // amended spec that is not reattached is refused at `implemented` as spec_changed — the same rule a
+            // model orchestrator has to follow when it corrects a spec after a bounce.
+            if (await AttachSpecAsync(id, branch) is { } attach) return attach;
 
             // The orchestrator delegates the building: one implementer per unit, through the same launcher a model
             // would use. A blocked assignment check is recorded by the launcher and redispatched once, corrected.
@@ -159,6 +165,7 @@ internal sealed partial class SimSession(HubClient hub, IProcessRunner processes
             if (run.Status == "blocked" && block)
             {
                 if (await CommitSpecAsync(worktree, id, Spec(id, detail.Task.Title, content, block: false), "fix the assignment") is { } fix) return fix;
+                if (await AttachSpecAsync(id, branch) is { } reattach) return reattach;
                 (run, unit) = await DispatchAsync(id, branch);
                 dispatches.Add($"{unit}: {run.Status ?? run.FailureKind ?? "no status"}");
             }

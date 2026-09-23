@@ -296,6 +296,10 @@ public sealed partial class ConductorService(
                 continue;
             }
             if (!payload.RootElement.TryGetProperty("role", out var role)) continue;
+            // A worker its running orchestrator dispatched is that orchestrator's attempt, not a second one: the seat
+            // rule and the budget rule say the same thing about it, or the budget refuses what the seat admitted.
+            if (e.Type == "worker.admitted" && payload.RootElement.TryGetProperty("ownerName", out var owner) &&
+                owner.GetString() == OrchestratorSessionLauncher.IdentityName(Wire.TaskId(id))) continue;
             var pair = prefix + role.GetString();
             if (!attempts.TryGetValue(pair, out var times)) attempts[pair] = times = [];
             times.Add(e.At);

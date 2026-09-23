@@ -60,6 +60,37 @@ public sealed class ConductorBudgetTests : IDisposable
         Assert.Single(await recreated.PlanOrchestratorsAsync());
     }
 
+    [Fact]
+    public async Task A_running_orchestrators_own_workers_do_not_spend_the_tasks_daily_budget()
+    {
+        _hub.Settings["Muthur:ConductorEnabled"] = "true";
+        await _hub.AddProjectAsync(repoPath: _repo.Path);
+        var client = await _hub.RegisterAgentAsync("owner");
+        var task = await client.AddTaskAsync("Small change");
+        var id = int.Parse(task.Id.AsSpan(2));
+        var conductor = _hub.Services.GetRequiredService<ConductorService>();
+        await conductor.SetOrchestratorsAsync(Caller.Founder, true);
+        var ledger = _hub.Services.GetRequiredService<Ledger>();
+        await ledger.MutateAsync(Caller.Founder, m =>
+        {
+            m.Record("conductor.staffing", id, new { role = "#orchestrator" });
+            // Three units dispatched by the session the conductor started: one attempt, however many workers.
+            for (var i = 0; i < 3; i++)
+                m.Record("worker.admitted", id, new { reservationId = $"r{i}", role = "#orchestrator", ownerName = OrchestratorSessionLauncher.IdentityName(task.Id), task = task.Id, tier = "implementer", harness = "sim", model = "scripted", account = "sim", runId = $"run{i}", inputHash = new string('a', 64) });
+            return Task.CompletedTask;
+        });
+        Assert.Single(await conductor.PlanOrchestratorsAsync());
+
+        await ledger.MutateAsync(Caller.Founder, m =>
+        {
+            // A standing mastermind's workers are its own spending and count as before.
+            for (var i = 3; i < 5; i++)
+                m.Record("worker.admitted", id, new { reservationId = $"r{i}", role = "#orchestrator", ownerName = "owner", task = task.Id, tier = "implementer", harness = "sim", model = "scripted", account = "sim", runId = $"run{i}", inputHash = new string('a', 64) });
+            return Task.CompletedTask;
+        });
+        Assert.Empty(await conductor.PlanOrchestratorsAsync());
+    }
+
     [Theory]
     [InlineData("#orchestrator")]
     [InlineData("validator")]
