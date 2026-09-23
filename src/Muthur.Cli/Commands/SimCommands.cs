@@ -50,10 +50,14 @@ public static class SimCommands
         var minutes = new Option<int>("--minutes") { DefaultValueFactory = _ => 20, Description = "Give up watching after this long." };
         var port = new Option<int>("--port") { DefaultValueFactory = _ => 0, Description = "Loopback port for the scratch hub (default: a free one)." };
         var keep = new Option<bool>("--keep") { Description = "Leave the scratch hub running and its files in place when done." };
+        var harness = new Option<string?>("--harness") { Description = "Staff the mastermind and implementer tiers on a real harness (claude, codex, codex-oss) instead of the scripted one; validation stays deterministic. The matching kit is installed into the scratch repository." };
+        var runModel = new Option<string?>("--model") { Description = "The model for --harness, e.g. gemma4:26b on codex-oss." };
+        var effort = new Option<string?>("--effort") { Description = "Reasoning effort for --harness (low, medium, high)." };
         var run = new Command("run", "Start a scratch hub on the sim harness, seed tasks, turn the conductor on and stream the ledger until every task is done.")
-            { tasks, runPace, answer, runAskWait, minutes, port, keep };
+            { tasks, runPace, answer, runAskWait, minutes, port, keep, harness, runModel, effort };
         run.SetAction((parse, ct) => RunAsync(parse, new RunOptions(parse.GetValue(tasks), parse.GetValue(runPace), parse.GetValue(answer),
-            parse.GetValue(minutes), parse.GetValue(port), parse.GetValue(keep), parse.GetValue(runAskWait)), processes, ct));
+            parse.GetValue(minutes), parse.GetValue(port), parse.GetValue(keep), parse.GetValue(runAskWait),
+            parse.GetValue(harness), parse.GetValue(runModel), parse.GetValue(effort)), processes, ct));
         sim.Subcommands.Add(run);
     }
 
@@ -98,7 +102,15 @@ public static class SimCommands
         return ExitCodes.Ok;
     }
 
-    internal sealed record RunOptions(int Tasks, int Pace, int AutoAnswerSeconds, int Minutes, int Port, bool Keep, int AskWaitSeconds = 60);
+    internal sealed record RunOptions(int Tasks, int Pace, int AutoAnswerSeconds, int Minutes, int Port, bool Keep, int AskWaitSeconds = 60,
+        string? Harness = null, string? Model = null, string? Effort = null)
+    {
+        /// <summary>Whether the mastermind and implementer tiers run a real model rather than the scripted session.</summary>
+        public bool RealHarness => Harness is { Length: > 0 } && !Harness.Equals("sim", StringComparison.OrdinalIgnoreCase);
+
+        /// <summary>The kit a real harness reads its procedures from: the Codex kit serves the local-provider variant too.</summary>
+        public string? Kit => !RealHarness ? null : Harness!.StartsWith("codex", StringComparison.OrdinalIgnoreCase) ? "codex" : Harness.ToLowerInvariant();
+    }
 
     /// <summary>
     /// Every tier staffed by the sim harness; the local models are absent rather than disabled, since there is
@@ -117,6 +129,42 @@ public static class SimCommands
           }
         }
         """;
+
+    /// <summary>
+    /// The catalog for a run: the scripted one, or one that staffs both model tiers on a real harness. The limited
+    /// scripted candidate stays at the head of the implementer tier either way, so the fall-through is still measured;
+    /// the real candidate's account is "local", which is what the worker launcher's local-tier rules key on.
+    /// </summary>
+    internal static string CatalogFor(RunOptions o)
+    {
+        if (!o.RealHarness) return Catalog;
+        using var buffer = new MemoryStream();
+        using (var json = new Utf8JsonWriter(buffer, new JsonWriterOptions { Indented = true }))
+        {
+            void Candidate()
+            {
+                json.WriteStartObject();
+                json.WriteString("harness", o.Harness!.ToLowerInvariant());
+                json.WriteString("model", o.Model ?? "");
+                json.WriteString("account", "local");
+                if (o.Effort is { Length: > 0 } effort) json.WriteString("reasoningEffort", effort);
+                json.WriteEndObject();
+            }
+            json.WriteStartObject();
+            json.WriteStartObject("tiers");
+            json.WriteStartArray("mastermind"); Candidate(); json.WriteEndArray();
+            json.WriteStartArray("implementer");
+            json.WriteStartObject();
+            json.WriteString("harness", "sim"); json.WriteString("model", "limited"); json.WriteString("account", "sim-limited");
+            json.WriteEndObject();
+            Candidate();
+            json.WriteEndArray();
+            json.WriteStartArray("utility"); json.WriteEndArray();
+            json.WriteEndObject();
+            json.WriteEndObject();
+        }
+        return Encoding.UTF8.GetString(buffer.ToArray());
+    }
 
     private const string Brief = """
         # win-validator — sim
@@ -171,10 +219,16 @@ public static class SimCommands
             await File.WriteAllTextAsync(Path.Combine(repo, "README.md"), "# sim\n\nA throwaway repository the sim lands tasks into.\n", ct);
             Directory.CreateDirectory(Path.Combine(repo, "specs"));
             await File.WriteAllTextAsync(Path.Combine(repo, "specs", "_TEMPLATE.md"), "# T-n — title\n\n## Goal\n\n## Verification\n", ct);
+            if (o.Kit is { } kit)
+            {
+                // A real model reads its procedures from the installed kit, exactly as it would in a real project.
+                var installed = KitCommands.InstallInto(parse, kit, repo, Project);
+                if (installed != ExitCodes.Ok) return installed;
+            }
             await Git("add", "-A");
             await Git("-c", "commit.gpgsign=false", "commit", "-q", "-m", "sim: initial");
             await Git("checkout", "-q", "--detach");   // nobody's working tree sits on main, so the hub may move it
-            await File.WriteAllTextAsync(Path.Combine(home, MuthurEnvironment.HarnessFile), Catalog, ct);
+            await File.WriteAllTextAsync(Path.Combine(home, MuthurEnvironment.HarnessFile), CatalogFor(o), ct);
 
             var (started, failure) = await SystemCommands.StartAsync(ct);
             if (started is null) return Output.Error(failure!.Value.Code, failure.Value.Message);
@@ -200,7 +254,7 @@ public static class SimCommands
             await Must(founder.PostAsync(Routes.ConductorOrchestrators, new ConductorOrchestratorSwitch(true), MuthurJsonContext.Default.ConductorOrchestratorSwitch, ct), "conductor orchestrators");
             await Must(founder.PostAsync(Routes.Conductor, new ConductorSwitch(true), MuthurJsonContext.Default.ConductorSwitch, ct), "conductor");
 
-            stderr.WriteLine($"sim: hub {url}  home {home}");
+            stderr.WriteLine($"sim: hub {url}  home {home}" + (o.RealHarness ? $"  harness {o.Harness}/{o.Model}" : ""));
             stderr.WriteLine($"sim: board {url}/   needs you {url}/needs-you   stream {url}/stream");
             var status = await founder.GetAsync(Routes.Conductor, ct);
             var sweep = status.IsSuccess ? JsonSerializer.Deserialize(status.Body, MuthurJsonContext.Default.ConductorStatusDto)?.IntervalSeconds : null;
@@ -270,6 +324,8 @@ public static class SimCommands
     internal sealed class Runs
     {
         public int WorkerRuns, WorkerBlocked, LaunchesIntoLimitedAccount, AccountLimits;
+        /// <summary>Real model processes started (sessions and worker runs on a harness other than sim), the tokens they reported, and their wall time.</summary>
+        public int ModelCalls; public long ModelTokens; public double ModelSeconds;
 
         public void Count(EventDto e)
         {
@@ -280,6 +336,10 @@ public static class SimCommands
                     WorkerRuns++;
                     if (e.Payload.ValueKind == JsonValueKind.Object && e.Payload.TryGetProperty("status", out var status) && status.ValueKind == JsonValueKind.String && status.GetString() == "blocked")
                         WorkerBlocked++;
+                    CountModel(e.Payload, harnessKey: "worker");
+                    break;
+                case "conductor.session_finished":
+                    CountModel(e.Payload, harnessKey: "harness");
                     break;
                 case "account.limited":
                     AccountLimits++;
@@ -290,6 +350,20 @@ public static class SimCommands
             if (e.Type is "conductor.session_failed" or "worker.failed" or "worker.finished" &&
                 (payload.Contains("usage limit", StringComparison.OrdinalIgnoreCase) || payload.Contains("\"quota\"", StringComparison.Ordinal)))
                 LaunchesIntoLimitedAccount++;
+        }
+
+        /// <summary>A model row is one whose harness is not the scripted sim; its tokens are input plus output, or the one total a CLI prints.</summary>
+        private void CountModel(JsonElement payload, string harnessKey)
+        {
+            if (payload.ValueKind != JsonValueKind.Object) return;
+            var harness = payload.TryGetProperty(harnessKey, out var h) && h.ValueKind == JsonValueKind.String ? h.GetString() ?? "" : "";
+            if (harness.Length == 0 || harness.StartsWith("sim", StringComparison.OrdinalIgnoreCase)) return;
+            if (payload.TryGetProperty("started", out var started) && started.ValueKind == JsonValueKind.False) return;
+            ModelCalls++;
+            long Number(string name) => payload.TryGetProperty(name, out var v) && v.ValueKind == JsonValueKind.Number && v.TryGetInt64(out var n) ? n : 0;
+            var split = Number("inputTokens") + Number("outputTokens");
+            ModelTokens += split > 0 ? split : Number("totalTokens");
+            ModelSeconds += Number("seconds");
         }
     }
 
@@ -393,7 +467,13 @@ public static class SimCommands
             var (promptSessions, promptBytes, kitBytes) = PromptBytes(sessionsLog);
             var waits = phases.Values.Where(p => p.Wait is not null).Select(p => p.Wait!.Value).ToList();
             json.WriteBoolean("complete", done);
-            json.WriteNumber("modelCalls", 0);
+            if (o.RealHarness) json.WriteString("harness", $"{o.Harness}/{o.Model}");
+            // Zero on the scripted harness by construction; on a real one, every process the launchers started, what
+            // those processes said they used, and how long they ran — the three numbers a harness comparison needs.
+            json.WriteNumber("modelCalls", runs.ModelCalls);
+            json.WriteNumber("modelTokens", runs.ModelTokens);
+            json.WriteNumber("modelSeconds", Math.Round(runs.ModelSeconds, 1));
+            if (runs.ModelCalls > 0) json.WriteNumber("modelTokensPerCall", runs.ModelTokens / runs.ModelCalls);
             json.WriteNumber("landed", landed);
             json.WriteNumber("seconds", Math.Round(watch.Elapsed.TotalSeconds, 1));
             // The numbers tuning is judged on: what a task costs in cold starts (each one a full context load for a

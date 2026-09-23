@@ -180,6 +180,46 @@ public sealed class SimCommandTests
         Assert.Equal("scripted", masterminds[0].GetProperty("model").GetString());
     }
 
+    /// <summary>A real harness replaces the scripted model tiers but keeps the limited candidate in front, so the fall-through is still measured.</summary>
+    [Fact]
+    public void A_real_harness_staffs_both_model_tiers_and_keeps_the_limited_candidate_first()
+    {
+        var options = new SimCommands.RunOptions(6, 0, 20, 20, 0, false, Harness: "codex-oss", Model: "gemma4:26b", Effort: "low");
+        Assert.True(options.RealHarness);
+        Assert.Equal("codex", options.Kit);
+        using var doc = System.Text.Json.JsonDocument.Parse(SimCommands.CatalogFor(options));
+        var implementers = doc.RootElement.GetProperty("tiers").GetProperty("implementer").EnumerateArray().ToList();
+        var mastermind = Assert.Single(doc.RootElement.GetProperty("tiers").GetProperty("mastermind").EnumerateArray());
+        Assert.Equal(("codex-oss", "gemma4:26b", "local", "low"), (mastermind.GetProperty("harness").GetString(), mastermind.GetProperty("model").GetString(), mastermind.GetProperty("account").GetString(), mastermind.GetProperty("reasoningEffort").GetString()));
+        Assert.Equal("limited", implementers[0].GetProperty("model").GetString());
+        Assert.Equal("gemma4:26b", implementers[1].GetProperty("model").GetString());
+
+        var scripted = new SimCommands.RunOptions(6, 0, 20, 20, 0, false);
+        Assert.False(scripted.RealHarness);
+        Assert.Null(scripted.Kit);
+        Assert.Equal(SimCommands.Catalog, SimCommands.CatalogFor(scripted));
+    }
+
+    /// <summary>Model calls, tokens and seconds come off the same rows the receipts read; scripted rows and starts that never ran count nothing.</summary>
+    [Fact]
+    public void Model_calls_and_tokens_are_counted_only_for_real_harness_rows()
+    {
+        var runs = new SimCommands.Runs();
+        static Muthur.Contracts.EventDto Event(string type, string payload) =>
+            new(1, DateTimeOffset.UnixEpoch, "x", null, type, "T-1", System.Text.Json.JsonDocument.Parse(payload).RootElement.Clone());
+
+        runs.Count(Event("conductor.session_finished", """{"harness":"codex-oss","model":"gemma4:26b","seconds":40,"totalTokens":16393,"started":true}"""));
+        runs.Count(Event("conductor.session_finished", """{"harness":"sim","model":"scripted","seconds":3,"started":true}"""));
+        runs.Count(Event("conductor.session_finished", """{"harness":"codex-oss","model":"gemma4:26b","seconds":0,"started":false}"""));
+        runs.Count(Event("worker.finished", """{"worker":"codex-oss/gemma4:26b","seconds":70,"inputTokens":9000,"outputTokens":400,"status":"done"}"""));
+        runs.Count(Event("worker.failed", """{"worker":"sim/scripted","seconds":1,"status":"blocked"}"""));
+
+        Assert.Equal(2, runs.ModelCalls);
+        Assert.Equal(16393 + 9400, runs.ModelTokens);
+        Assert.Equal(110, runs.ModelSeconds);
+        Assert.Equal(2, runs.WorkerRuns);
+    }
+
     /// <summary>The report's launcher counters come straight off the ledger types and payloads the hub records.</summary>
     [Fact]
     public void Worker_runs_blocks_and_limited_launches_are_counted_from_events()

@@ -53,6 +53,9 @@ public static partial class KitCommands
     internal static int KitMissing() =>
         Output.Error("kit_not_found", $"The kit directory was not found next to the CLI (kit/) and ${KitVariable} is not set.");
 
+    /// <summary>The same install `muthur kit install` performs, for a command that prepares a repository itself.</summary>
+    internal static int InstallInto(ParseResult parse, string harness, string repo, string? projectKey) => Install(parse, harness, repo, projectKey);
+
     private static int Install(ParseResult parse, string harness, string repo, string? projectKey)
     {
         if (LocateKit() is not { } kitDir) return KitMissing();
