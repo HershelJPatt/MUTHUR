@@ -80,10 +80,15 @@ session silent for longer than the claim lease looks dead: the hub returns its t
    (absolute actual root) and BRANCH against the native allocation or launcher report before integrating;
    an explicit assignment mismatch must be resolved by redispatch. Rebuild and retest.
 7. **Hand to validation.** Clean up scratch processes first, then `muthur task implemented T-n --branch task/T-n-<slug>`. The task moves to
-   `validating`; validators you do not control will exercise it end to end. If a validator fails it, the task
-   returns to you `in_progress` with evidence: fix, re-review, mark implemented again.
-   **Conductor-started sessions exit after submission**, with a final branch/head/checks report; the
-   conductor staffs the next phase and lands approved work once your session has exited.
+   `validating`; validators you do not control will exercise it end to end. Wait for the verdict in this same
+   session rather than exiting cold: `muthur msg inbox --wait 90` — the same in-session wait the founder-question
+   path already uses; it costs nothing while it waits. If the verdict is a failure, the task is back with you
+   `in_progress` and the message says why: fix, re-review, mark implemented again, then wait on the inbox again.
+   Do not exit and let the conductor re-staff a fresh session for a fix you can make right here — that is the cold
+   start this step exists to avoid. If the wait comes back empty (no verdict inside 90s; a validator may still be
+   working), check `muthur task show T-n` once more before deciding whether to wait again or leave notes and exit.
+   **Once the verdict passes, exit** with a final branch/head/checks report; the conductor lands approved work
+   after your session has exited — that part is unchanged.
 8. **Land.** When the task is `validated`: `muthur task land T-n`. MUTHUR performs the merge (or opens the
    pull request, for projects where a human merges). You never run `git merge` into the default branch or
    `git push` yourself. If landing reports a conflict, rebase the task branch, re-verify, mark implemented again.

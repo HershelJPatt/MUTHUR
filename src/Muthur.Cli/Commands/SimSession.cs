@@ -181,7 +181,60 @@ internal sealed partial class SimSession(HubClient hub, IProcessRunner processes
 
         var implemented = await hub.PostAsync(Routes.TaskAction(id, "implemented"), new ImplementedRequest(branch), MuthurJsonContext.Default.ImplementedRequest, ct);
         if (!implemented.IsSuccess) return Failed("implemented", implemented);
-        return $"STATUS: done\nNOTES: {id} implemented on {branch} after {string.Join(", ", dispatches)}{(wrong ? " (deliberately wrong; validation should bounce it)" : "")}";
+
+        // Wait for the verdict in this same session instead of exiting cold, exactly as the orchestrate procedure
+        // now asks a model to: a failure is fixed and resubmitted here, so a bounce costs no second claim. Counted
+        // against a baseline, not "any", so a validation_failed event from an earlier resumed session never reads
+        // as this round's verdict.
+        var bounces = 0;
+        var failuresSeen = detail.Events.Count(e => e.Type == "task.validation_failed");
+        while (askWait > 0)
+        {
+            await hub.GetAsync($"{Routes.Inbox}?wait={askWait}", ct);
+            if (await DetailAsync(id) is not { } after) break;
+            if (after.Task.State is TaskState.Validated or TaskState.Done) break;
+            var failures = after.Events.Count(e => e.Type == "task.validation_failed");
+            if (after.Task.State != TaskState.InProgress || failures <= failuresSeen) break;
+            failuresSeen = failures;
+            bounces++;
+            if (await FixAndResubmitAsync(id, detail.Task.Title, branch, dispatches) is { } problem) return problem;
+        }
+
+        var why = bounces > 0 ? $" (validation failed and was fixed in-session {bounces} time{(bounces == 1 ? "" : "s")})"
+            : wrong ? " (deliberately wrong; validation should bounce it)" : "";
+        return $"STATUS: done\nNOTES: {id} implemented on {branch} after {string.Join(", ", dispatches)}{why}";
+    }
+
+    /// <summary>
+    /// What the orchestrate procedure now asks a model to do on a validation failure: fix and resubmit in the same
+    /// session rather than exit and let the conductor re-staff a cold one. The branch already exists, so this opens
+    /// its own worktree on it, corrects the spec's content and redispatches one implementer unit.
+    /// </summary>
+    private async Task<string?> FixAndResubmitAsync(string id, string title, string branch, List<string> dispatches)
+    {
+        var worktree = Path.Combine(Path.GetTempPath(), "muthur-sim", "wt-" + Guid.NewGuid().ToString("n"));
+        var add = await GitAsync(repo, "worktree", "add", worktree, branch);
+        if (!add.Ok) return $"STATUS: failed\nNOTES: git worktree add: {add.Message}";
+        try
+        {
+            if (await CommitSpecAsync(worktree, id, Spec(id, title, id, block: false), "fix after validation failed") is { } problem) return problem;
+            await StepAsync();
+            if (await AttachSpecAsync(id, branch) is { } attach) return attach;
+
+            var (run, unit) = await DispatchAsync(id, branch);
+            dispatches.Add($"{unit}: {run.Status ?? run.FailureKind ?? "no status"}");
+            if (!run.Success) return $"STATUS: failed\nNOTES: worker run for {id} did not finish ({run.FailureKind ?? run.Status ?? "unknown"}): {run.Detail}";
+            var merged = await GitAsync(worktree, "merge", "--no-ff", "-q", "-m", $"{id}: merge Unit A (fix)", unit);
+            if (!merged.Ok) return $"STATUS: failed\nNOTES: git merge {unit}: {merged.Message}";
+        }
+        finally
+        {
+            await GitAsync(repo, "worktree", "remove", "--force", worktree);
+        }
+        await StepAsync();
+
+        var resubmitted = await hub.PostAsync(Routes.TaskAction(id, "implemented"), new ImplementedRequest(branch), MuthurJsonContext.Default.ImplementedRequest, ct);
+        return resubmitted.IsSuccess ? null : Failed("implemented", resubmitted);
     }
 
     /// <summary>Writes the spec on the task branch and commits it when it changed; a resumed session may find it already there.</summary>

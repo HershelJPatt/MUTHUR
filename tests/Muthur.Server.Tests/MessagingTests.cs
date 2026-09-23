@@ -222,4 +222,56 @@ public sealed class MessagingTests : IDisposable
         (await validator.PostActionAsync(task.Id, "fail", new VerdictRequest("win-validator", "does not start: reproduce by launching the application", SubjectId: (await validator.GetTaskAsync(task.Id)).Task.CurrentSubject!.Id))).EnsureSuccessStatusCode();
         Assert.Contains("failed validation", Assert.Single((await InboxAsync(owner)).Messages).Body);
     }
+
+    /// <summary>
+    /// U6.0: the orchestrate procedure now waits on its own inbox after `muthur task implemented` instead of
+    /// exiting cold, so a failed validation is fixed and resubmitted in the same session rather than costing a
+    /// re-staffed orchestrator. This is the wait, and the fix-and-resubmit round trip, end to end.
+    /// </summary>
+    [Fact]
+    public async Task An_orchestrator_waiting_on_its_inbox_after_implemented_is_woken_by_the_verdict()
+    {
+        using var repo = new TestRepo();
+        await _hub.AddProjectAsync(repoPath: repo.Path, validators: ["win-validator"]);
+        (await _hub.Founder().PutAsJsonAsync(Routes.Roles, new DefineRoleRequest("win-validator"))).EnsureSuccessStatusCode();
+        // Named the way OrchestratorSessionLauncher.IdentityName does, so the scenario reads as the real one.
+        var owner = await _hub.RegisterAgentAsync("orchestrator-t-1");
+        var validator = await _hub.RegisterAgentAsync("validator");
+        (await validator.PostAsync(Routes.RoleAction("win-validator", "take"), null)).EnsureSuccessStatusCode();
+        var task = await owner.AddTaskAsync("Ship it");
+        (await owner.ClaimAsync(task.Id)).EnsureSuccessStatusCode();
+        var specPath = repo.WriteSpec();
+        repo.Commit("write the spec");   // on main, so every branch cut from it below carries the spec too
+        (await owner.PostActionAsync(task.Id, "spec", new SetSpecRequest(specPath))).EnsureSuccessStatusCode();
+        repo.BranchWithFile("task/T-1-wrong", "n.txt", "wrong\n");
+
+        (await owner.PostActionAsync(task.Id, "implemented", new ImplementedRequest("task/T-1-wrong"))).EnsureSuccessStatusCode();
+
+        // `muthur msg inbox --wait 90` in the same session, not a second claim.
+        var waitingForFail = InboxAsync(owner, wait: 600);
+        Assert.False(waitingForFail.IsCompleted, "nothing to deliver yet, so the wait must still be blocked");
+        var firstSubject = (await validator.GetTaskAsync(task.Id)).Task.CurrentSubject!.Id;
+        (await validator.PostActionAsync(task.Id, "fail", new VerdictRequest("win-validator", "n.txt does not match; reproduce with git show", firstSubject))).EnsureSuccessStatusCode();
+
+        var failInbox = await Eventually.CompletesAsync(waitingForFail, "the orchestrator was never woken by its own validation failure");
+        Assert.False(failInbox.TimedOut);
+        Assert.Contains("failed validation", Assert.Single(failInbox.Messages).Body);
+        Assert.Equal(TaskState.InProgress, (await owner.GetTaskAsync(task.Id)).Task.State);
+
+        // Fixed and resubmitted here, in the same session that read the failure — no second `task claim`.
+        repo.BranchWithFile("task/T-1-fixed", "n.txt", "n\n");
+        (await owner.PostActionAsync(task.Id, "implemented", new ImplementedRequest("task/T-1-fixed"))).EnsureSuccessStatusCode();
+
+        var waitingForPass = InboxAsync(owner, wait: 600);
+        var secondSubject = (await validator.GetTaskAsync(task.Id)).Task.CurrentSubject!.Id;
+        (await validator.PostActionAsync(task.Id, "pass", new VerdictRequest("win-validator", "n.txt now matches; reproduce with git show", secondSubject))).EnsureSuccessStatusCode();
+
+        var passInbox = await Eventually.CompletesAsync(waitingForPass, "the orchestrator was never woken by the passing verdict");
+        Assert.False(passInbox.TimedOut);
+        Assert.Contains("passed every validator", Assert.Single(passInbox.Messages).Body);
+        Assert.Equal(TaskState.Validated, (await owner.GetTaskAsync(task.Id)).Task.State);
+
+        var claims = (await owner.GetTaskAsync(task.Id)).Events.Count(e => e.Type == "task.claimed");
+        Assert.Equal(1, claims);
+    }
 }
