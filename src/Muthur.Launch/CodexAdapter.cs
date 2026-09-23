@@ -103,7 +103,10 @@ public sealed partial class CodexAdapter(string name, string? openSourceProvider
     {
         var home = Path.Combine(request.ScratchDirectory, "codex-home");
         Directory.CreateDirectory(home);
-        File.WriteAllText(Path.Combine(home, "config.toml"), "sandbox_mode = \"workspace-write\"\n\n[features]\nhooks = false\n");
+        // approval never: exec mode has nobody to approve, so on-request means every command is refused. The Windows
+        // sandbox setting is the one the user's home carries too; without it commands are read-only on Windows.
+        File.WriteAllText(Path.Combine(home, "config.toml"),
+            "sandbox_mode = \"workspace-write\"\napproval_policy = \"never\"\n\n[windows]\nsandbox = \"elevated\"\n\n[features]\nhooks = false\n");
         return new Dictionary<string, string> { ["CODEX_HOME"] = home };
     }
 
