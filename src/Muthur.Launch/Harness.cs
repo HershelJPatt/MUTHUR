@@ -22,7 +22,20 @@ public sealed record WorkerRequest(
     /// The session must write to the repository's own .git (commit a spec, add a worktree, merge a unit): true for
     /// conductor-started orchestrators and validators, false for workers, whose launcher commits on their behalf.
     /// </summary>
-    bool RepositoryWrites = false);
+    bool RepositoryWrites = false,
+    /// <summary>Which seat the session fills (<see cref="SessionRoles"/>); a harness that shapes its tools or system prompt by seat reads it.</summary>
+    string Role = SessionRoles.Implementer,
+    /// <summary>The model's context window in tokens, from the catalog, for a harness that must be told it. Null means the adapter's default.</summary>
+    int? ContextWindow = null);
+
+/// <summary>The seats a launched session can fill.</summary>
+public static class SessionRoles
+{
+    public const string Implementer = "implementer";
+    public const string Orchestrator = "orchestrator";
+    public const string Validator = "validator";
+    public const string Overseer = "overseer";
+}
 
 /// <summary>A process to start: executable, arguments, and the prompt on stdin.</summary>
 /// <param name="Environment">Variables the adapter needs set on the process beyond what the launcher supplies, or null.</param>

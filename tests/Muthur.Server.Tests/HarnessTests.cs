@@ -48,6 +48,22 @@ public sealed class HarnessTests : IDisposable
     }
 
     [Fact]
+    public async Task A_tier_entry_may_name_its_models_context_window()
+    {
+        await TierAsync("implementer");
+        File.WriteAllText(Path.Combine(_hub.DataDir, MuthurEnvironment.HarnessFile),
+            """
+            { "tiers": { "local-implementer": [
+                { "harness": "pi", "model": "wide", "account": "local", "contextWindow": 65536 },
+                { "harness": "pi", "model": "default", "account": "local" },
+                { "harness": "pi", "model": "nonsense", "account": "local", "contextWindow": 0 } ] } }
+            """);
+
+        var tier = await TierAsync("local-implementer");
+        Assert.Equal([65536, null, null], tier.Candidates.Select(c => c.ContextWindow));
+    }
+
+    [Fact]
     public async Task A_catalog_that_cannot_be_read_is_reported_rather_than_crashing_the_endpoint()
     {
         await TierAsync("implementer");

@@ -12,6 +12,8 @@ namespace Muthur.Launch;
 /// names no provider) runs from a scratch agent directory whose model catalog names only that model; a hosted
 /// provider keeps the user's own directory, where its credentials live. The session's deny list is a
 /// <see cref="PiGuard"/> extension, loaded by path because <c>--no-extensions</c> turns off only discovered ones.
+/// pi's default system prompt (its own tool list, rules and documentation paths) is replaced by <see cref="SystemPrompt"/>;
+/// the project's AGENTS.md and CLAUDE.md still load, since only <c>--no-context-files</c> turns them off.
 /// </summary>
 public sealed class PiAdapter : IHarnessAdapter
 {
@@ -44,6 +46,43 @@ public sealed class PiAdapter : IHarnessAdapter
         return inherited is null ? null : CapabilityHash.Of(inherited + "\n" + PiGuard.Extension(request));
     }
 
+    public const string SystemPromptFileName = "pi-system.md";
+
+    /// <summary>The context window a local model is given when the catalog names none.</summary>
+    public const int DefaultContextWindow = 32768;
+
+    /// <summary>A validator judges the work and does not change it, so it gets no tool that edits a file.</summary>
+    public static string Tools(string role) =>
+        role == SessionRoles.Validator ? "read,bash,grep,find,ls" : "read,bash,edit,write,grep,find,ls";
+
+    /// <summary>
+    /// What the model is told before the assignment: its seat, where it works, what the launcher already checked and
+    /// what the guard will refuse. The assignment itself arrives on stdin.
+    /// </summary>
+    public static string SystemPrompt(WorkerRequest request)
+    {
+        var text = new StringBuilder();
+        text.Append($"You are a MUTHUR {request.Role}, running headless in pi with the tools {Tools(request.Role).Replace(",", ", ")}. ");
+        text.Append(request.Role switch
+        {
+            SessionRoles.Orchestrator => "You take one task through MUTHUR as its orchestrator: spec, dispatch, review, hand to validation.",
+            SessionRoles.Validator => "You validate one implemented task end to end and record a verdict with evidence; you do not change the work you judge.",
+            SessionRoles.Overseer => "You oversee the organization through the muthur CLI.",
+            _ => "You implement one unit of a frozen spec on your own branch, and nothing else.",
+        });
+        text.Append("\n\n");
+        text.Append($"- Working directory: `{request.WorkingDirectory.Replace('\\', '/')}`. Work only inside it.\n");
+        text.Append("- The bash tool runs a POSIX shell (Git Bash on Windows): write commands for sh, not PowerShell.\n");
+        if (WorkerPrompt.VerifiedBlock(request.Prompt) is { } verified) text.Append(verified).Append('\n');
+        var denied = request.DeniedCommands.Where(c => c.Trim().Length > 0).Distinct(StringComparer.Ordinal).ToArray();
+        if (denied.Length > 0)
+            text.Append($"- You may not run {string.Join(", ", denied.Select(d => $"`{d}`"))}, alone or inside a chain; a guard refuses them. " +
+                "When one is refused, do not retry it in another form: finish without it and say so in your report.\n");
+        text.Append("- Files under `.git/` are changed through git commands, never edited.\n");
+        text.Append("- The user message is your whole assignment. Follow it exactly, be brief, and end with the report it asks for.\n");
+        return text.ToString();
+    }
+
     private static string OutputFile(WorkerRequest request) => Path.Combine(request.ScratchDirectory, "pi-events.jsonl");
 
     /// <summary>"provider/id" as pi wants it; a bare id is a local Ollama model.</summary>
@@ -61,7 +100,12 @@ public sealed class PiAdapter : IHarnessAdapter
             "--print", "--mode", "json", "--no-session", "--no-approve", "--offline",
             "--no-extensions", "--no-skills", "--no-prompt-templates",
             "--provider", provider, "--model", $"{provider}/{id}",
+            "--tools", Tools(request.Role),
         };
+        var system = Path.Combine(request.ScratchDirectory, SystemPromptFileName);
+        File.WriteAllText(system, SystemPrompt(request));
+        arguments.Add("--system-prompt");
+        arguments.Add(system);
         var guard = Path.Combine(request.ScratchDirectory, PiGuard.FileName);
         File.WriteAllText(guard, PiGuard.Extension(request));
         arguments.Add("-e");
@@ -75,14 +119,14 @@ public sealed class PiAdapter : IHarnessAdapter
         {
             var home = Path.Combine(request.ScratchDirectory, "pi-home");
             Directory.CreateDirectory(home);
-            File.WriteAllText(Path.Combine(home, "models.json"), ScratchCatalog(id));
+            File.WriteAllText(Path.Combine(home, "models.json"), ScratchCatalog(id, request.ContextWindow ?? DefaultContextWindow));
             environment = new Dictionary<string, string> { [AgentDirectoryVariable] = home };
         }
         return new HarnessInvocation("pi", arguments, request.Prompt, environment);
     }
 
     /// <summary>A catalog with one provider and one model: the run cannot drift onto anything the catalog did not name.</summary>
-    internal static string ScratchCatalog(string modelId)
+    internal static string ScratchCatalog(string modelId, int contextWindow = DefaultContextWindow)
     {
         using var buffer = new MemoryStream();
         using (var json = new Utf8JsonWriter(buffer, new JsonWriterOptions { Indented = true }))
@@ -101,7 +145,7 @@ public sealed class PiAdapter : IHarnessAdapter
             json.WriteStartObject();
             json.WriteString("id", modelId);
             json.WriteBoolean("reasoning", false);
-            json.WriteNumber("contextWindow", 32768);
+            json.WriteNumber("contextWindow", contextWindow);
             json.WriteNumber("maxTokens", 4096);
             json.WriteEndObject();
             json.WriteEndArray();

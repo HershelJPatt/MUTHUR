@@ -224,7 +224,7 @@ public sealed class OverseerService(Ledger ledger, MuthurOptions options, AgentS
             var candidate = new HarnessCandidate(config.Harness, config.Model, config.Account, config.ReasoningEffort);
             var attempts = await launcher.RunAsync([candidate], c => new WorkerRequest(scratch, assignment.Prompt, c.Model,
                 null, ["muthur*"], [.. SessionCommands.Denied, "muthur out*", "muthur msg send*", "muthur requests answer*"], scratch,
-                ReasoningEffort: c.ReasoningEffort, RequireRepository: false),
+                ReasoningEffort: c.ReasoningEffort, RequireRepository: false, Role: SessionRoles.Overseer),
                 _ => Task.FromResult(new AgentIdentity(Identity, registration.Token)), TimeSpan.FromMinutes(config.SessionMinutes),
                 c => c.Account is { } account ? ledger.MutateAsync(Caller.System, m => HarnessService.ExhaustedAsync(m, account, ct), ct) : Task.CompletedTask, ct);
             ValidatorSessionLauncher.EnsureSomethingRan("organization overseer", attempts);

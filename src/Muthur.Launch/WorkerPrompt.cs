@@ -7,6 +7,17 @@ public static class WorkerPrompt
     /// <summary>The line that tells a worker the launcher already ran the assignment check; the contract keys off it.</summary>
     public const string VerifiedMarker = "- **Verified by the launcher at dispatch:** base branch, dispatch SHA, clean worktree and frozen spec blob were checked when this worktree was created.";
 
+    /// <summary>The last line of the verified block.</summary>
+    private const string TrustLine = "- Git trust is supplied only to this process for this worktree. Never change global safe.directory or sandbox permissions.";
+
+    /// <summary>The verified-by-launcher block of a composed prompt, marker to trust line, or null when the prompt has none.</summary>
+    public static string? VerifiedBlock(string prompt)
+    {
+        var start = prompt.IndexOf(VerifiedMarker, StringComparison.Ordinal);
+        var end = start < 0 ? -1 : prompt.IndexOf(TrustLine, start, StringComparison.Ordinal);
+        return end < 0 ? null : prompt[start..(end + TrustLine.Length)].ReplaceLineEndings("\n");
+    }
+
     /// <summary>The implementer contract followed by the concrete assignment. Everything the worker knows is in here.</summary>
     public static string Compose(string contractMarkdown, string specPath, string? unit, string branch, IReadOnlyList<string> verifyCommands, string? extra,
         WorkerAssignment? assignment = null)
@@ -32,7 +43,7 @@ public static class WorkerPrompt
             prompt.AppendLine($"- Named default branch: `{a.DefaultBranch}`.");
             prompt.AppendLine($"- Frozen spec blob SHA: `{a.SpecBlob}` (path `{a.SpecPath}`).");
             prompt.AppendLine($"- Re-check only that `refs/heads/{a.BaseBranch}` still resolves to `{a.BaseCommit}` and that `git status --porcelain` is empty; then read the spec with `git show \"refs/heads/{a.BaseBranch}:{a.SpecPath}\"`.");
-            prompt.AppendLine("- Git trust is supplied only to this process for this worktree. Never change global safe.directory or sandbox permissions.");
+            prompt.AppendLine(TrustLine);
         }
         if (verifyCommands.Count > 0)
         {

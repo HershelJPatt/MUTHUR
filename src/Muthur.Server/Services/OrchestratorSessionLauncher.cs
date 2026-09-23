@@ -62,7 +62,9 @@ public sealed class OrchestratorSessionLauncher(
                 ReasoningEffort: candidate.ReasoningEffort,
                 Capabilities: capabilities,
                 MaxTurns: candidate.MaxTurns,
-                RepositoryWrites: true),
+                RepositoryWrites: true,
+                Role: SessionRoles.Orchestrator,
+                ContextWindow: candidate.ContextWindow),
             candidate => IdentityFor(assignment, candidate, ct),
             TimeSpan.FromMinutes(options.ConductorSessionMinutes),
             candidate => MarkLimitedAsync(candidate.Account, ct),
@@ -123,7 +125,7 @@ public sealed class OrchestratorSessionLauncher(
     {
         var tiers = await harnesses.TiersAsync(Tier, ct);
         return [.. tiers.SelectMany(t => t.Candidates).Where(c => !c.Limited)
-            .Select(c => new HarnessCandidate(c.Harness, c.Model, c.Account, c.ReasoningEffort, c.MaxTurns))];
+            .Select(c => new HarnessCandidate(c.Harness, c.Model, c.Account, c.ReasoningEffort, c.MaxTurns, c.ContextWindow))];
     }
 
     private Task<string?> RepositoryPathAsync(string projectKey, CancellationToken ct) =>

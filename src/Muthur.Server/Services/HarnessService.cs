@@ -31,7 +31,7 @@ public sealed class HarnessService(Ledger ledger, MuthurOptions options)
                 .Select(t => new TierDto(t.Tier, t.Candidates.Select(c =>
                 {
                     var until = c.Account is not null && limits.TryGetValue(c.Account, out var u) ? u : (DateTimeOffset?)null;
-                    return new HarnessCandidateDto(c.Harness, c.Model, c.Account, until is not null, until, c.ReasoningEffort, c.MaxTurns);
+                    return new HarnessCandidateDto(c.Harness, c.Model, c.Account, until is not null, until, c.ReasoningEffort, c.MaxTurns, c.ContextWindow);
                 }).ToList()))
                 .ToList();
         }, ct);
@@ -164,9 +164,11 @@ public sealed class HarnessService(Ledger ledger, MuthurOptions options)
                     var effort = c.TryGetProperty("reasoningEffort", out var re) ? re.GetString() : null;
                     // A turn cap is the one bound a session has besides the wall clock; absent or non-positive means none.
                     int? maxTurns = c.TryGetProperty("maxTurns", out var mt) && mt.ValueKind == JsonValueKind.Number && mt.TryGetInt32(out var turns) && turns > 0 ? turns : null;
+                    // The model's context window, for a harness that must be told it (pi's scratch catalog); absent means the adapter's default.
+                    int? contextWindow = c.TryGetProperty("contextWindow", out var cw) && cw.ValueKind == JsonValueKind.Number && cw.TryGetInt32(out var window) && window > 0 ? window : null;
                     // "enabled": false keeps a candidate in the file as a toggle without staffing anything on it.
                     var enabled = !c.TryGetProperty("enabled", out var en) || en.ValueKind != JsonValueKind.False;
-                    if (harness.Length > 0 && enabled) candidates.Add(new HarnessCandidate(harness, model, account, effort is { Length: > 0 } ? effort : null, maxTurns));
+                    if (harness.Length > 0 && enabled) candidates.Add(new HarnessCandidate(harness, model, account, effort is { Length: > 0 } ? effort : null, maxTurns, contextWindow));
                 }
                 tiers.Add(new CatalogTier(tier.Name.ToLowerInvariant(), candidates));
             }

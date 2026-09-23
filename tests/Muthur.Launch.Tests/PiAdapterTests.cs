@@ -63,6 +63,63 @@ public sealed class PiAdapterTests : IDisposable
         Assert.Equal(PiGuard.BlockMarker, adapter.GuardBlockMarker);
     }
 
+    [Theory]
+    [InlineData(SessionRoles.Implementer, "read,bash,edit,write,grep,find,ls")]
+    [InlineData(SessionRoles.Orchestrator, "read,bash,edit,write,grep,find,ls")]
+    [InlineData(SessionRoles.Validator, "read,bash,grep,find,ls")]
+    public void Each_seat_gets_its_own_tools_and_a_muthur_system_prompt_in_place_of_pis(string role, string tools)
+    {
+        var args = new PiAdapter().Build(Request(WorkerDenied) with { Role = role }).Arguments.ToList();
+
+        Assert.Equal(tools, args[args.IndexOf("--tools") + 1]);
+        Assert.Equal(Path.Combine(_scratch, PiAdapter.SystemPromptFileName), args[args.IndexOf("--system-prompt") + 1]);
+        Assert.Contains($"You are a MUTHUR {role}", File.ReadAllText(args[args.IndexOf("--system-prompt") + 1]));
+        // Project rules (AGENTS.md, CLAUDE.md) must still load: only --no-context-files turns them off.
+        Assert.DoesNotContain("-nc", args);
+        Assert.DoesNotContain("--no-context-files", args);
+    }
+
+    [Fact]
+    public void The_system_prompt_names_the_worktree_the_launchers_checks_and_the_deny_list()
+    {
+        var worktree = Path.Combine(_scratch, "worktree");
+        var assignment = new WorkerAssignment("C:/repo", "task/T-7", "0123456789abcdef0123456789abcdef01234567", "main",
+            "specs/T-7.md", "89abcdef0123456789abcdef0123456789abcdef", "work/T-7-a", worktree);
+        var prompt = WorkerPrompt.Compose("# Contract", "specs/T-7.md", "A", "work/T-7-a", ["dotnet test"], null, assignment);
+
+        var system = PiAdapter.SystemPrompt(Request(WorkerDenied) with { Prompt = prompt });
+
+        Assert.Contains($"`{worktree.Replace('\\', '/')}`", system);
+        Assert.Contains(WorkerPrompt.VerifiedMarker, system);
+        Assert.Contains("`0123456789abcdef0123456789abcdef01234567`", system);
+        Assert.Contains("Never change global safe.directory", system);
+        foreach (var pattern in WorkerDenied) Assert.Contains($"`{pattern}`", system);
+        Assert.Contains("POSIX shell", system);
+        Assert.DoesNotContain("# Contract", system);
+    }
+
+    [Fact]
+    public void A_session_without_an_assignment_or_denials_gets_neither_block()
+    {
+        var system = PiAdapter.SystemPrompt(Request([]) with { Role = SessionRoles.Validator });
+
+        Assert.DoesNotContain(WorkerPrompt.VerifiedMarker, system);
+        Assert.DoesNotContain("You may not run", system);
+        Assert.Contains("you do not change the work you judge", system);
+    }
+
+    [Fact]
+    public void The_scratch_catalog_window_follows_the_candidate()
+    {
+        static int Window(string home) =>
+            System.Text.Json.JsonDocument.Parse(File.ReadAllText(Path.Combine(home, "models.json"))).RootElement
+                .GetProperty("providers").GetProperty("ollama").GetProperty("models")[0].GetProperty("contextWindow").GetInt32();
+        var adapter = new PiAdapter();
+
+        Assert.Equal(PiAdapter.DefaultContextWindow, Window(adapter.Build(Request([])).Environment![PiAdapter.AgentDirectoryVariable]));
+        Assert.Equal(65536, Window(adapter.Build(Request([]) with { ContextWindow = 65536 }).Environment![PiAdapter.AgentDirectoryVariable]));
+    }
+
     private readonly string _scratch = Path.Combine(Path.GetTempPath(), "muthur-tests", "pi-" + Guid.NewGuid().ToString("n"));
 
     public PiAdapterTests() => Directory.CreateDirectory(_scratch);

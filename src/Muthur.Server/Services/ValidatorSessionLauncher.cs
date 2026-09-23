@@ -111,7 +111,9 @@ public sealed class ValidatorSessionLauncher(
                 ReasoningEffort: candidate.ReasoningEffort,
                 Capabilities: capabilities,
                 MaxTurns: candidate.MaxTurns,
-                RepositoryWrites: true),
+                RepositoryWrites: true,
+                Role: SessionRoles.Validator,
+                ContextWindow: candidate.ContextWindow),
             candidate => IdentityFor(assignment, candidate, ct, tier),
             TimeSpan.FromMinutes(options.ConductorValidatorSessionMinutes),
             candidate => MarkLimitedAsync(candidate.Account, ct),
@@ -206,7 +208,7 @@ public sealed class ValidatorSessionLauncher(
         {
             var tiers = await harnesses.TiersAsync(tier, ct);
             var available = tiers.SelectMany(t => t.Candidates).Where(c => !c.Limited)
-                .Select(c => new HarnessCandidate(c.Harness, c.Model, c.Account, c.ReasoningEffort, c.MaxTurns)).ToList();
+                .Select(c => new HarnessCandidate(c.Harness, c.Model, c.Account, c.ReasoningEffort, c.MaxTurns, c.ContextWindow)).ToList();
             if (available.Count > 0) return (tier, Prefer(available, avoid));
         }
         return (wanted, []);

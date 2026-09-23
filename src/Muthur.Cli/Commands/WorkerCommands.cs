@@ -418,7 +418,7 @@ public static class WorkerCommands
     internal static IReadOnlyList<HarnessCandidate> Candidates(IReadOnlyList<TierDto> catalog, string? harness) =>
         [.. catalog.SelectMany(t => t.Candidates)
             .Where(c => !c.Limited && (harness is null || string.Equals(c.Harness, harness, StringComparison.OrdinalIgnoreCase)))
-            .Select(c => new HarnessCandidate(c.Harness, c.Model, c.Account, c.ReasoningEffort, c.MaxTurns))];
+            .Select(c => new HarnessCandidate(c.Harness, c.Model, c.Account, c.ReasoningEffort, c.MaxTurns, c.ContextWindow))];
 
     /// <summary>The newest recorded recommendation for the task that names a catalog position, or null when none does.</summary>
     internal static RoutingReport? LatestRecommendation(string body) =>
@@ -444,7 +444,8 @@ public static class WorkerCommands
     /// </summary>
     internal static WorkerRequest RequestFor(HarnessCandidate candidate, string worktree, string prompt,
         string? gitCommon, IReadOnlyList<string> allowed, string scratch, string workKind = "unknown", string? effort = null) =>
-        new(worktree, prompt, candidate.Model, gitCommon, allowed, Denied, scratch, EffortFor(candidate, workKind, effort), MaxTurns: candidate.MaxTurns);
+        new(worktree, prompt, candidate.Model, gitCommon, allowed, Denied, scratch, EffortFor(candidate, workKind, effort), MaxTurns: candidate.MaxTurns,
+            ContextWindow: candidate.ContextWindow);
 
     /// <summary>What is actually sent, so the run report records the effort the harness was given and not the catalog's.</summary>
     internal static string EffortFor(HarnessCandidate candidate, string workKind, string? effort) =>
