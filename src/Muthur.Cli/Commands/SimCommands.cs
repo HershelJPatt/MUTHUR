@@ -327,7 +327,7 @@ public static class SimCommands
     {
         public int WorkerRuns, WorkerBlocked, LaunchesIntoLimitedAccount, AccountLimits;
         /// <summary>Real model processes started (sessions and worker runs on a harness other than sim), the tokens they reported, and their wall time.</summary>
-        public int ModelCalls; public long ModelTokens; public double ModelSeconds;
+        public int ModelCalls; public long ModelTokens, ModelCacheReadTokens; public double ModelSeconds;
 
         public void Count(EventDto e)
         {
@@ -365,6 +365,7 @@ public static class SimCommands
             long Number(string name) => payload.TryGetProperty(name, out var v) && v.ValueKind == JsonValueKind.Number && v.TryGetInt64(out var n) ? n : 0;
             var split = Number("inputTokens") + Number("outputTokens");
             ModelTokens += split > 0 ? split : Number("totalTokens");
+            ModelCacheReadTokens += Number("cacheReadTokens");
             ModelSeconds += Number("seconds");
         }
     }
@@ -474,6 +475,9 @@ public static class SimCommands
             // those processes said they used, and how long they ran — the three numbers a harness comparison needs.
             json.WriteNumber("modelCalls", runs.ModelCalls);
             json.WriteNumber("modelTokens", runs.ModelTokens);
+            // Cache reads are context the model saw again without paying for it in full; a harness that reports
+            // only one total (Codex) has them inside modelTokens, so the two rows are read side by side, not summed.
+            json.WriteNumber("modelCacheReadTokens", runs.ModelCacheReadTokens);
             json.WriteNumber("modelSeconds", Math.Round(runs.ModelSeconds, 1));
             if (runs.ModelCalls > 0) json.WriteNumber("modelTokensPerCall", runs.ModelTokens / runs.ModelCalls);
             json.WriteNumber("landed", landed);

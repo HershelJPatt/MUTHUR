@@ -216,6 +216,7 @@ public sealed class SimCommandTests
 
         Assert.Equal(2, runs.ModelCalls);
         Assert.Equal(16393 + 9400, runs.ModelTokens);
+        Assert.Equal(0, runs.ModelCacheReadTokens);
         Assert.Equal(110, runs.ModelSeconds);
         Assert.Equal(2, runs.WorkerRuns);
     }

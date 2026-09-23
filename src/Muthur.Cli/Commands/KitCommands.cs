@@ -54,9 +54,9 @@ public static partial class KitCommands
         Output.Error("kit_not_found", $"The kit directory was not found next to the CLI (kit/) and ${KitVariable} is not set.");
 
     /// <summary>The same install `muthur kit install` performs, for a command that prepares a repository itself.</summary>
-    internal static int InstallInto(ParseResult parse, string harness, string repo, string? projectKey) => Install(parse, harness, repo, projectKey);
+    internal static int InstallInto(ParseResult parse, string harness, string repo, string? projectKey) => Install(parse, harness, repo, projectKey, quiet: true);
 
-    private static int Install(ParseResult parse, string harness, string repo, string? projectKey)
+    private static int Install(ParseResult parse, string harness, string repo, string? projectKey, bool quiet = false)
     {
         if (LocateKit() is not { } kitDir) return KitMissing();
         var harnessDir = Path.Combine(kitDir, harness);
@@ -155,7 +155,8 @@ public static partial class KitCommands
             return Failed(repo, transaction, ex);
         }
         transaction.Commit();
-        return Output.Emit(parse, new ApiResult(200, Encoding.UTF8.GetString(stream.ToArray())));
+        // A command that installs the kit as one step of its own work keeps its stdout for its own report.
+        return quiet ? ExitCodes.Ok : Output.Emit(parse, new ApiResult(200, Encoding.UTF8.GetString(stream.ToArray())));
     }
 
     /// <summary>
