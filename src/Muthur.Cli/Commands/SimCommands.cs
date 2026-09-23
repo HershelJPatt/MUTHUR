@@ -53,11 +53,12 @@ public static class SimCommands
         var harness = new Option<string?>("--harness") { Description = "Staff the mastermind and implementer tiers on a real harness (claude, codex, codex-oss) instead of the scripted one; validation stays deterministic. The matching kit is installed into the scratch repository." };
         var runModel = new Option<string?>("--model") { Description = "The model for --harness, e.g. gemma4:26b on codex-oss." };
         var effort = new Option<string?>("--effort") { Description = "Reasoning effort for --harness (low, medium, high)." };
+        var repeat = new Option<int>("--repeat") { DefaultValueFactory = _ => 1, Description = "Run the fixture this many times sequentially, a fresh scratch hub each time, and print one report with the median and min/max of seconds, coldStartsPerLanded, modelTokens, modelCacheReadTokens, modelSeconds and landed across the runs, plus every run's own row. The default of 1 is today's single-run report, unchanged." };
         var run = new Command("run", "Start a scratch hub on the sim harness, seed tasks, turn the conductor on and stream the ledger until every task is done.")
-            { tasks, runPace, answer, runAskWait, minutes, port, keep, harness, runModel, effort };
+            { tasks, runPace, answer, runAskWait, minutes, port, keep, harness, runModel, effort, repeat };
         run.SetAction((parse, ct) => RunAsync(parse, new RunOptions(parse.GetValue(tasks), parse.GetValue(runPace), parse.GetValue(answer),
             parse.GetValue(minutes), parse.GetValue(port), parse.GetValue(keep), parse.GetValue(runAskWait),
-            parse.GetValue(harness), parse.GetValue(runModel), parse.GetValue(effort)), processes, ct));
+            parse.GetValue(harness), parse.GetValue(runModel), parse.GetValue(effort)), parse.GetValue(repeat), processes, ct));
         sim.Subcommands.Add(run);
     }
 
@@ -175,13 +176,82 @@ public static class SimCommands
         Evidence names the command you ran and what it printed.
         """;
 
-    private static async Task<int> RunAsync(ParseResult parse, RunOptions o, IProcessRunner processes, CancellationToken ct)
+    /// <summary>One run when unrepeated; <paramref name="repeat"/> runs, fresh scratch hub each, aggregated into one report otherwise.</summary>
+    private static async Task<int> RunAsync(ParseResult parse, RunOptions o, int repeat, IProcessRunner processes, CancellationToken ct)
+    {
+        if (repeat < 1) return Output.Error("sim_repeat", "Repeat the fixture at least once.", ExitCodes.RuleViolation);
+        if (repeat == 1)
+        {
+            var (code, report) = await RunOnceAsync(parse, o, processes, ct);
+            if (report is not null) Console.Out.WriteLine(report);
+            return code;
+        }
+
+        var reports = new List<string>();
+        for (var i = 1; i <= repeat; i++)
+        {
+            Console.Error.WriteLine($"sim: run {i} of {repeat}");
+            var (code, report) = await RunOnceAsync(parse, o, processes, ct);
+            if (report is null) return code;
+            reports.Add(report);
+        }
+        Console.Out.WriteLine(Aggregate(reports));
+        return ExitCodes.Ok;
+    }
+
+    /// <summary>What the report's numbers are judged on across repeats: median and spread, not just the last run.</summary>
+    private static readonly string[] AggregatedFields = ["seconds", "coldStartsPerLanded", "modelTokens", "modelCacheReadTokens", "modelSeconds", "landed"];
+
+    /// <summary>One run's field values, read off each report a run's field is present in; a missing field is skipped, not zero-filled.</summary>
+    internal static string Aggregate(IReadOnlyList<string> reports)
+    {
+        using var buffer = new MemoryStream();
+        using (var json = new Utf8JsonWriter(buffer, new JsonWriterOptions { Indented = true }))
+        {
+            json.WriteStartObject();
+            json.WriteNumber("runs", reports.Count);
+            foreach (var field in AggregatedFields)
+            {
+                var values = new List<double>();
+                foreach (var report in reports)
+                {
+                    using var doc = JsonDocument.Parse(report);
+                    if (doc.RootElement.TryGetProperty(field, out var v) && v.ValueKind == JsonValueKind.Number)
+                        values.Add(v.GetDouble());
+                }
+                if (values.Count == 0) continue;
+                values.Sort();
+                json.WriteStartObject(field);
+                json.WriteNumber("median", Median(values));
+                json.WriteNumber("min", values[0]);
+                json.WriteNumber("max", values[^1]);
+                json.WriteEndObject();
+            }
+            json.WriteStartArray("rows");
+            foreach (var report in reports)
+            {
+                using var doc = JsonDocument.Parse(report);
+                doc.RootElement.WriteTo(json);
+            }
+            json.WriteEndArray();
+            json.WriteEndObject();
+        }
+        return Encoding.UTF8.GetString(buffer.ToArray());
+    }
+
+    internal static double Median(IReadOnlyList<double> sorted)
+    {
+        var n = sorted.Count;
+        return n % 2 == 1 ? sorted[n / 2] : (sorted[n / 2 - 1] + sorted[n / 2]) / 2.0;
+    }
+
+    private static async Task<(int Code, string? Report)> RunOnceAsync(ParseResult parse, RunOptions o, IProcessRunner processes, CancellationToken ct)
     {
         if (ServerProcess.Locate() is null)
-            return Output.Error("sim_needs_install",
+            return (Output.Error("sim_needs_install",
                 "Run the sim from an installed CLI (scripts/install.ps1 -Destination <dir>): the scratch hub needs the bundled server, and its sessions need muthur.exe beside it.",
-                ExitCodes.RuleViolation);
-        if (o.Tasks < 1) return Output.Error("sim_tasks", "Seed at least one task.", ExitCodes.RuleViolation);
+                ExitCodes.RuleViolation), null);
+        if (o.Tasks < 1) return (Output.Error("sim_tasks", "Seed at least one task.", ExitCodes.RuleViolation), null);
 
         var scratch = Path.Combine(Path.GetTempPath(), "muthur-sim", DateTime.Now.ToString("yyyyMMdd-HHmmss", CultureInfo.InvariantCulture));
         var home = Path.Combine(scratch, "home");
@@ -225,7 +295,7 @@ public static class SimCommands
             {
                 // A real model reads its procedures from the installed kit, exactly as it would in a real project.
                 var installed = KitCommands.InstallInto(parse, kit, repo, Project);
-                if (installed != ExitCodes.Ok) return installed;
+                if (installed != ExitCodes.Ok) return (installed, null);
             }
             await Git("add", "-A");
             await Git("-c", "commit.gpgsign=false", "commit", "-q", "-m", "sim: initial");
@@ -233,7 +303,7 @@ public static class SimCommands
             await File.WriteAllTextAsync(Path.Combine(home, MuthurEnvironment.HarnessFile), CatalogFor(o), ct);
 
             var (started, failure) = await SystemCommands.StartAsync(ct);
-            if (started is null) return Output.Error(failure!.Value.Code, failure.Value.Message);
+            if (started is null) return (Output.Error(failure!.Value.Code, failure.Value.Message), null);
             var founder = new HubClient(Globals.ReadFounderToken());
 
             await Must(founder.PostAsync(Routes.Projects, new AddProjectRequest(Project, repo, "Sim project", "main", LandMode.Merge, [Role], []), MuthurJsonContext.Default.AddProjectRequest, ct), "project");
@@ -264,17 +334,16 @@ public static class SimCommands
 
             var watch = Stopwatch.StartNew();
             var report = await WatchAsync(founder, seeded, o, watch, stderr, Path.Combine(home, SessionsLog), ct);
-            Console.Out.WriteLine(report);
-            return ExitCodes.Ok;
+            return (ExitCodes.Ok, report);
         }
         catch (OperationCanceledException) when (ct.IsCancellationRequested)
         {
             stderr.WriteLine("sim: stopped.");
-            return ExitCodes.Ok;
+            return (ExitCodes.Ok, null);
         }
         catch (InvalidOperationException ex)
         {
-            return Output.Error("sim_failed", ex.Message);
+            return (Output.Error("sim_failed", ex.Message), null);
         }
         finally
         {

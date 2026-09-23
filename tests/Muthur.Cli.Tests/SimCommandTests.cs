@@ -22,7 +22,45 @@ public sealed class SimCommandTests
         var parsed = root.Parse(["sim", "run", "--tasks", "3", "--pace", "0", "--auto-answer", "0", "--ask-wait", "5", "--keep"]);
         Assert.Empty(parsed.Errors);
         Assert.Empty(root.Parse(["sim", "agent", "--report", "r.txt", "--cd", ".", "--ask-wait", "5"]).Errors);
+        Assert.Empty(root.Parse(["sim", "run", "--repeat", "3"]).Errors);
     }
+
+    /// <summary>Each run's report contributes one value per field; a field a run left out (no task landed, so no
+    /// coldStartsPerLanded) is skipped for that run rather than counted as zero.</summary>
+    [Fact]
+    public void The_repeat_report_aggregates_median_and_spread_across_runs()
+    {
+        var reports = new[]
+        {
+            """{"seconds":40.0,"landed":6,"coldStartsPerLanded":1.5,"modelTokens":100,"modelCacheReadTokens":10,"modelSeconds":5.0}""",
+            """{"seconds":50.0,"landed":6,"coldStartsPerLanded":1.7,"modelTokens":120,"modelCacheReadTokens":20,"modelSeconds":7.0}""",
+            """{"seconds":30.0,"landed":0,"modelTokens":80,"modelCacheReadTokens":0,"modelSeconds":3.0}""",
+        };
+
+        using var doc = System.Text.Json.JsonDocument.Parse(SimCommands.Aggregate(reports));
+        var root = doc.RootElement;
+        Assert.Equal(3, root.GetProperty("runs").GetInt32());
+
+        var seconds = root.GetProperty("seconds");
+        Assert.Equal(40.0, seconds.GetProperty("median").GetDouble());
+        Assert.Equal(30.0, seconds.GetProperty("min").GetDouble());
+        Assert.Equal(50.0, seconds.GetProperty("max").GetDouble());
+
+        // Only 2 of the 3 runs report coldStartsPerLanded (the third landed nothing), so the median is their average.
+        var cold = root.GetProperty("coldStartsPerLanded");
+        Assert.Equal(1.6, cold.GetProperty("median").GetDouble());
+        Assert.Equal(1.5, cold.GetProperty("min").GetDouble());
+        Assert.Equal(1.7, cold.GetProperty("max").GetDouble());
+
+        Assert.Equal(3, root.GetProperty("rows").GetArrayLength());
+    }
+
+    [Theory]
+    [InlineData(new[] { 1.0, 2.0, 3.0 }, 2.0)]
+    [InlineData(new[] { 1.0, 2.0, 3.0, 4.0 }, 2.5)]
+    [InlineData(new[] { 5.0 }, 5.0)]
+    public void The_median_is_the_middle_value_or_the_average_of_the_two_middle_ones(double[] sorted, double median) =>
+        Assert.Equal(median, SimCommands.Median(sorted));
 
     [Fact]
     public void The_ask_wait_comes_from_the_flag_then_the_run_then_a_minute()
