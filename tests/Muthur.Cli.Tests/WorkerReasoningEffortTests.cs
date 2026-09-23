@@ -60,6 +60,21 @@ public sealed class WorkerReasoningEffortTests
     }
 
     [Fact]
+    public void A_tier_entrys_max_turns_reaches_the_worker_request()
+    {
+        IReadOnlyList<TierDto> catalog = [new TierDto("implementer",
+            [new HarnessCandidateDto("claude", "opus", "claude-subscription", false, null, null, MaxTurns: 40)])];
+        var candidate = Assert.Single(WorkerCommands.Candidates(catalog, harness: null));
+        Assert.Equal(40, candidate.MaxTurns);
+
+        var request = WorkerCommands.RequestFor(candidate, "C:/repo/.worktrees/w1", "do the unit", "C:/repo/.git", ["dotnet *"], "C:/scratch");
+        Assert.Equal(40, request.MaxTurns);
+
+        var uncapped = Assert.Single(WorkerCommands.Candidates(Catalog(null), harness: null));
+        Assert.Null(uncapped.MaxTurns);
+    }
+
+    [Fact]
     public void An_account_out_of_quota_is_still_skipped()
     {
         IReadOnlyList<TierDto> catalog = [new TierDto("implementer", [
