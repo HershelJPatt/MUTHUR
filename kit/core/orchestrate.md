@@ -36,7 +36,8 @@ session silent for longer than the claim lease looks dead: the hub returns its t
    starts from your notes instead of from the codebase. Do not guess at product decisions (`--kind`
    routing: reference, **Decision routing**).
 3. **Write the frozen spec** at `specs/T-n.md` from `specs/_TEMPLATE.md`, commit it on the task branch,
-   then `muthur task spec T-n specs/T-n.md`. A spec is frozen when an implementer could complete it
+   then `muthur task spec T-n specs/T-n.md`, then `muthur task notes T-n --file <notes.md>` with what the spec
+   settled and what is left. A spec is frozen when an implementer could complete it
    without making a single design decision. If you can't write it that precisely, you haven't finished step 2.
    Its *Verification* section has a bar of its own: see **Verification a conductor-started session can run**
    in the reference.
@@ -61,7 +62,8 @@ session silent for longer than the claim lease looks dead: the hub returns its t
    before writes with expected/actual root and branch; redispatch via `muthur worker run`.
    Do not copy uncommitted output by hand between trees as normal integration.
    Give every worker the exact verification commands and the report format reminder. No hub access, no
-   authority to merge or push. Use a mastermind-tier sub-orchestrator instead of an implementer when the
+   authority to merge or push. Once every unit is dispatched, update your notes: which units, on which
+   branches, what each is waiting on. Use a mastermind-tier sub-orchestrator instead of an implementer when the
    unit is itself a large or risky problem space.
 
    A natively-spawned worktree is **cut from the repository's HEAD, not from yours**, so every delegation
@@ -73,6 +75,7 @@ session silent for longer than the claim lease looks dead: the hub returns its t
    yourself. Check the change against the spec line by line, and against the codebase's conventions.
    Send work back with specific corrections until it is right. Fix trivial things by instructing the
    implementer, not by editing silently — the spec and the branch must stay the record of what was asked and done.
+   Update your notes when the review is done: what passed, what was sent back and why.
 6. **Integrate** committed unit branch output into `task/T-n-<slug>` only. Check the reported WORKTREE
    (absolute actual root) and BRANCH against the native allocation or launcher report before integrating;
    an explicit assignment mismatch must be resolved by redispatch. Rebuild and retest.
@@ -96,6 +99,9 @@ exit; this preserves the spec and branch and wakes the task when every prerequis
 - Every delegation prompt names the base branch, the commit sha of the spec on it, and the default branch.
   A worktree spawned by the harness does not arrive where you told it to.
 - One owner per task. If you cannot continue, `muthur task release T-n --reason "..."` so someone else can.
+- Notes are not optional. A session has a wall clock; one that is killed at it with no notes hands the next
+  session nothing, and the ledger records the timeout as `timeout_without_notes`. Notes at each phase boundary
+  (spec committed, units dispatched, review done) are the difference between a resume and a restart.
 - New work you discover goes in the ledger (`muthur task add "..." --parent T-n`), not in your head.
 - If your account hits a usage limit: `muthur agent limited --minutes <n>` before you stall.
 - Anything that leaves the machine (messages, emails, issue comments) goes through `muthur out` and its review gate. No exceptions.

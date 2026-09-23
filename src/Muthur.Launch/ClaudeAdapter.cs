@@ -38,6 +38,11 @@ public sealed class ClaudeAdapter : IHarnessAdapter
             arguments.Add("--effort");
             arguments.Add(effort);
         }
+        if (request.MaxTurns is > 0 and var turns)
+        {
+            arguments.Add("--max-turns");
+            arguments.Add(turns.ToString(System.Globalization.CultureInfo.InvariantCulture));
+        }
         return new HarnessInvocation("claude", arguments, request.Prompt);
     }
 

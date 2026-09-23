@@ -84,6 +84,25 @@ public sealed class HarnessTests : IDisposable
     }
 
     [Fact]
+    public async Task A_tier_entry_may_cap_the_turns_a_session_gets()
+    {
+        _ = _hub.Server;
+        File.WriteAllText(Path.Combine(_hub.DataDir, MuthurEnvironment.HarnessFile),
+            """
+            { "tiers": { "implementer": [
+              { "harness": "claude", "model": "opus", "maxTurns": 40, "account": "team" },
+              { "harness": "claude", "model": "opus", "account": "team" },
+              { "harness": "claude", "model": "opus", "maxTurns": 0, "account": "team" }
+            ] } }
+            """);
+
+        var edited = (await TierAsync("implementer")).Candidates;
+        Assert.Equal(40, edited[0].MaxTurns);
+        Assert.Null(edited[1].MaxTurns);
+        Assert.Null(edited[2].MaxTurns);   // zero is no cap, not a session that may not start
+    }
+
+    [Fact]
     public async Task An_agent_out_of_quota_takes_its_account_out_of_rotation_until_the_limit_passes()
     {
         var first = (await TierAsync("implementer")).Candidates[0];

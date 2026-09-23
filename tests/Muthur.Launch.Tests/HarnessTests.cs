@@ -24,6 +24,15 @@ public sealed class HarnessTests : IDisposable
         Assert.Equal(effort, arguments[arguments.IndexOf("--effort") + 1]);
     }
 
+    [Fact]
+    public void Claude_receives_a_turn_cap_only_when_the_catalog_sets_one()
+    {
+        var capped = new ClaudeAdapter().Build(Request() with { MaxTurns = 40 }).Arguments.ToList();
+        Assert.Equal("40", capped[capped.IndexOf("--max-turns") + 1]);
+        Assert.DoesNotContain("--max-turns", new ClaudeAdapter().Build(Request()).Arguments);
+        Assert.DoesNotContain("--max-turns", new ClaudeAdapter().Build(Request() with { MaxTurns = 0 }).Arguments);
+    }
+
     private readonly string _scratch = Path.Combine(Path.GetTempPath(), "muthur-tests", "launch-" + Guid.NewGuid().ToString("n"));
 
     public HarnessTests() => Directory.CreateDirectory(_scratch);

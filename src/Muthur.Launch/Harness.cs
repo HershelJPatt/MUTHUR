@@ -15,7 +15,9 @@ public sealed record WorkerRequest(
     string? ReasoningEffort = null,
     bool RequireRepository = true,
     IReadOnlyDictionary<string, string>? GitEnvironment = null,
-    CapabilityContext? Capabilities = null);
+    CapabilityContext? Capabilities = null,
+    /// <summary>A cap on agentic turns for harnesses that have one. Null means the harness's own default.</summary>
+    int? MaxTurns = null);
 
 /// <summary>A process to start: executable, arguments, and the prompt on stdin.</summary>
 public sealed record HarnessInvocation(string FileName, IReadOnlyList<string> Arguments, string Stdin);

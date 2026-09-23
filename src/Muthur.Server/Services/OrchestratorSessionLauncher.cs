@@ -59,7 +59,8 @@ public sealed class OrchestratorSessionLauncher(
                 DeniedCommands: SessionCommands.Denied,
                 ScratchDirectory: scratch,
                 ReasoningEffort: candidate.ReasoningEffort,
-                Capabilities: capabilities),
+                Capabilities: capabilities,
+                MaxTurns: candidate.MaxTurns),
             candidate => IdentityFor(assignment, candidate, ct),
             TimeSpan.FromMinutes(options.ConductorSessionMinutes),
             candidate => MarkLimitedAsync(candidate.Account, ct),
@@ -68,6 +69,8 @@ public sealed class OrchestratorSessionLauncher(
         // The same classifier, not a second one that says the same thing: "nothing ever reached a process" and
         // "something ran and produced nothing" send the founder to different places, and one fork is easier to keep
         // honest than two.
+        var notes = await ledger.ReadAsync((db, _) => TaskService.NotesAsync(db, assignment.TaskId, CancellationToken.None), CancellationToken.None);
+        attempts = SessionReceipts.NotesAware(attempts, hasNotes: notes is { Length: > 0 });
         await SessionReceipts.RecordAsync(ledger, assignment.TaskId, "#orchestrator", attempts, CancellationToken.None);
         if (knowledge is not null)
             foreach (var attempt in attempts.Where(a => a.Started))
@@ -118,7 +121,7 @@ public sealed class OrchestratorSessionLauncher(
     {
         var tiers = await harnesses.TiersAsync(Tier, ct);
         return [.. tiers.SelectMany(t => t.Candidates).Where(c => !c.Limited)
-            .Select(c => new HarnessCandidate(c.Harness, c.Model, c.Account, c.ReasoningEffort))];
+            .Select(c => new HarnessCandidate(c.Harness, c.Model, c.Account, c.ReasoningEffort, c.MaxTurns))];
     }
 
     private Task<string?> RepositoryPathAsync(string projectKey, CancellationToken ct) =>
@@ -212,6 +215,9 @@ public sealed class OrchestratorSessionLauncher(
         - Local coding is disabled by default: the installed Codex/Ollama combination failed its tool-execution pilot. Use the implementer tier. Only when the local-implementer catalog has explicitly been enabled after a successful pilot, use it once for a small mechanical unit with a frozen spec and objective checks. Review its diff and run checks; do not repeat failed local attempts.
         - Architecture, ambiguous requirements, complex debugging and final review stay on the mastermind tier. Do not route these to local workers merely to fit a budget.
         - You own this task and no other. Do not claim a second one.
+        - Leave notes at every phase boundary — `muthur task notes {assignment.TaskKey} --file <notes.md>` once the spec is
+          committed, once the units are dispatched, once the review is done — not only when a question wait expires.
+          This session has a wall clock; a session killed at it with no notes hands its successor nothing.
         - Write a frozen spec before you delegate, and delegate the building; you do not write product code yourself.
         - Never push, never merge into the default branch. `muthur task land` is how work lands.
         - If the task needs a decision only the founder can make, ask and wait in one command:

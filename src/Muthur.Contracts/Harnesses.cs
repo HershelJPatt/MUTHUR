@@ -6,7 +6,7 @@ public sealed record ProbeAdmissionDto(string ReservationId, string Task, string
 
 public sealed record ProbeReleaseRequest(string ReservationId);
 
-public sealed record HarnessCandidateDto(string Harness, string Model, string? Account, bool Limited, DateTimeOffset? LimitedUntil, string? ReasoningEffort);
+public sealed record HarnessCandidateDto(string Harness, string Model, string? Account, bool Limited, DateTimeOffset? LimitedUntil, string? ReasoningEffort, int? MaxTurns = null);
 
 public sealed record TierDto(string Tier, IReadOnlyList<HarnessCandidateDto> Candidates);
 

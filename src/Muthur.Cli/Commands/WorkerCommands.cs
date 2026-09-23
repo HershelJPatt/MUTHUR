@@ -399,12 +399,12 @@ public static class WorkerCommands
     internal static IReadOnlyList<HarnessCandidate> Candidates(IReadOnlyList<TierDto> catalog, string? harness) =>
         [.. catalog.SelectMany(t => t.Candidates)
             .Where(c => !c.Limited && (harness is null || string.Equals(c.Harness, harness, StringComparison.OrdinalIgnoreCase)))
-            .Select(c => new HarnessCandidate(c.Harness, c.Model, c.Account, c.ReasoningEffort))];
+            .Select(c => new HarnessCandidate(c.Harness, c.Model, c.Account, c.ReasoningEffort, c.MaxTurns))];
 
     /// <summary>What one candidate is asked to do. The deny list is this command's own policy, never the project's.</summary>
     internal static WorkerRequest RequestFor(HarnessCandidate candidate, string worktree, string prompt,
         string? gitCommon, IReadOnlyList<string> allowed, string scratch) =>
-        new(worktree, prompt, candidate.Model, gitCommon, allowed, Denied, scratch, candidate.ReasoningEffort);
+        new(worktree, prompt, candidate.Model, gitCommon, allowed, Denied, scratch, candidate.ReasoningEffort, MaxTurns: candidate.MaxTurns);
 
     /// <summary>Build/test commands and extra allowed shell commands from muthur.project.json.</summary>
     internal static (List<string> Verify, List<string> Allowed) ReadProject(string repo)

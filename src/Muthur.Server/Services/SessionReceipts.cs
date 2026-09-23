@@ -13,6 +13,13 @@ internal static class SessionReceipts
 {
     public const string Event = "conductor.session_finished";
 
+    /// <summary>
+    /// A timeout is two different things depending on what the session left behind: with notes, the next session
+    /// resumes; without them, it restarts from the codebase, which is the cost the card should name.
+    /// </summary>
+    public static IReadOnlyList<WorkerAttempt> NotesAware(IReadOnlyList<WorkerAttempt> attempts, bool hasNotes) =>
+        hasNotes ? attempts : [.. attempts.Select(a => a.FailureKind == "timeout" ? a with { FailureKind = "timeout_without_notes" } : a)];
+
     public static Task RecordAsync(Ledger ledger, int taskId, string role, IReadOnlyList<WorkerAttempt> attempts, CancellationToken ct) =>
         attempts.Count == 0
             ? Task.CompletedTask

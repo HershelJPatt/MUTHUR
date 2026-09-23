@@ -44,6 +44,16 @@ public sealed class SessionReceiptsTests : IDisposable
     }
 
     [Fact]
+    public void A_timeout_without_notes_is_named_as_the_restart_it_is()
+    {
+        WorkerAttempt timedOut = new(new("claude", "opus", "a"), new(false, "", false), TimeSpan.FromMinutes(45), FailureKind: "timeout", ExitCode: 124);
+        WorkerAttempt quota = new(new("codex", "gpt", "b"), new(false, "", true), TimeSpan.FromSeconds(3), FailureKind: "quota");
+
+        Assert.Equal(["timeout_without_notes", "quota"], SessionReceipts.NotesAware([timedOut, quota], hasNotes: false).Select(a => a.FailureKind));
+        Assert.Equal(["timeout", "quota"], SessionReceipts.NotesAware([timedOut, quota], hasNotes: true).Select(a => a.FailureKind));
+    }
+
+    [Fact]
     public async Task Nothing_is_recorded_when_no_candidate_was_tried()
     {
         await _hub.AddProjectAsync();
