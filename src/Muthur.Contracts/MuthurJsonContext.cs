@@ -127,6 +127,7 @@ namespace Muthur.Contracts;
 [JsonSerializable(typeof(CancelTaskRequest))]
 [JsonSerializable(typeof(AttendedRequest))]
 [JsonSerializable(typeof(TaskNotesRequest))]
+[JsonSerializable(typeof(WorkKindRequest))]
 [JsonSerializable(typeof(HoldRequest))]
 [JsonSerializable(typeof(TaskDto))]
 [JsonSerializable(typeof(IReadOnlyList<TaskDto>))]

@@ -85,7 +85,35 @@ public sealed partial class TaskService(Ledger ledger, LeasePolicy leases, ITask
             var events = await db.Events.Where(e => e.TaskId == task.Id).OrderBy(e => e.Seq).ToListAsync(ct);
             var validations = await Validations.ForTasksAsync(db, [task.Id], ct);
             return new TaskDetailDto(await Validations.MapAsync(db, task, validations.GetValueOrDefault(task.Id), ct), events.Select(e => e.ToDto()).ToList(),
-                await IncidentService.ForTaskAsync(db, task.Id, ct), await NotesAsync(db, task.Id, ct));
+                await IncidentService.ForTaskAsync(db, task.Id, ct), await NotesAsync(db, task.Id, ct), await WorkKindSuggestedAsync(db, task.Id, ct));
+        }, ct);
+
+    /// <summary>The utility tier's guess at the task's work-kind, or null when none was recorded.</summary>
+    public static Task<string?> WorkKindSuggestedAsync(MuthurDb db, int taskId, CancellationToken ct) =>
+        db.Meta.Where(e => e.Key == MetaEntry.TaskWorkKindSuggested(taskId)).Select(e => e.Value).SingleOrDefaultAsync(ct);
+
+    /// <summary>
+    /// Records what the utility tier thinks the work is. Advisory: it is shown to the orchestrator and never read
+    /// by the spec parser, so the worst a wrong guess does is get overruled by the line the owner writes. Only
+    /// the founder or, once the task is owned, its owner may set it, and only to one of the four kinds a spec
+    /// could declare.
+    /// </summary>
+    public Task<TaskDto> SetWorkKindSuggestedAsync(Caller caller, string id, WorkKindRequest request, CancellationToken ct = default) =>
+        ledger.MutateAsync(caller, async m =>
+        {
+            var task = await LoadAsync(m.Db, id, ct);
+            if (task.OwnerAgentId is not null) RequireOwnerOrFounder(task, caller);
+            else caller.RequireIdentified();
+            var kind = request.WorkKind?.Trim() ?? "";
+            if (!WorkKindRequest.Kinds.Contains(kind, StringComparer.Ordinal))
+                throw Fail.Rule("invalid_work_kind", $"'{kind}' is not a work-kind. Valid: {string.Join(", ", WorkKindRequest.Kinds)}.");
+            var key = MetaEntry.TaskWorkKindSuggested(task.Id);
+            var entry = await m.Db.Meta.SingleOrDefaultAsync(e => e.Key == key, ct);
+            if (entry is null) m.Db.Meta.Add(new MetaEntry { Key = key, Value = kind });
+            else entry.Value = kind;
+            task.UpdatedAt = m.Now;
+            m.Record("task.work_kind_suggested", task.Id, new { workKind = kind, by = caller.Name });
+            return await Validations.MapAsync(m.Db, task, null, ct);
         }, ct);
 
     /// <summary>The owner's working notes on a task, or null when none were written.</summary>

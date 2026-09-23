@@ -95,7 +95,15 @@ public sealed record ValidationQueueDto(
     int Claimed,
     DateTimeOffset? OldestWaitingSince);
 
-public sealed record TaskDetailDto(TaskDto Task, IReadOnlyList<EventDto> Events, IReadOnlyList<TaskIncidentDto>? Incidents = null, string? Notes = null);
+/// <param name="WorkKindSuggested">What the utility tier guessed the work is at intake; advisory, the spec's work-kind line decides.</param>
+public sealed record TaskDetailDto(TaskDto Task, IReadOnlyList<EventDto> Events, IReadOnlyList<TaskIncidentDto>? Incidents = null, string? Notes = null,
+    string? WorkKindSuggested = null);
+
+/// <summary>One of the four work-kinds a spec may declare, suggested for a task before it has a spec.</summary>
+public sealed record WorkKindRequest(string WorkKind)
+{
+    public static readonly string[] Kinds = ["mechanical", "complex-debugging", "ui-interaction", "general"];
+}
 
 public sealed record EventDto(
     long Seq,
