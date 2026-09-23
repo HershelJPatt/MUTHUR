@@ -34,7 +34,7 @@ public sealed class DesignTests : IDisposable
         var attached = await owner.PostAsJsonAsync(path + "/attach", new WriteDesignRequest(0, definition));
         attached.EnsureSuccessStatusCode();
         var design = (await attached.Content.ReadFromJsonAsync(MuthurJsonContext.Default.DesignDto))!;
-        repo.Write("specs/" + task.Id + ".md", "# " + task.Id + " visual change\ndesign: " + design.Revisions[0].Sha256 + "\n");
+        repo.Write("specs/" + task.Id + ".md", "# " + task.Id + " visual change\ndesign: " + design.Revisions[0].Sha256 + "\n" + TestRepo.Verification);
         repo.Commit("bind spec to design");
         (await owner.PostActionAsync(task.Id, "spec", new SetSpecRequest("specs/" + task.Id + ".md", "task/design"))).EnsureSuccessStatusCode();
         var approve = new ApproveDesignRequest(1, true, "Fixture founder preference decision", repo.Git("rev-parse", "HEAD"));

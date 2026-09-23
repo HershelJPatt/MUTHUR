@@ -58,7 +58,7 @@ public sealed class WorkflowScenarios : IDisposable
     private async Task Spec(HttpClient owner, string id)
     {
         var branch = $"task/{id}-work";
-        _repo.BranchWithFile(branch, $"specs/{id}.md", $"# {id} — Return 42\n");
+        _repo.BranchWithFile(branch, $"specs/{id}.md", $"# {id} — Return 42\n" + TestRepo.Verification);
         await Action(owner, id, "spec", new SetSpecRequest($"specs/{id}.md", branch));
     }
 

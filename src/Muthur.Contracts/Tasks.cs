@@ -20,7 +20,14 @@ public sealed record ValidationSubjectDto(
     ValidationChecksDto RequiredChecks, ValidationEnvironmentDto InvalidatingEnvironment,
     ValidationMetadataDto DescriptiveMetadata, DateTimeOffset CreatedAt);
 
-public sealed record ValidationChecksDto(string? Build, string? Test);
+/// <summary>
+/// The checks a round is judged by, pinned at the implementation commit: the project's build and test commands,
+/// the commands the spec wrote under its Verification heading, and whether a model has to look as well.
+/// <c>RequiresJudgment</c> defaults to true so a subject frozen before specs carried a Verification section keeps
+/// getting a validator session.
+/// </summary>
+public sealed record ValidationChecksDto(string? Build, string? Test, IReadOnlyList<string>? Commands = null,
+    bool RequiresJudgment = true);
 public sealed record ValidatorBriefDigestDto(string Role, string Sha256);
 public sealed record ValidationEnvironmentDto(string ProjectKey, string DefaultBranch, string LandingMode,
     IReadOnlyList<ValidatorBriefDigestDto> Briefs);

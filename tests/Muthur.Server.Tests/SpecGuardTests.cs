@@ -47,7 +47,7 @@ public sealed class SpecGuardTests : IDisposable
     public async Task A_spec_committed_only_on_a_task_branch_is_attached()
     {
         var (owner, id) = await ClaimedTaskAsync();
-        _repo.BranchWithFile("task/T-1-feature", "specs/T-1-feature.md", "# T-1 — Build the feature\n\nFrozen spec.\n");
+        _repo.BranchWithFile("task/T-1-feature", "specs/T-1-feature.md", "# T-1 — Build the feature\n\nFrozen spec.\n" + TestRepo.Verification);
         Assert.False(File.Exists(Path.Combine(_repo.Path, "specs/T-1-feature.md")));   // genuinely not in the checkout
 
         var task = await (await owner.PostActionAsync(id, "spec",
@@ -65,10 +65,10 @@ public sealed class SpecGuardTests : IDisposable
         (await owner.ClaimAsync(id)).EnsureSuccessStatusCode();
 
         _repo.BranchWithFile("task/T-1-feature", "specs/T-1-feature.md", content);
-        _repo.Write("specs/T-1-placeholder.md", "# T-1 — placeholder\n");
+        _repo.Write("specs/T-1-placeholder.md", "# T-1 — placeholder\n" + TestRepo.Verification);
         _repo.Commit("a spec on main, so the first attach has something to find");
         _repo.Git("checkout", "-q", "task/T-1-feature");
-        _repo.Write("specs/T-1-placeholder.md", "# T-1 — placeholder\n");
+        _repo.Write("specs/T-1-placeholder.md", "# T-1 — placeholder\n" + TestRepo.Verification);
         _repo.Commit("the attached frozen spec also belongs to the implementation");
         _repo.Git("checkout", "-q", "main");
 
@@ -90,7 +90,7 @@ public sealed class SpecGuardTests : IDisposable
     [InlineData("task/T-1-nonexistent")]
     public async Task A_task_that_knows_its_branch_resolves_it_when_the_hint_has_no_spec(string? branch)
     {
-        var (owner, id) = await BlockedTaskWithBranchAsync("# T-1 — Build the feature\n");
+        var (owner, id) = await BlockedTaskWithBranchAsync("# T-1 — Build the feature\n" + TestRepo.Verification);
         _repo.Git("branch", "task/T-1-empty", "main");
         Assert.False(File.Exists(Path.Combine(_repo.Path, "specs/T-1-feature.md")));
 
@@ -110,7 +110,7 @@ public sealed class SpecGuardTests : IDisposable
     {
         var (owner, id) = await ClaimedTaskAsync();
         _repo.Git("branch", "task/T-1-elsewhere", "main");   // branched before the spec existed
-        _repo.Write("specs/T-1-feature.md", "# T-1 — Build the feature\n");
+        _repo.Write("specs/T-1-feature.md", "# T-1 — Build the feature\n" + TestRepo.Verification);
         _repo.Commit("the spec, on main");
 
         var task = await (await owner.PostActionAsync(id, "spec",
@@ -200,7 +200,7 @@ public sealed class SpecGuardTests : IDisposable
     {
         var (owner, id) = await ClaimedTaskAsync();
         _repo.Git("branch", "task/T-1-empty", "main");
-        _repo.Write("specs/T-1-feature.md", "# T-1 — Build the feature\n\nFrozen spec.\n");
+        _repo.Write("specs/T-1-feature.md", "# T-1 — Build the feature\n\nFrozen spec.\n" + TestRepo.Verification);
 
         var task = await (await owner.PostActionAsync(id, "spec", new SetSpecRequest("specs/T-1-feature.md", branch))).ReadTaskAsync();
 
@@ -261,7 +261,7 @@ public sealed class SpecGuardTests : IDisposable
     public async Task A_heading_that_names_no_task_is_accepted()
     {
         var (owner, id) = await ClaimedTaskAsync();
-        _repo.Write("specs/outbound-gate.md", "# The outbound gate\n\nNot every project writes the id into the heading.\n");
+        _repo.Write("specs/outbound-gate.md", "# The outbound gate\n\nNot every project writes the id into the heading.\n" + TestRepo.Verification);
 
         var task = await (await owner.PostActionAsync(id, "spec", new SetSpecRequest("specs/outbound-gate.md"))).ReadTaskAsync();
 
@@ -288,7 +288,7 @@ public sealed class SpecGuardTests : IDisposable
     public async Task A_heading_buried_past_the_read_cap_is_accepted_rather_than_blamed_on_another_task()
     {
         var (owner, id) = await ClaimedTaskAsync();
-        _repo.Write("specs/T-9-buried-heading.md", new string(' ', 8193) + "\n# T-9 — The outbound gate\n");
+        _repo.Write("specs/T-9-buried-heading.md", new string(' ', 8193) + "\n# T-9 — The outbound gate\n" + TestRepo.Verification);
 
         var task = await (await owner.PostActionAsync(id, "spec", new SetSpecRequest("specs/T-9-buried-heading.md"))).ReadTaskAsync();
 
@@ -310,7 +310,7 @@ public sealed class SpecGuardTests : IDisposable
     public async Task A_spec_that_declares_what_it_needs_flags_the_task_when_it_is_frozen(string declaration)
     {
         var (owner, id) = await ClaimedTaskAsync();
-        _repo.Write("specs/T-1-eyes.md", $"# T-1 — Build it\n\n## Verification\n\n{declaration}\n");
+        _repo.Write("specs/T-1-eyes.md", $"# T-1 — Build it\n\n## Verification\n\n{declaration}\n\n```\necho verified\n```\n");
 
         var task = await (await owner.PostActionAsync(id, "spec", new SetSpecRequest("specs/T-1-eyes.md"))).ReadTaskAsync();
 
@@ -327,7 +327,7 @@ public sealed class SpecGuardTests : IDisposable
     public async Task Headless_alone_does_not_require_attendance(string declaration)
     {
         var (owner, id) = await ClaimedTaskAsync();
-        _repo.Write("specs/T-1-headless.md", $"# T-1 — Build it\n{declaration}\n");
+        _repo.Write("specs/T-1-headless.md", $"# T-1 — Build it\n{declaration}\n" + TestRepo.Verification);
 
         var task = await (await owner.PostActionAsync(id, "spec", new SetSpecRequest("specs/T-1-headless.md"))).ReadTaskAsync();
 
@@ -345,7 +345,7 @@ public sealed class SpecGuardTests : IDisposable
     public async Task Other_needs_still_require_attendance(string declarations, string need)
     {
         var (owner, id) = await ClaimedTaskAsync();
-        _repo.Write("specs/T-1-mixed.md", $"# T-1 — Build it\n{declarations}\n");
+        _repo.Write("specs/T-1-mixed.md", $"# T-1 — Build it\n{declarations}\n" + TestRepo.Verification);
 
         var task = await (await owner.PostActionAsync(id, "spec", new SetSpecRequest("specs/T-1-mixed.md"))).ReadTaskAsync();
 
@@ -358,7 +358,7 @@ public sealed class SpecGuardTests : IDisposable
     public async Task Replacing_a_spec_with_headless_preserves_existing_attendance(bool manual)
     {
         var (owner, id) = await ClaimedTaskAsync();
-        _repo.Write("specs/T-1-before.md", "# T-1 — Build it\nneeds: browser\n");
+        _repo.Write("specs/T-1-before.md", "# T-1 — Build it\nneeds: browser\n" + TestRepo.Verification);
         var before = await (await owner.PostActionAsync(id, "spec", new SetSpecRequest("specs/T-1-before.md"))).ReadTaskAsync();
         var reason = before.AttendedReason;
         if (manual)
@@ -366,7 +366,7 @@ public sealed class SpecGuardTests : IDisposable
             reason = "Needs human visual review";
             (await owner.PostActionAsync(id, "attended", new AttendedRequest(reason))).EnsureSuccessStatusCode();
         }
-        _repo.Write("specs/T-1-after.md", "# T-1 — Build it\nneeds: headless-browser\n");
+        _repo.Write("specs/T-1-after.md", "# T-1 — Build it\nneeds: headless-browser\n" + TestRepo.Verification);
 
         var after = await (await owner.PostActionAsync(id, "spec", new SetSpecRequest("specs/T-1-after.md"))).ReadTaskAsync();
 
@@ -378,7 +378,7 @@ public sealed class SpecGuardTests : IDisposable
     {
         var (owner, id) = await ClaimedTaskAsync();
         // Prose about browsers is not a declaration; only a line of its own is.
-        _repo.Write("specs/T-1-quiet.md", "# T-1 — Build it\n\nNothing here needs a browser, and this sentence is not a declaration.\n");
+        _repo.Write("specs/T-1-quiet.md", "# T-1 — Build it\n\nNothing here needs a browser, and this sentence is not a declaration.\n" + TestRepo.Verification);
 
         var task = await (await owner.PostActionAsync(id, "spec", new SetSpecRequest("specs/T-1-quiet.md"))).ReadTaskAsync();
 
@@ -395,7 +395,7 @@ public sealed class SpecGuardTests : IDisposable
     public async Task A_declaration_past_the_heading_window_is_still_seen()
     {
         var (owner, id) = await ClaimedTaskAsync();
-        _repo.Write("specs/T-1-late.md", "# T-1 — Build it\n" + new string('x', 20_000) + "\n\nneeds: browser\n");
+        _repo.Write("specs/T-1-late.md", "# T-1 — Build it\n" + new string('x', 20_000) + "\n\nneeds: browser\n" + TestRepo.Verification);
 
         var task = await (await owner.PostActionAsync(id, "spec", new SetSpecRequest("specs/T-1-late.md"))).ReadTaskAsync();
 
@@ -409,7 +409,7 @@ public sealed class SpecGuardTests : IDisposable
         var (owner, id) = await ClaimedTaskAsync();
         const string Written = "the collision pill renders inside Virtualize";
         (await owner.PostActionAsync(id, "attended", new AttendedRequest(Written))).EnsureSuccessStatusCode();
-        _repo.Write("specs/T-1-eyes.md", "# T-1 — Build it\n\nneeds: browser\n");
+        _repo.Write("specs/T-1-eyes.md", "# T-1 — Build it\n\nneeds: browser\n" + TestRepo.Verification);
 
         var task = await (await owner.PostActionAsync(id, "spec", new SetSpecRequest("specs/T-1-eyes.md"))).ReadTaskAsync();
 
@@ -449,13 +449,85 @@ public sealed class SpecGuardTests : IDisposable
         Assert.Equal("spec_too_large", error.Code);
     }
 
+    /// <summary>
+    /// A spec that does not say how it is verified is a validator session spent working that out. It is refused
+    /// once, when it is frozen, with the reason; specs attached before the rule are not re-read.
+    /// </summary>
+    [Fact]
+    public async Task A_spec_with_no_verification_section_is_refused()
+    {
+        var (owner, id) = await ClaimedTaskAsync();
+        _repo.Write("specs/T-1-silent.md", "# T-1 — Build it\n\n## Goal\n\nDo the thing.\n");
+
+        var error = await RefusedAsync(owner, id, "specs/T-1-silent.md");
+
+        Assert.Equal("spec_unverifiable", error.Code);
+        Assert.Contains("## Verification", error.Message);
+        Assert.Null((await owner.GetTaskAsync(id)).Task.SpecPath);
+    }
+
+    /// <summary>
+    /// The historical "needs a live browser" spec: Verification prose that opens the dashboard and clicks, with no
+    /// needs line. Eight validator sessions ended blocked on that shape before anything refused it.
+    /// </summary>
+    [Theory]
+    [InlineData("Open the dashboard in a browser and click the board tab; the pill should render.")]
+    [InlineData("Take a screenshot of the panel after the change.")]
+    [InlineData("Drive it with Playwright and compare.")]
+    public async Task Verification_prose_that_drives_a_browser_without_declaring_it_is_refused_with_the_line_quoted(string line)
+    {
+        var (owner, id) = await ClaimedTaskAsync();
+        _repo.Write("specs/T-1-live.md", $"# T-1 — Build it\n\n## Verification\n\n{line}\n\n```\ndotnet build\n```\n");
+
+        var error = await RefusedAsync(owner, id, "specs/T-1-live.md");
+
+        Assert.Equal("spec_unverifiable", error.Code);
+        Assert.Contains($"\"{line}\"", error.Message);
+        Assert.Contains("needs: headless-browser", error.Message);
+    }
+
+    [Theory]
+    [InlineData("needs: headless-browser")]
+    [InlineData("needs: browser")]
+    public async Task Browser_prose_with_the_need_declared_is_accepted(string declaration)
+    {
+        var (owner, id) = await ClaimedTaskAsync();
+        _repo.Write("specs/T-1-declared.md", $"# T-1 — Build it\n\n{declaration}\n\n## Verification\n\nOpen the dashboard in a browser and click the board tab.\n");
+
+        var task = await (await owner.PostActionAsync(id, "spec", new SetSpecRequest("specs/T-1-declared.md"))).ReadTaskAsync();
+
+        Assert.Equal("specs/T-1-declared.md", task.SpecPath);
+    }
+
+    [Fact]
+    public async Task A_fenced_command_block_under_verification_passes_the_lint()
+    {
+        var (owner, id) = await ClaimedTaskAsync();
+        _repo.Write("specs/T-1-checked.md", "# T-1 — Build it\n\n## Goal\n\nClick nothing; this is a service.\n\n## Verification\n\n```\ndotnet test\n```\n");
+
+        var task = await (await owner.PostActionAsync(id, "spec", new SetSpecRequest("specs/T-1-checked.md"))).ReadTaskAsync();
+
+        Assert.Equal("specs/T-1-checked.md", task.SpecPath);
+    }
+
+    [Fact]
+    public async Task An_unknown_validation_line_is_refused()
+    {
+        var (owner, id) = await ClaimedTaskAsync();
+        _repo.Write("specs/T-1-vibes.md", "# T-1 — Build it\n\nvalidation: vibes\n" + TestRepo.Verification);
+
+        var error = await RefusedAsync(owner, id, "specs/T-1-vibes.md");
+
+        Assert.Equal("spec_validation_invalid", error.Code);
+    }
+
     /// <summary>A spec right up against the cap is still ordinary work, and its declaration is still seen.</summary>
     [Fact]
     public async Task A_spec_just_inside_the_cap_is_read_in_full()
     {
         var (owner, id) = await ClaimedTaskAsync();
         var head = "# T-1 - Build it\n";
-        var tail = "\nneeds: browser\n";
+        var tail = "\nneeds: browser\n" + TestRepo.Verification;
         _repo.Write("specs/T-1-big.md", head + new string('x', 1_048_576 - head.Length - tail.Length) + tail);
 
         var task = await (await owner.PostActionAsync(id, "spec", new SetSpecRequest("specs/T-1-big.md"))).ReadTaskAsync();

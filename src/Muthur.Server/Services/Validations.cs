@@ -8,6 +8,7 @@ using Muthur.Contracts;
 using Muthur.Core;
 using Muthur.Core.Entities;
 using Muthur.Data;
+using Muthur.Launch;
 
 namespace Muthur.Server.Services;
 
@@ -42,10 +43,15 @@ public static class Validations
         return Serialize(new ValidationEnvironmentDto(project.Key, project.DefaultBranch, project.LandMode.ToWire(), briefs));
     }
 
-    private static async Task<string> ChecksAsync(ITaskLander lander, Project project, string sha, CancellationToken ct)
+    /// <summary>
+    /// The checks the round is judged by, all read at the implementation commit: build and test from the committed
+    /// muthur.project.json, and what the committed spec wrote under its Verification heading.
+    /// </summary>
+    private static async Task<string> ChecksAsync(ITaskLander lander, Project project, string sha, string spec, CancellationToken ct)
     {
+        var verification = ParseVerification(spec);
         var config = await lander.ReadFileAsync(project, sha, "muthur.project.json", ct);
-        if (config is null) return Serialize(new ValidationChecksDto(null, null));
+        if (config is null) return Serialize(new ValidationChecksDto(null, null, verification.Commands, verification.RequiresJudgment));
         try
         {
             using var document = JsonDocument.Parse(config);
@@ -56,12 +62,23 @@ public static class Validations
                 if (value.ValueKind != JsonValueKind.String) throw new JsonException();
                 return value.GetString();
             }
-            return Serialize(new ValidationChecksDto(Command("build"), Command("test")));
+            return Serialize(new ValidationChecksDto(Command("build"), Command("test"), verification.Commands, verification.RequiresJudgment));
         }
         catch (JsonException)
         {
             throw Fail.Rule("validation_config_invalid", "Committed muthur.project.json must be a JSON object with string build/test commands. Fix it, commit, and resubmit the implementation.");
         }
+    }
+
+    /// <summary>The spec at the subject's commit, or nothing: a subject whose spec has gone is judged as one that wrote no checks.</summary>
+    private static async Task<string> ChecksAsync(ITaskLander lander, ValidationSubject subject, Project project, CancellationToken ct) =>
+        await ChecksAsync(lander, project, subject.ImplementationSha,
+            await lander.ReadFileAsync(project, subject.ImplementationSha, subject.SpecPath, ct) ?? "", ct);
+
+    internal static SpecVerification ParseVerification(string spec)
+    {
+        try { return SpecVerification.Parse(spec); }
+        catch (WorkerDispatchException ex) { throw Fail.Rule(ex.Code, ex.Message); }
     }
 
     public static async Task<ValidationSubject> CreateAsync(Mutation m, WorkTask task, string sha, ITaskLander lander, CancellationToken ct)
@@ -78,7 +95,7 @@ public static class Validations
             Id = Guid.NewGuid(), TaskId = task.Id, ProjectId = task.ProjectId,
             RepositoryPath = RepositoryPath(project), ImplementationSha = sha,
             SpecPath = task.SpecPath!, SpecSha256 = digest, RequiredValidatorsJson = Roles(project),
-            RequiredChecksJson = await ChecksAsync(lander, project, sha, ct),
+            RequiredChecksJson = await ChecksAsync(lander, project, sha, spec, ct),
             InvalidatingEnvironmentJson = await EnvironmentAsync(m.Db, project, ct),
             DescriptiveMetadataJson = Serialize(new ValidationMetadataDto(RuntimeInformation.OSDescription,
                 RuntimeInformation.ProcessArchitecture.ToString(), RuntimeInformation.FrameworkDescription,
@@ -107,7 +124,7 @@ public static class Validations
     {
         if (task.CurrentSubject is null) throw Fail.Rule("validation_provenance_unknown", Recovery);
         if (!await CompatibleAsync(db, task, ct)
-            || task.CurrentSubject.RequiredChecksJson != await ChecksAsync(lander, task.Project!, task.CurrentSubject.ImplementationSha, ct))
+            || task.CurrentSubject.RequiredChecksJson != await ChecksAsync(lander, task.CurrentSubject, task.Project!, ct))
             throw Fail.Conflict("validation_subject_changed", "Validation policy changed. " + Recovery);
     }
 

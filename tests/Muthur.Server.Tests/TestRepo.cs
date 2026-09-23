@@ -27,11 +27,14 @@ public sealed class TestRepo : IDisposable
         File.WriteAllText(target, content);
     }
 
-    /// <summary>Writes `specs/&lt;id&gt;.md` with a heading naming that task, which `task spec` requires.</summary>
-    public string WriteSpec(string taskId = "T-1")
+    /// <summary>A Verification section with one fenced command, which is what `task spec` requires of every spec.</summary>
+    public const string Verification = "\n## Verification\n\n```\necho verified\n```\n";
+
+    /// <summary>Writes `specs/&lt;id&gt;.md` with a heading naming that task and a Verification section, which `task spec` requires.</summary>
+    public string WriteSpec(string taskId = "T-1", string body = "")
     {
         var file = $"specs/{taskId}.md";
-        Write(file, $"# {taskId} — a spec for the test\n");
+        Write(file, $"# {taskId} — a spec for the test\n{body}{Verification}");
         return file;
     }
 

@@ -212,6 +212,7 @@ public sealed partial class TaskService(Ledger ledger, LeasePolicy leases, ITask
             var spec = await RequireSpecBelongsToTaskAsync(task, relative, request.Branch, ct);
             if (task.State is not (TaskState.InProgress or TaskState.Blocked))
                 throw Fail.Rule("not_in_progress", $"A spec can only be attached while the task is in progress; {Wire.TaskId(task.Id)} is '{task.State.ToWire()}'.");
+            RequireVerifiable(relative, spec);
             task.SpecPath = relative;
             task.SpecSha256 = Validations.Hash(spec);
             task.UpdatedAt = m.Now;
@@ -440,6 +441,30 @@ public sealed partial class TaskService(Ledger ledger, LeasePolicy leases, ITask
     {
         if (FirstHeadingTaskId(content[..Math.Min(content.Length, Head)]) is { } found && found != Wire.TaskId(task.Id))
             throw Fail.Rule("spec_id_mismatch", $"'{relative}' is the spec for {found}, not {Wire.TaskId(task.Id)}.");
+    }
+
+    /// <summary>Words in Verification prose that mean a browser is going to be driven, whatever the spec calls it.</summary>
+    [GeneratedRegex(@"\b(browser|click|playwright|screenshot)", RegexOptions.IgnoreCase)]
+    private static partial Regex BrowserWork();
+
+    /// <summary>
+    /// A spec is frozen only when it says how it will be verified. No Verification section is a validator session
+    /// spent working out what to check; Verification prose that drives a browser without declaring the need is the
+    /// historical "needs a live browser" spec — eight sessions ended blocked on it. Both are refused here, once, at
+    /// the moment the spec is attached, with the line that says so quoted back. Specs attached before this existed
+    /// are not re-read.
+    /// </summary>
+    internal static void RequireVerifiable(string relative, string content)
+    {
+        var verification = Validations.ParseVerification(content);
+        if (!verification.HasSection)
+            throw Fail.Rule("spec_unverifiable", $"'{relative}' has no '## Verification' section. Say how the work is checked: " +
+                "fenced command blocks for what a script can run, and a 'needs:' line for anything that takes more than a shell.");
+        if (verification.Needs.Any(need => need.Equals("browser", StringComparison.OrdinalIgnoreCase) || need.Equals("headless-browser", StringComparison.OrdinalIgnoreCase)))
+            return;
+        if (verification.Prose.FirstOrDefault(line => BrowserWork().IsMatch(line)) is { } line)
+            throw Fail.Rule("spec_unverifiable", $"'{relative}' verifies through a browser but does not declare it: \"{line}\". " +
+                "Add 'needs: headless-browser' (unattended, with a probe path) or 'needs: browser' (a human validator).");
     }
 
     /// <summary>
