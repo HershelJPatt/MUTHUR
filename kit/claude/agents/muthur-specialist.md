@@ -26,4 +26,9 @@ redispatch via `muthur worker run`. Do not call EnterWorktree or write through a
 repair assignment. Do not copy uncommitted output by hand between trees. The worker launcher creates a
 fresh worktree and accepts a new output branch via `--branch`; neither mode adopts an already-prepared
 worktree. Keep all base/SHA/clean-tree and history recovery guards above. The orchestrator integrates
-your committed branch output; you never do.
+your committed branch output; you never do. Your worktree was allocated by the harness, so the launcher
+verified nothing: the recovery procedure below is your step 1, every time.
+
+---
+
+{{core:implementer-recovery.md}}

@@ -142,8 +142,8 @@ public sealed class KitInstallTests : IDisposable
     [Theory]
     [InlineData("claude", ".claude/agents/muthur-implementer.md")]
     [InlineData("claude", ".claude/agents/muthur-specialist.md")]
-    [InlineData("codex", ".muthur/procedures/implementer.md")]
-    [InlineData("generic", ".muthur/procedures/implementer.md")]
+    [InlineData("codex", ".muthur/procedures/implementer-recovery.md")]
+    [InlineData("generic", ".muthur/procedures/implementer-recovery.md")]
     public async Task Every_harness_says_why_the_implementers_base_check_exists(string harness, string procedure)
     {
         var repo = NewRepository();
@@ -179,11 +179,30 @@ public sealed class KitInstallTests : IDisposable
             $"{procedure} no longer says the worktree is not cut from the branch the orchestrator is standing on.");
     }
 
+    /// <summary>
+    /// The short contract a launched worker is handed points at the recovery procedure for the case the launcher
+    /// did not verify, and the procedure is installed beside it, so a harness-allocated worktree still gets the full check.
+    /// </summary>
+    [Theory]
+    [InlineData("codex")]
+    [InlineData("generic")]
+    public async Task The_installed_contract_names_the_recovery_procedure_installed_beside_it(string harness)
+    {
+        var repo = NewRepository();
+
+        Assert.Equal(ExitCodes.Ok, await Invoke("kit", "install", "--harness", harness, "--repo", repo));
+
+        var contract = File.ReadAllText(Path.Combine(repo, ".muthur/procedures/implementer.md"));
+        Assert.Contains("follow `implementer-recovery.md` in full", contract, StringComparison.Ordinal);
+        Assert.Contains("Verified by the launcher", contract, StringComparison.Ordinal);
+        Assert.True(File.Exists(Path.Combine(repo, ".muthur/procedures/implementer-recovery.md")));
+    }
+
     [Theory]
     [InlineData("claude", ".claude/agents/muthur-implementer.md")]
     [InlineData("claude", ".claude/agents/muthur-specialist.md")]
-    [InlineData("codex", ".muthur/procedures/implementer.md")]
-    [InlineData("generic", ".muthur/procedures/implementer.md")]
+    [InlineData("codex", ".muthur/procedures/implementer-recovery.md")]
+    [InlineData("generic", ".muthur/procedures/implementer-recovery.md")]
     public async Task Installed_implementers_verify_dispatch_before_reconciling_and_reading_the_spec(string harness, string procedure)
     {
         var repo = NewRepository();
@@ -243,8 +262,8 @@ public sealed class KitInstallTests : IDisposable
         var text = File.ReadAllText(Path.Combine(repo, ".claude/skills/muthur-orchestrate/SKILL.md"));
         Assert.Contains("MUTHUR does not select the native Agent worktree start point", text, StringComparison.Ordinal);
         Assert.Contains("muthur worker run --tier implementer --spec specs/T-n.md --unit \"<unit>\" --task T-n --base task/T-n-<slug>", text, StringComparison.Ordinal);
-        Assert.Contains("--note \"Base branch task/T-n-<slug>; dispatch SHA <full-commit-sha>; default branch main.\"", text, StringComparison.Ordinal);
-        Assert.Contains("current WorkerPrompt does not automatically supply them", text, StringComparison.Ordinal);
+        Assert.Contains("verifies the base, dispatch SHA and spec blob itself, and writes them", text, StringComparison.Ordinal);
+        Assert.DoesNotContain("current WorkerPrompt does not automatically supply them", text, StringComparison.Ordinal);
         Assert.Contains("It does not repair arbitrary dirty or divergent existing worktrees", text, StringComparison.Ordinal);
         Assert.Contains("named local base branch, full commit SHA at dispatch, named default branch", text, StringComparison.Ordinal);
         Assert.Contains("A moved base requires `STATUS: blocked` and an updated frozen redispatch", text, StringComparison.Ordinal);

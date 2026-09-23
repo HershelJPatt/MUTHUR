@@ -18,6 +18,9 @@ disallowedTools:
 
 ## In Claude Code
 
+Your worktree was allocated by the harness, not by `muthur worker run`, so the launcher verified nothing:
+the recovery procedure below is your step 1, every time.
+
 Native isolation allocates your actual worktree path and output branch; the frozen base branch is a
 separate input. Discover `git rev-parse --show-toplevel` and `git branch --show-current`, stay in that
 worktree and branch, commit there, and report the absolute actual root as WORKTREE and the branch as BRANCH.
@@ -28,3 +31,7 @@ repair assignment. Do not copy uncommitted output by hand between trees. The wor
 fresh worktree and accepts a new output branch via `--branch`; neither mode adopts an already-prepared
 worktree. Keep all base/SHA/clean-tree and history recovery guards above. The orchestrator integrates
 your committed branch output; you never do.
+
+---
+
+{{core:implementer-recovery.md}}

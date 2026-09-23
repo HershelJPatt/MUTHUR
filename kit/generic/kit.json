@@ -18,6 +18,10 @@
       "to": ".muthur/procedures/implementer.md"
     },
     {
+      "from": "../core/implementer-recovery.md",
+      "to": ".muthur/procedures/implementer-recovery.md"
+    },
+    {
       "from": "../core/specialist.md",
       "to": ".muthur/procedures/specialist.md"
     },

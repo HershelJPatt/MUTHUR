@@ -25,8 +25,8 @@ In Claude Code the orchestrate reference is `reference.md` in this skill's direc
   `muthur worker run --tier implementer --spec specs/T-n.md --unit "<unit>" --task T-n --base task/T-n-<slug> --branch task/T-n-<unit-slug> --note "Base branch task/T-n-<slug>; dispatch SHA <full-commit-sha>; default branch main."`
   Replace placeholders and `main` with actual assignment values. The frozen base branch is distinct from
   the output branch. The output branch must not already exist; do not pre-create its worktree.
-  The launcher creates a fresh worktree and reports its actual path and branch. Include all three base
-  inputs in `--note`: the current WorkerPrompt does not automatically supply them. Use `--tier mastermind` for
+  The launcher creates a fresh worktree, verifies the base, dispatch SHA and spec blob itself, and writes them
+  into the worker's assignment, so `--note` is for what only you know. Use `--tier mastermind` for
   specialist work under the existing rules. This also supports cross-harness staffing when your account
   is near its limit or another vendor's review is useful. Run it as a background Bash call for long units.
 - Neither mode adopts an already-prepared worktree. Do not call EnterWorktree or write through a prepared
