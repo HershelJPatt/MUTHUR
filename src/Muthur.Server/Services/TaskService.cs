@@ -237,10 +237,11 @@ public sealed partial class TaskService(Ledger ledger, LeasePolicy leases, ITask
             if (string.IsNullOrWhiteSpace(request.Path) || Path.IsPathRooted(request.Path))
                 throw Fail.Rule("relative_path_required", "The spec path must be relative to the project repository.");
             var relative = request.Path.Replace('\\', '/');
-            var spec = await RequireSpecBelongsToTaskAsync(task, relative, request.Branch, ct);
+            var (spec, source) = await RequireSpecBelongsToTaskAsync(task, relative, request.Branch, ct);
             if (task.State is not (TaskState.InProgress or TaskState.Blocked))
                 throw Fail.Rule("not_in_progress", $"A spec can only be attached while the task is in progress; {Wire.TaskId(task.Id)} is '{task.State.ToWire()}'.");
             RequireVerifiable(relative, spec);
+            await RequireProducedAsync(task, relative, spec, source, ct);
             task.SpecPath = relative;
             task.SpecSha256 = Validations.Hash(spec);
             task.UpdatedAt = m.Now;
@@ -401,7 +402,7 @@ public sealed partial class TaskService(Ledger ledger, LeasePolicy leases, ITask
     /// A spec must be a file inside the project's checkout, and if its first heading names a task it must name
     /// this one: ledger ids get reused, so attaching another task's spec is how implementers build the wrong thing.
     /// </summary>
-    private async Task<string> RequireSpecBelongsToTaskAsync(WorkTask task, string relative, string? branch, CancellationToken ct)
+    private async Task<(string Content, string? Branch)> RequireSpecBelongsToTaskAsync(WorkTask task, string relative, string? branch, CancellationToken ct)
     {
         var root = Path.GetFullPath(task.Project!.RepoPath);
         var full = Path.GetFullPath(Path.Combine(root, relative));
@@ -413,6 +414,7 @@ public sealed partial class TaskService(Ledger ledger, LeasePolicy leases, ITask
         // A branch is a hint, never an assertion: one that does not have the file is passed over rather than
         // fatal, which is what makes it safe for the CLI to fill in from wherever the caller is standing.
         var tried = new List<string>();
+        string? source = null;
         var content = await FromBranchAsync(branch) ?? await FromBranchAsync(task.Branch) ?? FromWorkingTree();
         if (content is null)
             throw Fail.Rule("spec_missing", tried.Count > 0
@@ -423,7 +425,7 @@ public sealed partial class TaskService(Ledger ledger, LeasePolicy leases, ITask
         // The heading check keeps its own small window: its question is about the first non-blank line, and a
         // mistaken path to something enormous stays cheap to reject.
         RequireSpecHeading(task, relative, content);
-        return content;
+        return (content, source);
 
         async Task<string?> FromBranchAsync(string? candidate)
         {
@@ -434,6 +436,7 @@ public sealed partial class TaskService(Ledger ledger, LeasePolicy leases, ITask
             // failure this whole rule exists to prevent.
             if (await lander.ReadFileAsync(task.Project!, candidate, relative, ct) is not { } text) return null;
             if (text.Length > MaxSpec) throw TooLarge(relative);
+            source = candidate;
             return text;
         }
 
@@ -493,6 +496,39 @@ public sealed partial class TaskService(Ledger ledger, LeasePolicy leases, ITask
         if (verification.Prose.FirstOrDefault(line => BrowserWork().IsMatch(line)) is { } line)
             throw Fail.Rule("spec_unverifiable", $"'{relative}' verifies through a browser but does not declare it: \"{line}\". " +
                 "Add 'needs: headless-browser' (unattended, with a probe path) or 'needs: browser' (a human validator).");
+    }
+
+    /// <summary>
+    /// A verification command that reads a file no unit builds fails every time it runs, and a checks-only verdict
+    /// then bounces the task to a cold orchestrator (the 2026-09-23 pi run). A path a command names is fine when a
+    /// unit's <c>Files:</c> lists it, when it already exists where the units start from (the branch the spec was
+    /// read from, or the working tree, and the default branch), or when it is ignored, which makes it a build output.
+    /// A spec whose units list no files is not judged: there is nothing to compare against.
+    /// </summary>
+    private async Task RequireProducedAsync(WorkTask task, string relative, string content, string? branch, CancellationToken ct)
+    {
+        var verification = Validations.ParseVerification(content);
+        if (verification.Produced.Count == 0) return;
+        var project = task.Project!;
+        var root = Path.GetFullPath(project.RepoPath);
+        foreach (var (command, path) in verification.Paths)
+        {
+            if (verification.IsProduced(path)
+                || await lander.PathExistsAsync(project, project.DefaultBranch, path, ct)
+                || (branch is null ? InWorkingTree(path) : await lander.PathExistsAsync(project, branch, path, ct))
+                || await lander.IsIgnoredAsync(project, path, ct))
+                continue;
+            throw Fail.Rule("spec_verification_unproduced_file",
+                $"'{relative}' verifies with \"{command}\", which reads '{path}', but no unit's Files list it and it does not exist on " +
+                $"{(branch is null ? "the working tree" : $"branch '{branch}'")} or '{project.DefaultBranch}'. " +
+                "Add it to the Files of the unit that creates it, or check something the units do produce.");
+        }
+
+        bool InWorkingTree(string path)
+        {
+            var full = Path.GetFullPath(Path.Combine(root, path));
+            return RepoFile.IsInside(root, full) && Path.Exists(full);
+        }
     }
 
     /// <summary>

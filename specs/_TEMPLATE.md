@@ -42,7 +42,8 @@ refuses to dispatch at all. Evidence comes from `capability probe --task T-n`, n
 
 Exact commands for the whole task, and what passing looks like. Each fenced line is run as one command, through
 PowerShell on Windows and sh elsewhere, so write commands that work in both (tool invocations such as `git`,
-`dotnet` or `npm`, not shell syntax such as `test -f`, `[ ... ]` or `&&`):
+`dotnet` or `npm`, not shell syntax such as `test -f`, `[ ... ]` or `&&`). A file a command reads must be in some
+unit's **Files** or already in the repository; `task spec` refuses anything else:
 
 ```
 dotnet build

@@ -54,6 +54,13 @@ public interface ITaskLander
 
     /// <summary>The file's contents at the tip of <paramref name="branch"/>, or null when either is absent.</summary>
     Task<string?> ReadFileAsync(Project project, string branch, string path, CancellationToken ct = default);
+
+    /// <summary>Whether <paramref name="revision"/> has a file or directory at <paramref name="path"/>.</summary>
+    Task<bool> PathExistsAsync(Project project, string revision, string path, CancellationToken ct = default);
+
+    /// <summary>Whether the project's ignore rules cover <paramref name="path"/>: a build output, never something a unit commits.</summary>
+    Task<bool> IsIgnoredAsync(Project project, string path, CancellationToken ct = default);
+
     Task<LandResult> LandAsync(Project project, WorkTask task, string ownerName, CancellationToken ct = default);
 
     /// <summary>
@@ -125,6 +132,12 @@ public sealed partial class GitLander(IProcessRunner processes, IPullRequestOpen
         var result = await GitAsync(project.RepoPath, ct, "show", $"{branch}:{path.Replace('\\', '/')}");
         return result.Ok ? result.StdOut : null;
     }
+
+    public async Task<bool> PathExistsAsync(Project project, string revision, string path, CancellationToken ct = default) =>
+        (await GitAsync(project.RepoPath, ct, "cat-file", "-e", $"{revision}:{path.Replace('\\', '/')}")).Ok;
+
+    public async Task<bool> IsIgnoredAsync(Project project, string path, CancellationToken ct = default) =>
+        (await GitAsync(project.RepoPath, ct, "check-ignore", "-q", "--no-index", "--", path)).Ok;
 
     public async Task<LandResult> LandAsync(Project project, WorkTask task, string ownerName, CancellationToken ct = default)
     {

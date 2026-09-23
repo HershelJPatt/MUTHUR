@@ -117,4 +117,81 @@ public sealed class SpecVerificationTests
         Assert.Empty(parsed.Needs);
         Assert.False(parsed.RequiresJudgment);
     }
+
+    [Theory]
+    [InlineData("git grep -q -e '^T-2$' HEAD -- T-2.txt", new[] { "T-2.txt" })]
+    [InlineData("git show HEAD:docs/notes.md", new[] { "docs/notes.md" })]
+    [InlineData(@"pwsh ./scripts/check.ps1 -Path .\src\App.cs", new[] { "scripts/check.ps1", "src/App.cs" })]
+    [InlineData("./scripts/smoke.sh fixtures/input.json | Select-String 'ok'", new[] { "fixtures/input.json" })]
+    [InlineData("dotnet build", new string[0])]
+    [InlineData("muthur.exe --version", new string[0])]
+    [InlineData("dotnet test tests/Muthur.Server.Tests --filter FullyQualifiedName~Receipts", new string[0])]
+    [InlineData("dotnet test --filter Muthur.Server.Tests.Receipts -o out/results.trx", new string[0])]
+    [InlineData("dotnet test > test.log", new string[0])]
+    [InlineData("git worktree add ../scratch -b task/T-1-work", new string[0])]
+    [InlineData("muthur log --limit 20   # conductor.staffing for T-1", new string[0])]
+    [InlineData("$stderr = Join-Path $scratch 'stderr.txt'", new string[0])]
+    [InlineData("git grep -q 'two words.txt' HEAD -- /etc/passwd ../outside.txt C:/abs/file.txt https://example.com/a.txt", new string[0])]
+    [InlineData("1..3 | ForEach-Object { git grep -q x HEAD -- T-1.txt; if ($LASTEXITCODE -ne 0) { throw 'failed' } }", new[] { "T-1.txt" })]
+    public void Command_paths_are_the_relative_file_arguments_not_commands_flags_or_outputs(string command, string[] expected)
+    {
+        Assert.Equal(expected, SpecVerification.CommandPaths(command));
+    }
+
+    private const string WithUnits = """
+        # T-2 — Write the marker
+
+        ## Context
+
+        - **Files:** `README.md` is context, not a unit's output.
+
+        ## Units of work
+
+        ### Unit A — marker
+        - **Files:** create `T-2.txt`; modify
+          `src/Muthur.Server/Services/TaskService.cs`
+        - **Does:** writes the marker.
+
+        ### Unit B — tests
+        - **Files:**
+          - `tests/Muthur.Server.Tests/`
+          - `ValidatorSessionLauncher.cs`
+        - **Acceptance:** `notes/unlisted.md` exists.
+
+        ## Verification
+
+        ```
+        git grep -q -e '^T-2$' HEAD -- T-2.txt
+        git grep -q x HEAD -- T-2-notes.md
+        ```
+        """;
+
+    [Fact]
+    public void Produced_files_are_what_the_units_list_under_files()
+    {
+        var parsed = SpecVerification.Parse(WithUnits);
+
+        Assert.Equal(["T-2.txt", "src/Muthur.Server/Services/TaskService.cs", "tests/Muthur.Server.Tests", "ValidatorSessionLauncher.cs"], parsed.Produced);
+        Assert.Equal([new VerificationPath("git grep -q -e '^T-2$' HEAD -- T-2.txt", "T-2.txt"), new VerificationPath("git grep -q x HEAD -- T-2-notes.md", "T-2-notes.md")], parsed.Paths);
+        Assert.True(parsed.IsProduced("T-2.txt"));
+        Assert.True(parsed.IsProduced("tests/Muthur.Server.Tests/SpecGuardTests.cs"));
+        Assert.True(parsed.IsProduced("src/Muthur.Server/Services/ValidatorSessionLauncher.cs"));
+        Assert.False(parsed.IsProduced("T-2-notes.md"));
+        Assert.False(parsed.IsProduced("README.md"));
+        Assert.False(parsed.IsProduced("notes/unlisted.md"));
+    }
+
+    [Fact]
+    public void Without_unit_headings_a_files_line_anywhere_counts()
+    {
+        var parsed = SpecVerification.Parse("# T-1\n\nFiles: T-1.txt, docs/T-1.md.\n\n## Verification\n\n```\ndotnet build\n```\n");
+
+        Assert.Equal(["T-1.txt", "docs/T-1.md"], parsed.Produced);
+    }
+
+    [Fact]
+    public void A_spec_that_lists_no_files_produces_nothing()
+    {
+        Assert.Empty(SpecVerification.Parse(CommandsOnly).Produced);
+    }
 }

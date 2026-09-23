@@ -534,4 +534,55 @@ public sealed class SpecGuardTests : IDisposable
 
         Assert.Contains("needs: browser", task.AttendedReason);
     }
+
+    /// <summary>A spec with one unit that lists <paramref name="files"/> and one verification line.</summary>
+    private static string UnitSpec(string files, string check) =>
+        $"# T-1 — Write the marker\n\n## Units of work\n\n### Unit A — marker\n- **Files:** {files}\n- **Does:** writes it.\n\n" +
+        $"## Verification\n\n```\ndotnet build\n{check}\n```\n";
+
+    /// <summary>
+    /// The 2026-09-23 pi run: a Verification line read a file the unit was never told to make, the checks-only
+    /// validator failed it every time, and the task bounced to a cold orchestrator. Now it is refused when set.
+    /// </summary>
+    [Fact]
+    public async Task A_verification_line_that_reads_a_file_no_unit_produces_is_refused_with_the_line_and_path_quoted()
+    {
+        var (owner, id) = await ClaimedTaskAsync();
+        const string check = "git grep -q -e '^T-1$' HEAD -- notes/T-1-summary.md";
+        _repo.Write("specs/T-1-marker.md", UnitSpec("create `T-1.txt`", check));
+
+        var error = await RefusedAsync(owner, id, "specs/T-1-marker.md");
+
+        Assert.Equal("spec_verification_unproduced_file", error.Code);
+        Assert.Contains($"\"{check}\"", error.Message);
+        Assert.Contains("'notes/T-1-summary.md'", error.Message);
+        Assert.Null((await owner.GetTaskAsync(id)).Task.SpecPath);
+    }
+
+    [Fact]
+    public async Task A_verification_line_that_reads_a_file_a_unit_produces_is_accepted()
+    {
+        var (owner, id) = await ClaimedTaskAsync();
+        _repo.Write("specs/T-1-marker.md", UnitSpec("create `T-1.txt`", "git grep -q -e '^T-1$' HEAD -- T-1.txt"));
+
+        var task = await (await owner.PostActionAsync(id, "spec", new SetSpecRequest("specs/T-1-marker.md"))).ReadTaskAsync();
+
+        Assert.Equal("specs/T-1-marker.md", task.SpecPath);
+    }
+
+    /// <summary>A check may run what is already there, and that is read where the units start: the spec's own branch.</summary>
+    [Fact]
+    public async Task A_verification_line_that_reads_a_file_already_in_the_repository_is_accepted()
+    {
+        var (owner, id) = await ClaimedTaskAsync();
+        _repo.BranchWithFile("task/T-1-marker", "scripts/check-marker.ps1", "exit 0\n");
+        _repo.Git("checkout", "-q", "task/T-1-marker");
+        _repo.Write("specs/T-1-marker.md", UnitSpec("create `T-1.txt`", "pwsh -File scripts/check-marker.ps1 T-1.txt"));
+        _repo.Commit("the spec, beside the script it runs");
+        _repo.Git("checkout", "-q", "main");
+
+        var task = await (await owner.PostActionAsync(id, "spec", new SetSpecRequest("specs/T-1-marker.md", "task/T-1-marker"))).ReadTaskAsync();
+
+        Assert.Equal("specs/T-1-marker.md", task.SpecPath);
+    }
 }
