@@ -1,5 +1,6 @@
 using System.Reflection;
 using Muthur.Contracts;
+using Muthur.Core;
 using Muthur.Server.Auth;
 using Muthur.Server.Infrastructure;
 using Muthur.Server.Services;
@@ -30,7 +31,16 @@ public static class SystemEndpoints
 
         // Also unauthenticated: receipts names accounts and task titles, and /harness/tiers and /tasks already
         // serve both without a token.
-        app.MapGet(Routes.Receipts, (int? hours, ReceiptsService receipts, CancellationToken ct) => receipts.ReadAsync(hours ?? 24, ct));
+        app.MapGet(Routes.Receipts, (int? hours, string? task, ReceiptsService receipts, CancellationToken ct) =>
+        {
+            int? taskId = null;
+            if (task is { Length: > 0 })
+            {
+                if (!Wire.TryParseTaskId(task, out var id)) throw Fail.Rule("invalid_task_id", $"'{task}' is not a task id like T-12.");
+                taskId = id;
+            }
+            return receipts.ReadAsync(hours ?? 24, taskId, ct);
+        });
 
         app.MapPost(Routes.Shutdown, (IHostApplicationLifetime lifetime) =>
         {

@@ -26,6 +26,24 @@
             <span class="stat"><b>@_report.ConductorSessions</b> conductor</span>
             <span class="stat"><b>@_report.WorkerRuns</b> worker runs</span>
             <span class="stat"><b>@Duration(_report.WorkerSeconds)</b> worker time</span>
+            @* The dashes are literal markup rather than an expression's value, which the renderer would encode. *@
+            @if (_report.CostUsd is { } spent)
+            {
+                <span class="stat stat-cost"><b>@Usd(spent)</b> spent</span>
+            }
+            else
+            {
+                <span class="stat stat-cost"><b>—</b> spent</span>
+            }
+            <span class="stat"><b>@_report.CostReportedRuns</b> of @Priced priced</span>
+            @if (_report.Tokens is { } counted)
+            {
+                <span class="stat"><b>@Tokens(counted)</b> tokens</span>
+            }
+            else
+            {
+                <span class="stat"><b>—</b> tokens</span>
+            }
         </div>
 
         @if (Nothing)
@@ -73,6 +91,14 @@
                     }
                     <span class="pill">@task.State.ToWire()</span>
                     <span class="role-holder">@Spend(task)</span>
+                    @if (task.CostUsd is { } toLand)
+                    {
+                        <span class="receipt-cost">@Usd(toLand) to land</span>
+                    }
+                    else
+                    {
+                        <span class="receipt-none">—</span>
+                    }
                 </div>
             }
         }
@@ -90,12 +116,59 @@
             }
         }
 
+        @if (ByHarness.Count > 0)
+        {
+            <div class="section-label">by harness</div>
+            @foreach (var harness in ByHarness)
+            {
+                <div class="role-row">
+                    <span class="receipt-title">@harness.Harness/@(harness.Model.Length > 0 ? harness.Model : "default")</span>
+                    <span class="receipt-tokens">@(harness.Tokens is { } used ? Tokens(used) + " tokens" : "no tokens reported")</span>
+                    <span class="role-holder">@harness.Sessions @(harness.Sessions == 1 ? "session" : "sessions") · @harness.WorkerRuns @(harness.WorkerRuns == 1 ? "run" : "runs") · @Duration(harness.Seconds)</span>
+                    @if (harness.CostUsd is { } cost)
+                    {
+                        <span class="receipt-cost">@Usd(cost)</span>
+                    }
+                    else
+                    {
+                        <span class="receipt-none">—</span>
+                    }
+                </div>
+            }
+        }
+
+        @if (SessionRuns.Count > 0)
+        {
+            <div class="section-label">conductor sessions</div>
+            @foreach (var session in SessionRuns)
+            {
+                <div class="role-row">
+                    <span class="@(session.FailureKind is null ? "tag tag-held" : "tag tag-open")">@(session.FailureKind ?? "ok")</span>
+                    @if (session.Task is { Length: > 0 } id)
+                    {
+                        <a class="receipt-task" href="/tasks/@id">@id</a>
+                    }
+                    <span class="receipt-title">@session.Harness/@(session.Model.Length > 0 ? session.Model : "default") · @session.Role</span>
+                    <span class="receipt-tokens">@(TokensOf(session.InputTokens, session.OutputTokens, session.TotalTokens) is { } used ? Tokens(used) + " tokens" : "")</span>
+                    <span class="role-holder">@Duration(session.Seconds)</span>
+                    @if (session.CostUsd is { } cost)
+                    {
+                        <span class="receipt-cost">@Usd(cost)</span>
+                    }
+                    else
+                    {
+                        <span class="receipt-none">—</span>
+                    }
+                </div>
+            }
+        }
+
         @if (_report.Runs.Count > 0)
         {
             <div class="section-label">worker runs</div>
-            @* The founder settled this: cost is exact on the run that reported it, so it goes there and is never
-               totalled. What a total would silently drop is said out loud instead. *@
-            <div class="section-note">conductor validator sessions report no cost</div>
+            @* The total above is only as complete as the rows that reported a cost, and the rows that report
+               none are not a random sample. So the coverage is said out loud beside every list of rows. *@
+            <div class="section-note">@Coverage</div>
             @foreach (var run in _report.Runs)
             {
                 <div class="role-row">
@@ -175,11 +248,36 @@
 
     private bool Nothing =>
         _report.ByAccount.Count == 0 && _report.Tasks.Count == 0 && _report.StateTime.Count == 0
-        && _report.Accounts.Count == 0 && _report.Runs.Count == 0;
+        && _report.Accounts.Count == 0 && _report.Runs.Count == 0 && SessionRuns.Count == 0;
+
+    // Absent on a report an older hub wrote; an empty list reads the same as none.
+    private IReadOnlyList<SessionRunDto> SessionRuns => _report.SessionRuns ?? [];
+    private IReadOnlyList<HarnessReceiptDto> ByHarness => _report.ByHarness ?? [];
+
+    /// <summary>Every row the total could have counted: the priced ones and the ones that reported nothing.</summary>
+    private int Priced => _report.CostReportedRuns + _report.CostUnreportedRuns;
+
+    /// <summary>
+    /// How much of the window the total is made of, in rows. A founder reading "$4.10" needs the "3 of 7" beside
+    /// it before the number means anything: the four unpriced rows are not a random sample.
+    /// </summary>
+    private string Coverage =>
+        $"{_report.CostReportedRuns} of {Priced} {(Priced == 1 ? "row" : "rows")} priced; " +
+        $"{_report.CostUnreportedRuns} reported no cost and {(_report.CostUnreportedRuns == 1 ? "is" : "are")} not in the total";
 
     private static string Spend(TaskReceiptDto task) =>
         $"{task.ConductorSessions} staffed · {task.WorkerRuns} runs · {task.ValidationFailures} failed · " +
-        $"{Duration(task.ValidatingSeconds)} validating · {Duration(task.InProgressSeconds)} working";
+        $"{Duration(task.ValidatingSeconds)} validating · {Duration(task.InProgressSeconds)} working" +
+        (task.Tokens is { } tokens ? $" · {Tokens(tokens)} tokens" : "");
+
+    /// <summary>Input plus output when the harness split them, its one total when it did not: the service's rule, for one row.</summary>
+    private static int? TokensOf(int? input, int? output, int? total) => input is { } i && output is { } o ? i + o : total;
+
+    /// <summary>"850", "12.3k", "1.5M" — a token count a glance can hold.</summary>
+    private static string Tokens(int tokens) =>
+        tokens < 10_000 ? tokens.ToString(CultureInfo.InvariantCulture)
+        : tokens < 1_000_000 ? (tokens / 1000d).ToString("0.#", CultureInfo.InvariantCulture) + "k"
+        : (tokens / 1_000_000d).ToString("0.#", CultureInfo.InvariantCulture) + "M";
 
     /// <summary>"42s", "7m", "3.5h", "2.1d" — the board's vocabulary, with a fraction where an hour is too coarse.</summary>
     // Plain comparisons, not relational patterns: the Razor parser reads a pattern like "less-than 60 =>" inside @code as

@@ -1,6 +1,7 @@
 using System.Net;
 using System.Net.Http.Json;
 using System.Text.RegularExpressions;
+using Microsoft.Extensions.DependencyInjection;
 using Muthur.Contracts;
 
 namespace Muthur.Server.Tests;
@@ -8,7 +9,7 @@ namespace Muthur.Server.Tests;
 /// <summary>
 /// The Receipts page — what the organization spent itself on, rendered by the real dashboard. The numbers are
 /// Unit B's; what is tested here is that the page shows them the way the founder asked to read them, which for
-/// money means on the row that reported it, naming its harness, and totalled nowhere.
+/// money means on the row that reported it, naming its harness, and totalled only beside how much of the window the total covers.
 /// </summary>
 public sealed class DashboardReceiptsTests : IDisposable
 {
@@ -438,15 +439,28 @@ public sealed class DashboardReceiptsTests : IDisposable
         return since.Groups[1].Value;
     }
 
+    /// <summary>A finished conductor session on the ledger, in the shape the conductor records it.</summary>
+    private async Task SessionAsync(string taskId, string role, string harness, string model, int seconds, decimal? costUsd, int? inputTokens = null, int? outputTokens = null, string? failureKind = null)
+    {
+        Assert.True(Wire.TryParseTaskId(taskId, out var id));
+        await _hub.Services.GetRequiredService<Muthur.Server.Services.Ledger>().MutateAsync(Muthur.Server.Auth.Caller.Founder, m =>
+        {
+            m.Record("conductor.session_finished", id, new { role, harness, model, account = "work@example.com", seconds, costUsd, inputTokens, outputTokens, failureKind, started = true, runId = "abc123" });
+            return Task.CompletedTask;
+        });
+    }
+
     /// <summary>
-    /// Founder request #13, on the page. Cost sits on the worker-run row that reported it, that row names the
-    /// harness so a blank reads as claude rather than as a bug, the section says out loud what it is not counting,
-    /// and there is no total anywhere — which is what the second currency figure would be.
+    /// Money on the page. Each row shows what it reported and names its harness, so a blank reads as the harness
+    /// and not as a bug; the total is shown, and never without the pair that says how many rows it is made of;
+    /// and beside each task is the answer the page exists for — what it has cost to land so far.
     /// </summary>
     [Fact]
-    public async Task Money_is_on_the_run_that_reported_it_named_by_harness_and_totalled_nowhere()
+    public async Task Money_is_totalled_with_its_coverage_and_each_task_says_what_it_cost_to_land()
     {
-        await RunsAsync();
+        var task = await RunsAsync();
+        await SessionAsync(task, "#orchestrator", "claude", "opus", 34, 0.31m, 1200, 340);
+        await SessionAsync(task, "win-validator", "codex", "gpt", 2700, null, failureKind: "timeout");
 
         var page = await PageAsync();
 
@@ -459,20 +473,40 @@ public sealed class DashboardReceiptsTests : IDisposable
 
         // The one that reported a cost shows it; the one that reported none shows an absence, not a zero.
         Assert.Contains("class=\"receipt-cost\">$0.42<", page);
+        Assert.Contains("class=\"receipt-cost\">$0.31<", page);
         Assert.Contains("class=\"receipt-none\">—<", page);
         Assert.DoesNotContain("$0.00", page);
 
-        // Where a column would naturally total, the page says what is not counted instead.
-        Assert.Contains("conductor validator sessions report no cost", page);
+        // The total, with the coverage beside it in the stats and said in words above the rows.
+        Assert.Contains("class=\"stat stat-cost\"><b>$0.73</b> spent", page);
+        Assert.Contains("<b>2</b> of 4 priced", page);
+        Assert.Contains("2 of 4 rows priced; 2 reported no cost and are not in the total", page);
+        Assert.Contains("<b>1540</b> tokens", page);
 
-        // And nothing totals it. One run reported money, so exactly one currency figure may appear on the page;
-        // a second one is a sum, and a sum that omits every claude session and every conductor-started validator
-        // is a confident answer to a question nobody asked.
-        var figures = Regex.Matches(page, @"\$\d+\.\d\d");
-        Assert.True(figures.Count == 1,
-            $"the page may show cost on the run that reported it and nowhere else, but it shows: " +
-            $"{string.Join(", ", figures.Select(f => f.Value))}. Founder request #13 settled that costUsd is never " +
-            "totalled: the runs that report nothing are not a random sample, they are the largest category.");
+        // The task's own line: what it has cost to land so far, and the sessions behind it.
+        Assert.Contains("class=\"receipt-cost\">$0.73 to land<", page);
+        Assert.Contains("conductor sessions", page);
+        Assert.Contains("class=\"tag tag-open\">timeout<", page);
+        Assert.Contains("#orchestrator", page);
+        Assert.Contains("by harness", page);
+    }
+
+    /// <summary>A window in which nothing reported a cost has no total, not a total of zero: zero would say the work was free.</summary>
+    [Fact]
+    public async Task Nothing_priced_shows_no_total_rather_than_zero()
+    {
+        await ProjectAsync();
+        var owner = await RegisterAsync("runner", "claude", "opus", "deep", "founder@example.com");
+        var task = await owner.AddTaskAsync("Run the worker");
+        (await owner.PostAsJsonAsync(Routes.WorkerRuns, new WorkerRunReport(
+            task.Id, "deep", "claude", "opus", "founder@example.com", Branch(task.Id), "unit-b", false, 30, null))).EnsureSuccessStatusCode();
+
+        var page = await PageAsync();
+
+        Assert.Contains("class=\"stat stat-cost\"><b>—</b> spent", page);
+        Assert.Contains("<b>0</b> of 1 priced", page);
+        Assert.DoesNotContain("$0.00", page);
+        Assert.DoesNotContain("to land", page);
     }
 
     /// <summary>
@@ -495,7 +529,7 @@ public sealed class DashboardReceiptsTests : IDisposable
         var empty = await bare.CreateClient().GetStringAsync("/receipts");
         var invalid = await (await TypedAsync("7d")).Content.ReadAsStringAsync();
 
-        Assert.Contains("conductor validator sessions report no cost", full);   // the fixture really did render it all
+        Assert.Contains("rows priced;", full);   // the fixture really did render it all
         Assert.Contains("nothing spent in this window", empty);
         var classes = ClassesIn(full).Union(ClassesIn(empty), StringComparer.Ordinal)
             .Union(ClassesIn(invalid), StringComparer.Ordinal).Order(StringComparer.Ordinal).ToList();

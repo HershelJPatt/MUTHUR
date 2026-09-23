@@ -134,6 +134,8 @@ b { font-weight: 600; }
 .receipt-title { flex: 1; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .receipt-cost { color: var(--text); font-weight: 600; }
 .receipt-none { color: var(--faint); }
+.receipt-tokens { color: var(--dim); white-space: nowrap; }
+.stat-cost b { color: var(--accent); }
 
 /* ---------- stream ---------- */
 .filters { display: flex; gap: 4px; }
