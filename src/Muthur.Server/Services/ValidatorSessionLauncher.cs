@@ -196,9 +196,9 @@ public sealed class ValidatorSessionLauncher(
 
     /// <summary>
     /// Candidates for the tier, with the harness that built the task moved to the back rather than removed:
-    /// a different vendor checking the work is a preference, and validating beats not validating.
+    /// a different vendor checking the work is a preference, and validating beats not validating. The configured
+    /// tier first, mastermind when it is empty or limited out: a cheaper validator, never a missing one.
     /// </summary>
-    /// <summary>The configured tier first, mastermind when it is empty or limited out: a cheaper validator, never a missing one.</summary>
     internal async Task<(string Tier, IReadOnlyList<HarnessCandidate> Candidates)> CandidatesAsync(string? avoid, CancellationToken ct)
     {
         var wanted = string.IsNullOrWhiteSpace(options.ConductorValidatorTier) ? FallbackTier : options.ConductorValidatorTier.Trim().ToLowerInvariant();
