@@ -17,7 +17,12 @@ public sealed record WorkerRequest(
     IReadOnlyDictionary<string, string>? GitEnvironment = null,
     CapabilityContext? Capabilities = null,
     /// <summary>A cap on agentic turns for harnesses that have one. Null means the harness's own default.</summary>
-    int? MaxTurns = null);
+    int? MaxTurns = null,
+    /// <summary>
+    /// The session must write to the repository's own .git (commit a spec, add a worktree, merge a unit): true for
+    /// conductor-started orchestrators and validators, false for workers, whose launcher commits on their behalf.
+    /// </summary>
+    bool RepositoryWrites = false);
 
 /// <summary>A process to start: executable, arguments, and the prompt on stdin.</summary>
 /// <param name="Environment">Variables the adapter needs set on the process beyond what the launcher supplies, or null.</param>

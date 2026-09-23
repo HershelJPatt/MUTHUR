@@ -39,6 +39,15 @@ public sealed class HarnessTests : IDisposable
     }
 
     [Fact]
+    public void Only_a_local_model_session_that_must_write_git_leaves_the_sandbox()
+    {
+        static string SandboxOf(HarnessInvocation i) => i.Arguments[i.Arguments.ToList().IndexOf("--sandbox") + 1];
+        Assert.Equal("danger-full-access", SandboxOf(Harnesses.Find("codex-oss")!.Build(Request(model: "gemma4:26b") with { RepositoryWrites = true })));
+        Assert.Equal("workspace-write", SandboxOf(Harnesses.Find("codex-oss")!.Build(Request(model: "gemma4:26b"))));
+        Assert.Equal("workspace-write", SandboxOf(Harnesses.Find("codex")!.Build(Request() with { RepositoryWrites = true })));
+    }
+
+    [Fact]
     public void Claude_receives_a_turn_cap_only_when_the_catalog_sets_one()
     {
         var capped = new ClaudeAdapter().Build(Request() with { MaxTurns = 40 }).Arguments.ToList();

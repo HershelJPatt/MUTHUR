@@ -42,6 +42,15 @@ public sealed partial class CodexAdapter(string name, string? openSourceProvider
         "Your sandbox does not allow writing to .git, so `git add`/`git commit` will be refused. That is expected and is NOT a blocker: " +
         "leave your finished work uncommitted in the worktree and the launcher commits it for you. Report `COMMITS: pending (launcher)` and STATUS by the state of the work itself.";
 
+    /// <summary>
+    /// Workspace-write keeps .git read-only and relies on the model asking for escalation, which the hosted models
+    /// do and the guardian reviewer grants — 112 specs were attached that way on the live hub. A local model reports
+    /// the denial and stops, so a session that has to write .git runs unsandboxed on the local provider; the deny
+    /// list it does not have is the prompt's rules, and the catalog opts into that by naming a local mastermind.
+    /// </summary>
+    private string Sandbox(WorkerRequest request) =>
+        openSourceProvider is not null && request.RepositoryWrites ? "danger-full-access" : "workspace-write";
+
     private static string LastMessageFile(WorkerRequest request) => Path.Combine(request.ScratchDirectory, "codex-last-message.txt");
 
     public HarnessInvocation Build(WorkerRequest request)
@@ -50,7 +59,7 @@ public sealed partial class CodexAdapter(string name, string? openSourceProvider
         {
             "exec",
             "--cd", request.WorkingDirectory,
-            "--sandbox", "workspace-write",
+            "--sandbox", Sandbox(request),
             "--output-last-message", LastMessageFile(request),
             "--color", "never",
             "-c", "service_tier=\"default\"",
