@@ -24,8 +24,9 @@ public static class SystemCommands
         root.Subcommands.Add(doctor);
 
         var hours = new Option<int?>("--hours") { Description = "The window to report on, in hours (default 24, at most 720)." };
-        var receipts = new Command("receipts", "What this organization spent in a window: sessions by harness and account, which tasks consumed them, and where the time went.") { hours };
-        receipts.SetAction(async (parse, ct) => Output.Emit(parse, await HubClient.For(parse).GetAsync(Routes.Receipts + ReceiptsQuery(parse.GetValue(hours)), ct)));
+        var task = new Option<string?>("--task") { Description = "One task, e.g. T-12: only its sessions, worker runs and cost to land." };
+        var receipts = new Command("receipts", "What this organization spent in a window: sessions by harness and account, which tasks consumed them, what they cost, and where the time went.") { hours, task };
+        receipts.SetAction(async (parse, ct) => Output.Emit(parse, await HubClient.For(parse).GetAsync(Routes.Receipts + ReceiptsQuery(parse.GetValue(hours), parse.GetValue(task)), ct)));
         root.Subcommands.Add(receipts);
 
         var up = new Command("up", "Start the hub server in the background (no-op if already running).");
@@ -86,11 +87,18 @@ public static class SystemCommands
     internal static TimeSpan? DoctorTimeout(bool offline) => offline ? null : TimeSpan.FromSeconds(180);
 
     /// <summary>
-    /// The window as a query string. An absent --hours sends no parameter, so the hub's own default of 24 stands;
-    /// a number outside 1..720 is sent as typed rather than refused here, because the hub clamps it and a founder
-    /// asking for 100000 hours wants everything, not an argument error.
+    /// The window and the task as a query string. An absent --hours sends no parameter, so the hub's own default
+    /// of 24 stands; a number outside 1..720 is sent as typed rather than refused here, because the hub clamps it
+    /// and a founder asking for 100000 hours wants everything, not an argument error. The task is sent as typed
+    /// too: the hub owns what a task id looks like, and answers 422 for one it cannot read.
     /// </summary>
-    internal static string ReceiptsQuery(int? hours) => hours is { } h ? "?hours=" + h : "";
+    internal static string ReceiptsQuery(int? hours, string? task = null)
+    {
+        var query = new List<string>();
+        if (hours is { } h) query.Add("hours=" + h);
+        if (task is { Length: > 0 } t) query.Add("task=" + Uri.EscapeDataString(t));
+        return query.Count == 0 ? "" : "?" + string.Join('&', query);
+    }
 
     /// <summary>A report that reached us and contains a failed check is exit 1; a warning never is.</summary>
     internal static int DoctorExitCode(ApiResult result, int emitted)

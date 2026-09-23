@@ -1,6 +1,5 @@
 using System.Net;
 using System.Net.Http.Json;
-using System.Reflection;
 using System.Text.Json;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.DependencyInjection;
@@ -415,16 +414,34 @@ public sealed class ReceiptsTests : IDisposable
     }
 
     /// <summary>
-    /// Founder request #13, settled: <c>costUsd</c> goes on the row that reported it and nowhere else. The second
-    /// half of this test is the one that matters a year from now. A total would be incomplete in a biased
-    /// direction nobody can correct for — the runs that report no cost are not a random sample, they are every
-    /// claude session and every conductor-started validator, which is the heaviest spend the organization has.
-    /// A figure that omits the largest category is not a partial answer to "what did this cost"; it is a
-    /// confident answer to a different question. So: exactly one cost field in the whole receipts contract, and
-    /// the hand that adds a second one fails here rather than in review.
+    /// A finished conductor session written straight to the ledger, in the shape <c>SessionReceipts</c> records.
+    /// That the real conductor writes one per attempt is pinned in <see cref="SessionReceiptsTests"/>; this is
+    /// about what receipts make of the row, so the row is written directly.
+    /// </summary>
+    private async Task SessionAsync(string taskId, string role, string harness, string model, int seconds,
+        decimal? costUsd = null, int? inputTokens = null, int? outputTokens = null, int? cacheReadTokens = null, int? totalTokens = null,
+        string? failureKind = null, bool started = true)
+    {
+        Assert.True(Wire.TryParseTaskId(taskId, out var id));
+        await Ledger.MutateAsync(Caller.Founder, m =>
+        {
+            m.Record("conductor.session_finished", id, new
+            {
+                role, harness, model, account = "work@example.com", seconds, costUsd, inputTokens, outputTokens, cacheReadTokens, totalTokens,
+                failureKind, exitCode = failureKind is null ? 0 : (int?)null, started, runId = "abc123",
+            });
+            return Task.CompletedTask;
+        });
+    }
+
+    /// <summary>
+    /// Cost is summed, and the sum is never shown alone. The rows that report no cost are not a random sample —
+    /// on the live hub they were every claude session and every conductor-started validator — so a total without
+    /// its coverage is a confident answer to a different question. The pair beside it says how many rows are in
+    /// the sum and how many are not, and the same rule prices a task: what its rows reported, or nothing at all.
     /// </summary>
     [Fact]
-    public async Task Cost_is_on_the_run_that_reported_it_and_on_nothing_else()
+    public async Task Cost_is_summed_with_the_coverage_that_says_how_much_of_the_window_is_priced()
     {
         await _hub.AddProjectAsync(repoPath: _repo.Path);
         var owner = await RegisterAsync("owner", "claude", "opus");
@@ -432,35 +449,140 @@ public sealed class ReceiptsTests : IDisposable
 
         (await owner.PostAsJsonAsync(Routes.WorkerRuns, new WorkerRunReport(
             task.Id, "cheap", "codex", "gpt", "work@example.com", Branch(task.Id), "unit-a", true, 90, 0.42m,
-            InputTokens: 1789, OutputTokens: 346))).EnsureSuccessStatusCode();
+            InputTokens: 1789, OutputTokens: 346, CacheReadTokens: 500))).EnsureSuccessStatusCode();
         (await owner.PostAsJsonAsync(Routes.WorkerRuns, new WorkerRunReport(
             task.Id, "deep", "claude", "opus", "founder@example.com", Branch(task.Id), "unit-b", false, 30, null))).EnsureSuccessStatusCode();
+        // Two sessions and a launch that never started: an orchestrator that priced itself, a validator that hit
+        // the wall clock and reported only one token figure, and a quota refusal that cost four seconds.
+        await SessionAsync(task.Id, "#orchestrator", "claude", "opus", 34, 0.31m, 1200, 340, cacheReadTokens: 9000);
+        await SessionAsync(task.Id, "win-validator", "codex", "gpt", 2700, totalTokens: 66882, failureKind: "timeout");
+        await SessionAsync(task.Id, "win-validator", "codex", "gpt", 4, failureKind: "quota", started: false);
 
         var receipts = await ReceiptsAsync();
 
-        // Newest first, and the clock has not moved, so the two runs share an instant: only Seq tells them apart.
-        Assert.Equal(["claude/opus", "codex/gpt"], receipts.Runs.Select(r => r.Worker));
-        Assert.Null(receipts.Runs[0].CostUsd);   // reports none, and the row names the harness that reports none
-        Assert.False(receipts.Runs[0].Success);
-        Assert.Equal("unit-b", receipts.Runs[0].Unit);
-        Assert.Equal(0.42m, receipts.Runs[1].CostUsd);
-        Assert.Equal(90, receipts.Runs[1].Seconds);
-        Assert.Null(receipts.Runs[0].InputTokens);
-        Assert.Null(receipts.Runs[0].OutputTokens);
-        Assert.Equal(1789, receipts.Runs[1].InputTokens);
-        Assert.Equal(346, receipts.Runs[1].OutputTokens);
-        Assert.Equal("cheap", receipts.Runs[1].Tier);
-        Assert.Equal(task.Id, receipts.Runs[1].Task);
-        Assert.Equal(2, receipts.WorkerRuns);
-        Assert.Equal(120d, receipts.WorkerSeconds);
-        Assert.Equal(1, receipts.Tasks.Single().WorkerRunsFailed);
+        // The total, and the pair that says two of five rows are in it.
+        Assert.Equal(0.73m, receipts.CostUsd);
+        Assert.Equal(2, receipts.CostReportedRuns);
+        Assert.Equal(3, receipts.CostUnreportedRuns);
+        // Tokens: input plus output where a row split them, the one total where it did not; cache reads never.
+        Assert.Equal(1789 + 346 + 1200 + 340 + 66882, receipts.Tokens);
 
-        var costs = CostsIn(typeof(ReceiptsDto)).Order(StringComparer.Ordinal).ToList();
-        Assert.True(costs.Count == 1 && costs[0] == $"{nameof(WorkerRunDto)}.{nameof(WorkerRunDto.CostUsd)}",
-            "the receipts contract may carry cost on the worker-run row and nowhere else, but it carries it on: " +
-            $"{string.Join(", ", costs)}. Founder request #13 settled this: costUsd is exact on the run that " +
-            "reported it and biased anywhere it is aggregated, because the runs that report nothing are every " +
-            "claude session and every conductor-started validator.");
+        // Session rows, newest first, each naming its harness so a blank cost reads as the harness and not a bug.
+        var sessions = Assert.IsAssignableFrom<IReadOnlyList<SessionRunDto>>(receipts.SessionRuns);
+        Assert.Equal(["quota", "timeout", null], sessions.Select(s => s.FailureKind));
+        Assert.False(sessions[0].Started);
+        Assert.Equal(66882, sessions[1].TotalTokens);
+        Assert.Null(sessions[1].CostUsd);
+        Assert.Equal("#orchestrator", sessions[2].Role);
+        Assert.Equal(0.31m, sessions[2].CostUsd);
+        Assert.Equal(9000, sessions[2].CacheReadTokens);
+        Assert.Equal(task.Id, sessions[2].Task);
+        Assert.Equal(500, receipts.Runs.Single(r => r.Unit == "unit-a").CacheReadTokens);
+
+        // What the task cost to land, so far, by the same rule.
+        var receipt = receipts.Tasks.Single();
+        Assert.Equal(0.73m, receipt.CostUsd);
+        Assert.Equal(1789 + 1200, receipt.InputTokens);
+        Assert.Equal(346 + 340, receipt.OutputTokens);
+        Assert.Equal(1789 + 346 + 1200 + 340 + 66882, receipt.Tokens);
+        Assert.Equal(34 + 2700 + 4, receipt.SessionSeconds);
+        Assert.Equal(0.5, receipt.FailedWorkerMinutes);
+        Assert.Equal(0, receipt.BlockedWorkerRuns);
+        Assert.Equal(1, receipt.TimeoutSessions);
+        Assert.Equal(0, receipt.ConductorSessions);   // staffings, which this test never wrote: a session is not a staffing
+
+        // By harness: the busier one first, and each one priced only as far as its rows are.
+        var byHarness = Assert.IsAssignableFrom<IReadOnlyList<HarnessReceiptDto>>(receipts.ByHarness);
+        Assert.Equal(["codex/gpt", "claude/opus"], byHarness.Select(h => $"{h.Harness}/{h.Model}"));
+        Assert.Equal((2, 1, 0.42m, 1789 + 346 + 66882, 90 + 2700 + 4d), (byHarness[0].Sessions, byHarness[0].WorkerRuns, byHarness[0].CostUsd, byHarness[0].Tokens, byHarness[0].Seconds));
+        Assert.Equal((1, 1, 0.31m, 1200 + 340, 34 + 30d), (byHarness[1].Sessions, byHarness[1].WorkerRuns, byHarness[1].CostUsd, byHarness[1].Tokens, byHarness[1].Seconds));
+    }
+
+    /// <summary>
+    /// The nulls are load-bearing. A window in which nothing reported a cost has no total, not a total of zero:
+    /// zero would say the work was free. And a run that ended <c>blocked</c> is counted as the environment's
+    /// failure, which is what the plan's second-largest waste is made of.
+    /// </summary>
+    [Fact]
+    public async Task Nothing_reported_is_no_total_and_a_blocked_run_is_counted_as_one()
+    {
+        await _hub.AddProjectAsync(repoPath: _repo.Path);
+        var owner = await RegisterAsync("owner", "claude", "opus");
+        var task = await owner.AddTaskAsync("Build the feature");
+
+        (await owner.PostAsJsonAsync(Routes.WorkerRuns, new WorkerRunReport(
+            task.Id, "implementer", "codex", "gpt", "work@example.com", Branch(task.Id), "unit-a", false, 120, null,
+            Status: "blocked", FailureKind: "environment", TotalTokens: 5000))).EnsureSuccessStatusCode();
+        await SessionAsync(task.Id, "#orchestrator", "claude", "opus", 60);
+
+        var receipts = await ReceiptsAsync();
+
+        Assert.Null(receipts.CostUsd);
+        Assert.Equal(0, receipts.CostReportedRuns);
+        Assert.Equal(2, receipts.CostUnreportedRuns);
+        Assert.Equal(5000, receipts.Tokens);   // the one total, since the run split nothing
+
+        var receipt = receipts.Tasks.Single();
+        Assert.Null(receipt.CostUsd);
+        Assert.Null(receipt.InputTokens);
+        Assert.Equal(5000, receipt.Tokens);
+        Assert.Equal(1, receipt.BlockedWorkerRuns);
+        Assert.Equal(1, receipt.WorkerRunsFailed);
+        Assert.Equal(2d, receipt.FailedWorkerMinutes);
+        Assert.Equal(60d, receipt.SessionSeconds);
+        Assert.Null(Assert.IsAssignableFrom<IReadOnlyList<HarnessReceiptDto>>(receipts.ByHarness).Single(h => h.Harness == "claude").Tokens);
+    }
+
+    /// <summary>
+    /// "What did T-n cost to land" is one task's question, so the endpoint answers it for one task: its rows, its
+    /// receipt and totals over those alone. A task id the hub cannot read is a rule violation, the same as
+    /// everywhere else a task id is typed; a task that spent nothing is an empty answer, not an error.
+    /// </summary>
+    [Fact]
+    public async Task Asking_for_one_task_narrows_the_rows_and_the_totals_to_it()
+    {
+        await _hub.AddProjectAsync(repoPath: _repo.Path);
+        var owner = await RegisterAsync("owner", "claude", "opus");
+        var priced = await owner.AddTaskAsync("The priced one");
+        var other = await owner.AddTaskAsync("The other one");
+        (await owner.PostAsJsonAsync(Routes.WorkerRuns, new WorkerRunReport(
+            priced.Id, "cheap", "codex", "gpt", "work@example.com", Branch(priced.Id), "unit-a", true, 90, 0.42m))).EnsureSuccessStatusCode();
+        (await owner.PostAsJsonAsync(Routes.WorkerRuns, new WorkerRunReport(
+            other.Id, "cheap", "codex", "gpt", "work@example.com", Branch(other.Id), "unit-a", true, 60, 1.00m))).EnsureSuccessStatusCode();
+        await SessionAsync(priced.Id, "#orchestrator", "claude", "opus", 34, 0.31m);
+        await SessionAsync(other.Id, "#orchestrator", "claude", "opus", 20, 0.10m);
+
+        var everything = await ReceiptsAsync();
+        Assert.Equal(1.83m, everything.CostUsd);
+        Assert.Equal(2, everything.Tasks.Count);
+
+        var response = await _hub.CreateClient().GetAsync(Routes.Receipts + "?task=" + priced.Id);
+        response.EnsureSuccessStatusCode();
+        var one = (await response.Content.ReadFromJsonAsync(MuthurJsonContext.Default.ReceiptsDto))!;
+
+        Assert.Equal(priced.Id, one.Tasks.Single().Task);
+        Assert.Equal(0.73m, one.Tasks.Single().CostUsd);
+        Assert.Equal(0.73m, one.CostUsd);
+        Assert.Equal(2, one.CostReportedRuns);
+        Assert.Equal(0, one.CostUnreportedRuns);
+        Assert.Equal([priced.Id], one.Runs.Select(r => r.Task));
+        Assert.Equal([priced.Id], Assert.IsAssignableFrom<IReadOnlyList<SessionRunDto>>(one.SessionRuns).Select(s => s.Task));
+        // The registration is not the task's, so the filter leaves it out: sessions here are the task's, not the hub's.
+        Assert.Equal(0, one.Sessions);
+
+        var lower = await _hub.CreateClient().GetAsync(Routes.Receipts + "?task=" + priced.Id.ToLowerInvariant());
+        lower.EnsureSuccessStatusCode();
+        Assert.Equal(0.73m, (await lower.Content.ReadFromJsonAsync(MuthurJsonContext.Default.ReceiptsDto))!.CostUsd);
+
+        var unknown = await _hub.CreateClient().GetAsync(Routes.Receipts + "?task=T-999");
+        unknown.EnsureSuccessStatusCode();
+        var empty = (await unknown.Content.ReadFromJsonAsync(MuthurJsonContext.Default.ReceiptsDto))!;
+        Assert.Empty(empty.Tasks);
+        Assert.Null(empty.CostUsd);
+
+        var refused = await _hub.CreateClient().GetAsync(Routes.Receipts + "?task=eleven");
+        Assert.Equal(HttpStatusCode.UnprocessableEntity, refused.StatusCode);
+        Assert.Contains("invalid_task_id", await refused.Content.ReadAsStringAsync());
     }
 
     /// <summary>
@@ -514,28 +636,4 @@ public sealed class ReceiptsTests : IDisposable
             .Select(e => e.PayloadJson)
             .ToListAsync());
 
-    /// <summary>Every property of the receipts contract that carries money, named by the record it sits on.</summary>
-    private static IEnumerable<string> CostsIn(Type contract)
-    {
-        foreach (var property in contract.GetProperties())
-        {
-            if (ElementOf(property.PropertyType) is { } element)
-            {
-                foreach (var nested in CostsIn(element)) yield return nested;
-            }
-            else if (LooksLikeMoney(property))
-            {
-                yield return $"{contract.Name}.{property.Name}";
-            }
-        }
-    }
-
-    private static Type? ElementOf(Type type) =>
-        type.IsGenericType && type.GetGenericTypeDefinition() == typeof(IReadOnlyList<>) ? type.GetGenericArguments()[0] : null;
-
-    /// <summary>By type and by name, so neither a decimal called Spent nor a double called TotalCostUsd slips past.</summary>
-    private static bool LooksLikeMoney(PropertyInfo property) =>
-        property.PropertyType == typeof(decimal) || property.PropertyType == typeof(decimal?) ||
-        new[] { "cost", "usd", "price", "money", "spend", "spent", "dollar", "billed" }
-            .Any(word => property.Name.Contains(word, StringComparison.OrdinalIgnoreCase));
 }

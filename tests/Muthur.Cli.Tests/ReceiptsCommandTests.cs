@@ -23,9 +23,8 @@ public sealed class ReceiptsCommandTests
         var receipts = Receipts();
 
         Assert.False(string.IsNullOrWhiteSpace(receipts.Description));
-        // --hours and nothing else: the endpoint needs no token, so there is no option here implying otherwise.
-        var hours = Assert.Single(receipts.Options);
-        Assert.Equal("--hours", hours.Name);
+        // --hours and --task and nothing else: the endpoint needs no token, so there is no option here implying otherwise.
+        Assert.Equal(["--hours", "--task"], receipts.Options.Select(o => o.Name));
     }
 
     [Fact]
@@ -46,15 +45,34 @@ public sealed class ReceiptsCommandTests
     public void A_window_outside_the_bounds_is_sent_as_typed_for_the_hub_to_clamp(int hours, string expected) =>
         Assert.Equal(expected, SystemCommands.ReceiptsQuery(hours));
 
+    /// <summary>
+    /// One task, sent as typed: the hub owns what a task id looks like and answers 422 for one it cannot read,
+    /// which is the same division of labour as the window. Escaped, because the hand that types it is the
+    /// hand that pastes "T-12 " with a space or "T&12" with a typo.
+    /// </summary>
+    [Theory]
+    [InlineData(null, "T-12", "?task=T-12")]
+    [InlineData(6, "T-12", "?hours=6&task=T-12")]
+    [InlineData(6, "t-12", "?hours=6&task=t-12")]
+    [InlineData(null, "T&12", "?task=T%2612")]
+    [InlineData(null, "", "")]
+    public void A_task_is_the_second_parameter_and_escaped(int? hours, string task, string expected) =>
+        Assert.Equal(expected, SystemCommands.ReceiptsQuery(hours, task));
+
     [Theory]
     [InlineData("?hours=6", "receipts", "--hours", "6")]
+    [InlineData("?task=T-7", "receipts", "--task", "T-7")]
+    [InlineData("?hours=48&task=T-7", "receipts", "--task", "T-7", "--hours", "48")]
     [InlineData("", "receipts")]
-    public void The_parsed_option_is_the_one_the_query_string_is_built_from(string expected, params string[] args)
+    public void The_parsed_options_are_the_ones_the_query_string_is_built_from(string expected, params string[] args)
     {
         var root = new RootCommand("test");
         SystemCommands.AddTo(root);
-        var hours = (Option<int?>)root.Subcommands.Single(c => c.Name == "receipts").Options.Single(o => o.Name == "--hours");
+        var receipts = root.Subcommands.Single(c => c.Name == "receipts");
+        var hours = (Option<int?>)receipts.Options.Single(o => o.Name == "--hours");
+        var task = (Option<string?>)receipts.Options.Single(o => o.Name == "--task");
+        var parsed = root.Parse(args);
 
-        Assert.Equal(expected, SystemCommands.ReceiptsQuery(root.Parse(args).GetValue(hours)));
+        Assert.Equal(expected, SystemCommands.ReceiptsQuery(parsed.GetValue(hours), parsed.GetValue(task)));
     }
 }
