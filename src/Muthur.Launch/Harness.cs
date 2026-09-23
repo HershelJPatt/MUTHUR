@@ -64,6 +64,9 @@ public interface IHarnessAdapter
     /// </summary>
     string? GuardBlockMarker => null;
 
+    /// <summary>The shell the harness's shell tool runs, which decides the form the capability probe's steps take.</summary>
+    CapabilityShell ProbeShell => CapabilityShell.PowerShell;
+
     HarnessInvocation Build(WorkerRequest request);
 
     WorkerOutcome Interpret(WorkerRequest request, ProcessResult result);

@@ -73,7 +73,7 @@ public sealed class CapabilityProbe(IProcessRunner processes, IProbeAdmissionCli
             // A guard MUTHUR enforces itself is proved like the rest: one denied command, refused in the session's own stream.
             var marker = adapter.GuardBlockMarker is { } words && PiGuard.Denies(request.DeniedCommands, CapabilityFixture.DeniedProbeCommand) ? words : null;
             if (marker is not null) tested = [.. Tested, "deny-list"];
-            var steps = CapabilityFixture.Steps(fixture, nonce, denyList: marker is not null);
+            var steps = CapabilityFixture.Steps(fixture, nonce, denyList: marker is not null, shell: adapter.ProbeShell);
             File.WriteAllText(Path.Combine(fixture, "commands.json"), JsonSerializer.Serialize(steps, CapabilityJsonContext.Default.IReadOnlyListCapabilityProbeStep));
             await PrepareCommitAsync(fixture, nonce, lifetime.Token);
             var immutable = new[] { "fixture.proj", "commands.json", "before.txt", Path.Combine("commit", "nonce.txt") }
@@ -81,7 +81,7 @@ public sealed class CapabilityProbe(IProcessRunner processes, IProbeAdmissionCli
             var attempt = request with
             {
                 WorkingDirectory = worktree, ScratchDirectory = fixture,
-                GitEnvironment = SessionWorkspace.GitEnvironment(worktree), Prompt = CapabilityFixture.Prompt(steps),
+                GitEnvironment = SessionWorkspace.GitEnvironment(worktree), Prompt = CapabilityFixture.Prompt(steps, adapter.ProbeShell),
             };
             var actual = await new CapabilityEvaluator(processes, _clock, resolve).InspectAsync(adapter, attempt, lifetime.Token);
             if (actual.Identity != identity)

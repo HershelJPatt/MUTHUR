@@ -25,6 +25,9 @@ public sealed class PiAdapter : IHarnessAdapter
 
     public string? GuardBlockMarker => PiGuard.BlockMarker;
 
+    /// <summary>pi's bash tool is Git Bash on Windows and sh everywhere else; it has no PowerShell unless asked for one.</summary>
+    public CapabilityShell ProbeShell => CapabilityShell.Posix;
+
     /// <summary>The environment variable pi reads its agent directory (models, settings, extensions) from.</summary>
     public const string AgentDirectoryVariable = "PI_CODING_AGENT_DIR";
 

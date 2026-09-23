@@ -15,6 +15,11 @@ including `needs: browser`; this is incremental opt-in.
 rendered guard extension): the probe adds a `git push --dry-run` step and records `available` only when
 the guard's refusal appears in the session's own event stream, `unavailable` when the command ran.
 
+The probe's steps are written for the shell the harness's shell tool runs (`IHarnessAdapter.ProbeShell`):
+PowerShell for Claude and Codex, sh for pi, whose `bash` tool is Git Bash on Windows. The sh form runs the
+same native commands on the same fixture, with forward-slash paths and a `printf` receipt that takes `$?` on
+the line after the command; the evidence checked afterwards is identical.
+
 `muthur capability inspect --spec specs/T-n.md --base task/T-n --default-branch main --harness codex --launch-path worker-run`
 reads the committed spec and exact candidate identity without mutation or model sessions.
 There must be exactly one matching catalog candidate. Inspect requires the checkout's effective

@@ -126,6 +126,48 @@ public sealed class CapabilityProbeTests : IAsyncLifetime
         Assert.Contains(cached, o => o.Capability == "deny-list" && o.State == expected);
     }
 
+    [Theory]
+    [InlineData("execute", "available")]
+    [InlineData("denied-build", "unavailable")]
+    public async Task A_harness_whose_shell_is_sh_runs_every_row_in_its_bash_form(string mode, string expectedBuild)
+    {
+        _runner.Mode = mode;
+        _runner.Shell = CapabilityShell.Posix;
+        _adapter.ProbeShell = CapabilityShell.Posix;
+        var request = await Request();
+        var result = await new CapabilityProbe(_runner, new Admission(), resolve: Resolve, adapterFor: _ => _adapter)
+            .RunAsync("T-100", new("fixture", "fixture", "fixture"), request, TimeSpan.FromSeconds(90));
+
+        Assert.True(result.ProbeStarts == 1, $"{result.Code}: {result.Detail}\n{_runner.CommandDiagnostics}");
+        Assert.Equal(expectedBuild, Assert.Single(result.Observations, o => o.Capability == "build").State);
+        foreach (var row in new[] { "shell", "worktree-base", "test", "commit" }.Where(r => mode == "execute" || r != "test"))
+            Assert.True(Assert.Single(result.Observations, o => o.Capability == row).State == "available", $"{row}\n{_runner.CommandDiagnostics}");
+        var prompt = Assert.Single(_adapter.Requests).Prompt;
+        Assert.Contains("standalone bash shell-tool command", prompt);
+        Assert.DoesNotContain("LASTEXITCODE", prompt);
+        Assert.DoesNotContain("Set-Content", prompt);
+    }
+
+    [Fact]
+    public void Pi_rows_carry_the_bash_form_and_claude_and_codex_rows_are_unchanged()
+    {
+        Assert.Equal(CapabilityShell.Posix, Harnesses.Find("pi")!.ProbeShell);
+        foreach (var name in new[] { "claude", "codex", "codex-oss" })
+            Assert.Equal(CapabilityShell.PowerShell, Harnesses.Find(name)!.ProbeShell);
+        var fixture = Path.Combine(_root, "fix ture");
+        var powershell = CapabilityFixture.Steps(fixture, "n0nce", denyList: true);
+        Assert.Equal(powershell, CapabilityFixture.Steps(fixture, "n0nce", denyList: true, shell: CapabilityShell.PowerShell));
+        Assert.All(powershell, s => Assert.Contains("ConvertTo-Json", s.Receipt));
+        var posix = CapabilityFixture.Steps(fixture, "n0nce", denyList: true, shell: CapabilityShell.Posix);
+        Assert.Equal(powershell.Select(s => s.Key), posix.Select(s => s.Key));
+        Assert.All(posix, s => Assert.StartsWith("printf ", s.Receipt));
+        Assert.All(posix, s => Assert.DoesNotContain("LASTEXITCODE", s.Command + s.Receipt));
+        // Paths go to sh with forward slashes, which Git Bash and the native tools it starts both read.
+        Assert.All(posix, s => Assert.Contains($"'{fixture.Replace('\\', '/')}/{s.Key}.receipt.json'", s.Receipt));
+        Assert.DoesNotContain(posix, s => s.Command.Contains(fixture, StringComparison.Ordinal) && fixture.Contains('\\'));
+        Assert.Equal(CapabilityFixture.DeniedProbeCommand, Assert.Single(posix, s => s.Key == "deny-list").Command);
+    }
+
     [Fact]
     public async Task A_harness_that_enforces_its_own_deny_list_is_not_asked_to_run_a_denied_command()
     {
@@ -380,6 +422,17 @@ public sealed class CapabilityProbeTests : IAsyncLifetime
         { onRelease?.Invoke(); Releases++; return Task.CompletedTask; }
     }
 
+    /// <summary>The sh pi runs on this machine: Git Bash on Windows (never the WSL launcher in System32), bash elsewhere.</summary>
+    internal static string PosixShell()
+    {
+        if (!OperatingSystem.IsWindows()) return "bash";
+        var git = ExecutableResolver.Resolve("git") ?? throw new InvalidOperationException("Git for Windows is required.");
+        var root = Path.GetDirectoryName(Path.GetDirectoryName(git.FileName))!;
+        foreach (var candidate in new[] { Path.Combine(root, "bin", "bash.exe"), Path.Combine(Path.GetDirectoryName(root)!, "bin", "bash.exe") })
+            if (File.Exists(candidate)) return candidate;
+        throw new InvalidOperationException($"Git Bash not found beside {git.FileName}.");
+    }
+
     private sealed class FixtureAdapter : IHarnessAdapter
     {
         public string Name => "fixture";
@@ -389,6 +442,7 @@ public sealed class CapabilityProbeTests : IAsyncLifetime
         public List<WorkerRequest> Requests { get; } = [];
         public string? CapabilitySettings(WorkerRequest request) => VarySettings ? request.WorkingDirectory : "fixture-scope";
         public string? GuardBlockMarker { get; set; }
+        public CapabilityShell ProbeShell { get; set; }
         public HarnessInvocation Build(WorkerRequest request)
         { Requests.Add(request); return new("fixture", [], request.Prompt); }
         public WorkerOutcome Interpret(WorkerRequest request, ProcessResult result) => new(result.Ok, "simulated", false);
@@ -408,6 +462,8 @@ public sealed class CapabilityProbeTests : IAsyncLifetime
         public int SimulatedRemoveAttempts { get; private set; }
         public int RealRemoveAttempts { get; private set; }
         public string Mode { get; set; } = "execute";
+        /// <summary>The shell the simulated harness runs each step in, as the harness's own shell tool would.</summary>
+        public CapabilityShell Shell { get; set; }
         public int ModelInvocations { get; private set; }
         public string? ReservedEntry { get; set; }
         public string? ExternalDirectory { get; set; }
@@ -501,8 +557,11 @@ public sealed class CapabilityProbeTests : IAsyncLifetime
                         continue;
                     }
                     var command = Mode == "denied-build" && step.Key == "build" ? "$global:LASTEXITCODE = 126" : step.Command;
-                    var result = await RunRealAsync("pwsh", ["-NoProfile", "-Command", command + "\n" + step.Receipt], workingDirectory,
-                        timeout: timeout, ct: ct, scrubEnvironment: scrubEnvironment, environment: environment);
+                    var result = Shell == CapabilityShell.Posix
+                        ? await RunRealAsync(PosixShell(), ["-c", (Mode == "denied-build" && step.Key == "build" ? "(exit 126)" : step.Command) + "\n" + step.Receipt],
+                            workingDirectory, timeout: timeout, ct: ct, scrubEnvironment: scrubEnvironment, environment: environment)
+                        : await RunRealAsync("pwsh", ["-NoProfile", "-Command", command + "\n" + step.Receipt], workingDirectory,
+                            timeout: timeout, ct: ct, scrubEnvironment: scrubEnvironment, environment: environment);
                     Assert.True(result.Ok, result.Message);
                 }
                 if (Mode == "forged-nonce") File.WriteAllText(Path.Combine(fixture, "build.receipt.json"), "{\"nonce\":\"wrong\",\"exitCode\":0}");
