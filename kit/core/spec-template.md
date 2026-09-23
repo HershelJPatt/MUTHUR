@@ -40,11 +40,14 @@ in, with a standalone line that starts with the word capabilities, a colon, and 
 recorded evidence for the exact machine and harness, and a spec that names capabilities nobody has probed
 refuses to dispatch at all. Evidence comes from `capability probe --task T-n`, never from writing it down.
 
-Exact commands for the whole task, and what passing looks like:
+Exact commands for the whole task, and what passing looks like. Each fenced line is run as one command, through
+PowerShell on Windows and sh elsewhere, so write commands that work in both (tool invocations such as `git`,
+`dotnet` or `npm`, not shell syntax such as `test -f`, `[ ... ]` or `&&`):
 
 ```
 dotnet build
 dotnet test
+git grep -q -e '^expected$' HEAD -- path/to/file.txt
 ```
 
 Plus anything a validator should exercise end to end (the user-visible behavior, not the unit tests).
