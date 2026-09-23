@@ -10,7 +10,8 @@ namespace Muthur.Launch;
 /// 8,900 for the same one-word answer — and no sandbox at all, so the boundary a session has is the prompt's rules
 /// and the worktree it is started in. A local model (provider <c>ollama</c>, the default when the catalog model
 /// names no provider) runs from a scratch agent directory whose model catalog names only that model; a hosted
-/// provider keeps the user's own directory, where its credentials live.
+/// provider keeps the user's own directory, where its credentials live. The session's deny list is a
+/// <see cref="PiGuard"/> extension, loaded by path because <c>--no-extensions</c> turns off only discovered ones.
 /// </summary>
 public sealed class PiAdapter : IHarnessAdapter
 {
@@ -20,12 +21,28 @@ public sealed class PiAdapter : IHarnessAdapter
 
     public string? CapabilityExecutable => "pi";
 
+    public string? GuardBlockMarker => PiGuard.BlockMarker;
+
     /// <summary>The environment variable pi reads its agent directory (models, settings, extensions) from.</summary>
     public const string AgentDirectoryVariable = "PI_CODING_AGENT_DIR";
 
     /// <summary>The Ollama endpoint the scratch catalog points at; overridable the way Ollama's own clients are.</summary>
     public static string OllamaBaseUrl =>
         (Environment.GetEnvironmentVariable("OLLAMA_HOST") is { Length: > 0 } host ? (host.Contains("://") ? host : "http://" + host) : "http://localhost:11434").TrimEnd('/') + "/v1";
+
+    /// <summary>
+    /// A hosted provider reads the user's agent directory; a local one reads its own scratch directory instead. Both
+    /// read the project's <c>.pi/settings.json</c>. The guard is hashed in, so a changed deny list is a different
+    /// configuration.
+    /// </summary>
+    public string? CapabilitySettings(WorkerRequest request)
+    {
+        var project = ("project", Path.Combine(request.WorkingDirectory, ".pi", "settings.json"));
+        var inherited = Launch.CapabilitySettings.HashFiles(Split(request.Model).Provider == "ollama" ? [project] : [project,
+            ("user", Path.Combine(Environment.GetEnvironmentVariable(AgentDirectoryVariable) is { Length: > 0 } directory ? directory :
+                Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), ".pi", "agent"), "settings.json"))]);
+        return inherited is null ? null : CapabilityHash.Of(inherited + "\n" + PiGuard.Extension(request));
+    }
 
     private static string OutputFile(WorkerRequest request) => Path.Combine(request.ScratchDirectory, "pi-events.jsonl");
 
@@ -45,6 +62,10 @@ public sealed class PiAdapter : IHarnessAdapter
             "--no-extensions", "--no-skills", "--no-prompt-templates",
             "--provider", provider, "--model", $"{provider}/{id}",
         };
+        var guard = Path.Combine(request.ScratchDirectory, PiGuard.FileName);
+        File.WriteAllText(guard, PiGuard.Extension(request));
+        arguments.Add("-e");
+        arguments.Add(guard);
         // pi's levels are Codex's plus the ends of the scale; the catalog's word is passed as it is, and off means
         // the model's own default when nothing was asked for.
         arguments.Add("--thinking");

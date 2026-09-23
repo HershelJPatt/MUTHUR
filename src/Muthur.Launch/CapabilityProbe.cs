@@ -47,6 +47,7 @@ public sealed class CapabilityProbe(IProcessRunner processes, IProbeAdmissionCli
         var detail = CapabilityFixture.Limitation;
         var addAttempted = false;
         var processCleanupUncertain = false;
+        string[] tested = Tested;
         using var budget = new CancellationTokenSource(timeout, _clock);
         using var lifetime = CancellationTokenSource.CreateLinkedTokenSource(ct, budget.Token);
         try
@@ -69,7 +70,10 @@ public sealed class CapabilityProbe(IProcessRunner processes, IProbeAdmissionCli
             EnsureOwnedPath(worktree, fixture);
             Directory.CreateDirectory(fixture);
             File.WriteAllText(Path.Combine(fixture, "fixture.proj"), CapabilityFixture.Project(nonce));
-            var steps = CapabilityFixture.Steps(fixture, nonce);
+            // A guard MUTHUR enforces itself is proved like the rest: one denied command, refused in the session's own stream.
+            var marker = adapter.GuardBlockMarker is { } words && PiGuard.Denies(request.DeniedCommands, CapabilityFixture.DeniedProbeCommand) ? words : null;
+            if (marker is not null) tested = [.. Tested, "deny-list"];
+            var steps = CapabilityFixture.Steps(fixture, nonce, denyList: marker is not null);
             File.WriteAllText(Path.Combine(fixture, "commands.json"), JsonSerializer.Serialize(steps, CapabilityJsonContext.Default.IReadOnlyListCapabilityProbeStep));
             await PrepareCommitAsync(fixture, nonce, lifetime.Token);
             var immutable = new[] { "fixture.proj", "commands.json", "before.txt", Path.Combine("commit", "nonce.txt") }
@@ -91,11 +95,21 @@ public sealed class CapabilityProbe(IProcessRunner processes, IProbeAdmissionCli
                 invocation.Stdin, timeout, lifetime.Token, ["MUTHUR_AGENT", "MUTHUR_TOKEN"], attempt.GitEnvironment);
             var intact = immutable.All(pair => File.Exists(Path.Combine(fixture, pair.Key)) &&
                 new FileInfo(Path.Combine(fixture, pair.Key)).Length < 65_536 && CapabilityHash.Of(File.ReadAllText(Path.Combine(fixture, pair.Key))) == pair.Value);
-            foreach (var key in Tested)
+            foreach (var key in tested)
             {
                 var state = CapabilityStates.Unknown;
                 var exit = ReadReceipt(Path.Combine(fixture, key + ".receipt.json"), nonce);
                 if (result.ExitCode == 124) state = CapabilityStates.TemporarilyFailing;
+                else if (key == "deny-list")
+                {
+                    // The refusal in the stream is the evidence; a receipt the model wrote after it (126) does not undo it,
+                    // and any other receipt means the command ran.
+                    var refused = result.StdOut.Contains(marker!, StringComparison.Ordinal) &&
+                        result.StdOut.Contains(CapabilityFixture.DeniedProbeCommand, StringComparison.Ordinal);
+                    state = refused ? CapabilityStates.Available
+                        : exit is { } ran && ran != 126 ? CapabilityStates.Unavailable
+                        : !result.Ok ? CapabilityStates.TemporarilyFailing : CapabilityStates.Unknown;
+                }
                 else if (intact && exit is { } status)
                 {
                     state = status == 0 ? CapabilityStates.Available : CapabilityStates.Unavailable;
@@ -110,12 +124,12 @@ public sealed class CapabilityProbe(IProcessRunner processes, IProbeAdmissionCli
         catch (OperationCanceledException)
         {
             code = ct.IsCancellationRequested ? "capability_probe_cancelled" : "capability_probe_timeout";
-            if (identity is not null) observations = Tested.Select(k => Observation(identity, k, CapabilityStates.TemporarilyFailing, startedAt)).ToList();
+            if (identity is not null) observations = tested.Select(k => Observation(identity, k, CapabilityStates.TemporarilyFailing, startedAt)).ToList();
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or InvalidOperationException)
         {
             code = "capability_probe_transport_failed";
-            if (identity is not null) observations = Tested.Select(k => Observation(identity, k, CapabilityStates.TemporarilyFailing, startedAt)).ToList();
+            if (identity is not null) observations = tested.Select(k => Observation(identity, k, CapabilityStates.TemporarilyFailing, startedAt)).ToList();
         }
         finally
         {

@@ -11,6 +11,10 @@ Multiple lines union. Unknown keys and malformed lists refuse dispatch. Other ke
 These require independent evidence. Specs without declarations preserve existing routing,
 including `needs: browser`; this is incremental opt-in.
 
+`deny-list` is observed only for a harness whose deny list MUTHUR enforces itself (pi, through its
+rendered guard extension): the probe adds a `git push --dry-run` step and records `available` only when
+the guard's refusal appears in the session's own event stream, `unavailable` when the command ran.
+
 `muthur capability inspect --spec specs/T-n.md --base task/T-n --default-branch main --harness codex --launch-path worker-run`
 reads the committed spec and exact candidate identity without mutation or model sessions.
 There must be exactly one matching catalog candidate. Inspect requires the checkout's effective

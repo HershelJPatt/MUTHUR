@@ -24,7 +24,7 @@ public sealed record CapabilityInspection(CapabilityIdentity? Identity, IReadOnl
 
 public static class CapabilityRequirements
 {
-    private static readonly string[] Keys = ["shell", "build", "test", "worktree-base", "commit",
+    private static readonly string[] Keys = ["shell", "build", "test", "worktree-base", "commit", "deny-list",
         "headless-interaction", "connector-interaction", "native-agent-tools"];
 
     public static bool IsKey(string key) => Keys.Contains(key, StringComparer.Ordinal) ||
@@ -44,7 +44,7 @@ public static class CapabilityRequirements
             {
                 if (!IsKey(key))
                     throw new WorkerDispatchException("invalid_capabilities",
-                        $"Unknown or malformed capability '{key}'. Use comma-separated shell, build, test, worktree-base, commit, headless-interaction, connector-interaction, native-agent-tools or platform:<name>.");
+                        $"Unknown or malformed capability '{key}'. Use comma-separated shell, build, test, worktree-base, commit, deny-list, headless-interaction, connector-interaction, native-agent-tools or platform:<name>.");
                 requirements.Add(key);
             }
         }

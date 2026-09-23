@@ -109,6 +109,36 @@ public sealed class CapabilityProbeTests : IAsyncLifetime
     }
 
     [Theory]
+    [InlineData("guard-refuses", "available")]
+    [InlineData("execute", "unavailable")]
+    public async Task A_guarded_harness_proves_its_deny_list_by_the_refusal_in_its_stream(string mode, string expected)
+    {
+        _runner.Mode = mode;
+        _adapter.GuardBlockMarker = PiGuard.BlockMarker;
+        var request = await Request();
+        var result = await new CapabilityProbe(_runner, new Admission(), resolve: Resolve, adapterFor: _ => _adapter)
+            .RunAsync("T-100", new("fixture", "fixture", "fixture"), request, TimeSpan.FromSeconds(90));
+
+        Assert.True(result.ProbeStarts == 1, $"{result.Code}: {result.Detail}");
+        Assert.Equal(expected, Assert.Single(result.Observations, o => o.Capability == "deny-list").State);
+        Assert.Equal("available", Assert.Single(result.Observations, o => o.Capability == "build").State);
+        var cached = new CapabilityStore(request.Capabilities!.CacheDirectory).Read(result.Observations[0].Identity).Observations;
+        Assert.Contains(cached, o => o.Capability == "deny-list" && o.State == expected);
+    }
+
+    [Fact]
+    public async Task A_harness_that_enforces_its_own_deny_list_is_not_asked_to_run_a_denied_command()
+    {
+        var request = await Request();
+        var result = await new CapabilityProbe(_runner, new Admission(), resolve: Resolve, adapterFor: _ => _adapter)
+            .RunAsync("T-100", new("fixture", "fixture", "fixture"), request, TimeSpan.FromSeconds(90));
+
+        Assert.True(result.ProbeStarts == 1, $"{result.Code}: {result.Detail}");
+        Assert.DoesNotContain(result.Observations, o => o.Capability == "deny-list");
+        Assert.DoesNotContain(CapabilityFixture.DeniedProbeCommand, Assert.Single(_adapter.Requests).Prompt);
+    }
+
+    [Theory]
     [InlineData("init", 1)]
     [InlineData("init", 124)]
     [InlineData("commit", 1)]
@@ -358,6 +388,7 @@ public sealed class CapabilityProbeTests : IAsyncLifetime
         public bool VarySettings { get; set; }
         public List<WorkerRequest> Requests { get; } = [];
         public string? CapabilitySettings(WorkerRequest request) => VarySettings ? request.WorkingDirectory : "fixture-scope";
+        public string? GuardBlockMarker { get; set; }
         public HarnessInvocation Build(WorkerRequest request)
         { Requests.Add(request); return new("fixture", [], request.Prompt); }
         public WorkerOutcome Interpret(WorkerRequest request, ProcessResult result) => new(result.Ok, "simulated", false);
@@ -460,8 +491,15 @@ public sealed class CapabilityProbeTests : IAsyncLifetime
                 Assert.StartsWith("dotnet build ", Assert.Single(steps, s => s.Key == "build").Command);
                 Assert.StartsWith("dotnet test ", Assert.Single(steps, s => s.Key == "test").Command);
                 Assert.DoesNotContain(steps, s => s.Command.Contains("msbuild", StringComparison.OrdinalIgnoreCase));
+                var refusals = "";
                 foreach (var step in steps)
                 {
+                    if (step.Key == "deny-list" && Mode == "guard-refuses")
+                    {
+                        // What pi's stream carries for a blocked call: the reason, inside a JSON string.
+                        refusals += $$$"""{"type":"message_end","message":{"role":"toolResult","content":[{"type":"text","text":"muthur-guard: blocked \"{{{step.Command}}}\" matches the denied pattern \"git push*\"."}]}}""" + "\n";
+                        continue;
+                    }
                     var command = Mode == "denied-build" && step.Key == "build" ? "$global:LASTEXITCODE = 126" : step.Command;
                     var result = await RunRealAsync("pwsh", ["-NoProfile", "-Command", command + "\n" + step.Receipt], workingDirectory,
                         timeout: timeout, ct: ct, scrubEnvironment: scrubEnvironment, environment: environment);
@@ -469,7 +507,7 @@ public sealed class CapabilityProbeTests : IAsyncLifetime
                 }
                 if (Mode == "forged-nonce") File.WriteAllText(Path.Combine(fixture, "build.receipt.json"), "{\"nonce\":\"wrong\",\"exitCode\":0}");
                 if (Mode == "tampered-fixture") File.AppendAllText(Path.Combine(fixture, "fixture.proj"), "<!-- changed -->");
-                return new(0, "Simulated harness, real deterministic SDK fixture commands.", "");
+                return new(0, refusals + "Simulated harness, real deterministic SDK fixture commands.", "");
             }
             var run = await RunRealAsync(fileName, arguments, workingDirectory, stdin, timeout ?? TimeSpan.FromSeconds(10), ct, scrubEnvironment, environment);
             if (run.Ok && ReservedEntry is not null && arguments.Contains("worktree") && arguments.Contains("add"))

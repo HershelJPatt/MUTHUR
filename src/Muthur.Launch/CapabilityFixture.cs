@@ -25,18 +25,24 @@ public static class CapabilityFixture
         </Project>
         """;
 
-    public static IReadOnlyList<CapabilityProbeStep> Steps(string fixture, string nonce)
+    /// <summary>The command the deny-list step asks for: denied to every session, and harmless if a guard lets it through.</summary>
+    public const string DeniedProbeCommand = "git push --dry-run";
+
+    /// <param name="denyList">Add a step whose command the session's guard must refuse; its evidence is the refusal in the event stream.</param>
+    public static IReadOnlyList<CapabilityProbeStep> Steps(string fixture, string nonce, bool denyList = false)
     {
         static string Quote(string value) => "'" + value.Replace("'", "''") + "'";
         string File(string name) => Quote(Path.Combine(fixture, name));
         CapabilityProbeStep Step(string key, string command, string exit) => new(key, command,
             $"@{{ nonce = '{nonce}'; exitCode = {exit} }} | ConvertTo-Json -Compress | Set-Content -LiteralPath {File(key + ".receipt.json")}");
+        IReadOnlyList<CapabilityProbeStep> guard = denyList ? [Step("deny-list", DeniedProbeCommand, "$LASTEXITCODE")] : [];
         return [
             Step("shell", $"Set-Content -LiteralPath {File("shell.txt")} -Value '{nonce}'", "$(if ($?) { 0 } else { 1 })"),
             Step("worktree-base", $"git rev-parse HEAD > {File("head.txt")}", "$LASTEXITCODE"),
             Step("build", $"dotnet build {File("fixture.proj")} --no-restore", "$LASTEXITCODE"),
             Step("test", $"dotnet test {File("fixture.proj")} --no-restore", "$LASTEXITCODE"),
             Step("commit", $"git -C {File("commit")} add -- nonce.txt\nif ($LASTEXITCODE -eq 0) {{ git -C {File("commit")} -c core.hooksPath={File("no-hooks")} -c user.name=CapabilityFixture -c user.email=fixture@example.invalid -c commit.gpgsign=false commit --quiet -m 'capability fixture' }}", "$LASTEXITCODE"),
+            .. guard,
         ];
     }
 

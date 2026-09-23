@@ -45,6 +45,12 @@ public interface IHarnessAdapter
 
     string? CapabilitySettings(WorkerRequest request) => null;
 
+    /// <summary>
+    /// For a harness whose deny list MUTHUR enforces itself rather than the harness's own permissions: the words its
+    /// refusal puts in the event stream, which the capability probe looks for. Null when the harness enforces it.
+    /// </summary>
+    string? GuardBlockMarker => null;
+
     HarnessInvocation Build(WorkerRequest request);
 
     WorkerOutcome Interpret(WorkerRequest request, ProcessResult result);
