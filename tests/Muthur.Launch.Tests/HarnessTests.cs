@@ -32,6 +32,7 @@ public sealed class HarnessTests : IDisposable
         Assert.StartsWith(_scratch, home);
         var config = File.ReadAllText(Path.Combine(home, "config.toml"));
         Assert.Contains("hooks = false", config);
+        Assert.Contains("approval_policy = \"never\"", config);
         Assert.DoesNotContain("plugins", config);
 
         Assert.Null(Harnesses.Find("codex")!.Build(Request()).Environment);
