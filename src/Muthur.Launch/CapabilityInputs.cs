@@ -28,7 +28,7 @@ internal static class CapabilityInputs
     {
         async Task<string> Run(string executable, IReadOnlyList<string> args)
         {
-            var result = await runner.RunAsync(executable, args, request.WorkingDirectory, timeout: TimeSpan.FromSeconds(5), ct: ct,
+            var result = await runner.RunAsync(executable, args, request.WorkingDirectory, timeout: CapabilityBudget.Step, ct: ct,
                 scrubEnvironment: ["MUTHUR_AGENT", "MUTHUR_TOKEN"], environment: request.GitEnvironment);
             if (!result.Ok || result.StdOut.Length > 1_048_576) throw new IOException("Identity input unavailable.");
             return result.StdOut.TrimEnd('\r', '\n');

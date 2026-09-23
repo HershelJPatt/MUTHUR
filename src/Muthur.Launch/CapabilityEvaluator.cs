@@ -24,7 +24,7 @@ public sealed class CapabilityEvaluator(IProcessRunner processes, TimeProvider? 
             var executable = CapabilityExecutable.Resolve(executableName, resolve ?? ExecutableResolver.Resolve);
             if (executable is null) return Unknown("Harness executable cannot be resolved.");
             var version = await processes.RunAsync(executable.Value.FileName, [.. executable.Value.Prefix, "--version"],
-                request.WorkingDirectory, timeout: TimeSpan.FromSeconds(5), ct: ct,
+                request.WorkingDirectory, timeout: CapabilityBudget.Step, ct: ct,
                 scrubEnvironment: ["MUTHUR_AGENT", "MUTHUR_TOKEN"], environment: request.GitEnvironment);
             if (!version.Ok || string.IsNullOrWhiteSpace(version.StdOut) || version.StdOut.Length > 256)
                 return Unknown("Harness version discovery failed or exceeded the detail limit.");

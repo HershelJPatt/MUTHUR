@@ -88,7 +88,7 @@ public sealed class CapabilityProbeTests : IAsyncLifetime
             .RunAsync("T-100", new("fixture", "fixture", "fixture"), request, TimeSpan.FromSeconds(90));
         Assert.Equal(1, admission.Count);
         Assert.Equal(1, admission.Releases);
-        Assert.True(result.ProbeStarts == 1, $"{result.Code}: {result.Detail}");
+        Assert.True(result.ProbeStarts == 1, $"{result.Code}: {result.Detail}\n{_runner.CommandDiagnostics}");
         Assert.Equal(1, _runner.ModelInvocations);
         Assert.Equal(expectedBuild, Assert.Single(result.Observations, o => o.Capability == "build").State);
         Assert.DoesNotContain(result.Observations, o => o.Capability.Contains("interaction", StringComparison.Ordinal) || o.Capability == "native-agent-tools");
@@ -269,8 +269,12 @@ public sealed class CapabilityProbeTests : IAsyncLifetime
         request ??= await Request();
         _runner.Mode = mode;
         admission ??= new Admission();
-        var error = await Assert.ThrowsAsync<InvalidOperationException>(() => new CapabilityProbe(_runner, admission, resolve: Resolve, adapterFor: _ => _adapter)
-            .RunAsync("T-100", new("fixture", "fixture", "fixture"), request, TimeSpan.FromSeconds(90)));
+        var error = await Assert.ThrowsAsync<InvalidOperationException>(async () =>
+        {
+            var result = await new CapabilityProbe(_runner, admission, resolve: Resolve, adapterFor: _ => _adapter)
+                .RunAsync("T-100", new("fixture", "fixture", "fixture"), request, TimeSpan.FromSeconds(90));
+            Assert.Fail($"Probe returned instead of retaining the reservation: {result.Code}: {result.Detail}\n{_runner.CommandDiagnostics}");
+        });
         Assert.IsType<ProbeCleanupUncertainException>(error.InnerException);
         Assert.Contains("retained", error.Message);
         Assert.Equal(0, admission.Releases);
@@ -475,7 +479,7 @@ public sealed class CapabilityProbeTests : IAsyncLifetime
             // Simulated uncertainty retains production ownership; real calls still confirm exit and pipe drain.
             string[] command = ["-c", "core.hooksPath=" + (OperatingSystem.IsWindows() ? "NUL" : "/dev/null"),
                 "-c", "core.fsmonitor=false", "-c", "submodule.recurse=false", "-c", "diff.external=", .. arguments];
-            var result = await RunRealAsync("git", command, workingDirectory, timeout: TimeSpan.FromSeconds(10));
+            var result = await RunRealAsync("git", command, workingDirectory, timeout: TimeSpan.FromSeconds(30));
             Assert.True(result.Ok, $"Fixture cleanup git {string.Join(' ', command)} in {workingDirectory} failed with exit code {result.ExitCode}: {result.Message}");
             return result;
         }
@@ -493,6 +497,7 @@ public sealed class CapabilityProbeTests : IAsyncLifetime
             RealCallsInFlight++;
             if (fileName == "git" && arguments.Contains("worktree") && arguments.Contains("remove")) RealRemoveAttempts++;
             var uncertain = false;
+            var elapsed = System.Diagnostics.Stopwatch.StartNew();
             int? exitCode = null;
             string? exceptionType = null;
             try
@@ -512,7 +517,7 @@ public sealed class CapabilityProbeTests : IAsyncLifetime
             }
             finally
             {
-                _commandObservations.Add($"Real command: {fileName} {string.Join(' ', arguments)} in {workingDirectory}; exit code {exitCode?.ToString() ?? "none"}; requested timeout {timeout?.ToString() ?? "default"}; exception {exceptionType ?? "none"}.");
+                _commandObservations.Add($"Real command: {fileName} {string.Join(' ', arguments)} in {workingDirectory}; exit code {exitCode?.ToString() ?? "none"}; requested timeout {timeout?.ToString() ?? "default"}; elapsed {elapsed.Elapsed.TotalSeconds:F1}s; exception {exceptionType ?? "none"}.");
                 if (!uncertain) RealCallsCompleted++;
                 RealCallsInFlight--;
             }
@@ -568,7 +573,7 @@ public sealed class CapabilityProbeTests : IAsyncLifetime
                 if (Mode == "tampered-fixture") File.AppendAllText(Path.Combine(fixture, "fixture.proj"), "<!-- changed -->");
                 return new(0, refusals + "Simulated harness, real deterministic SDK fixture commands.", "");
             }
-            var run = await RunRealAsync(fileName, arguments, workingDirectory, stdin, timeout ?? TimeSpan.FromSeconds(10), ct, scrubEnvironment, environment);
+            var run = await RunRealAsync(fileName, arguments, workingDirectory, stdin, timeout ?? TimeSpan.FromSeconds(30), ct, scrubEnvironment, environment);
             if (run.Ok && ReservedEntry is not null && arguments.Contains("worktree") && arguments.Contains("add"))
             {
                 var worktree = arguments[arguments.ToList().IndexOf("--detach") + 1];
@@ -580,7 +585,7 @@ public sealed class CapabilityProbeTests : IAsyncLifetime
                     var target = ReservedEntry == "link" ? ExternalDirectory! : Path.Combine(ExternalDirectory!, "missing");
                     if (OperatingSystem.IsWindows())
                     {
-                        var link = await RunRealAsync("cmd.exe", ["/c", "mklink", "/J", reserved, target], workingDirectory, timeout: TimeSpan.FromSeconds(10), ct: ct);
+                        var link = await RunRealAsync("cmd.exe", ["/c", "mklink", "/J", reserved, target], workingDirectory, timeout: TimeSpan.FromSeconds(30), ct: ct);
                         Assert.True(link.Ok, link.Message);
                     }
                     else Directory.CreateSymbolicLink(reserved, target);

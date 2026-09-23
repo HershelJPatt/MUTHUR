@@ -48,7 +48,7 @@ public sealed class CapabilityProcessRunner : ICapabilityProcessRunner
         { return new(124, "", "Probe command execution budget expired."); }
         finally
         {
-            using var cleanup = new CancellationTokenSource(TimeSpan.FromSeconds(10));
+            using var cleanup = new CancellationTokenSource(CapabilityBudget.Step);
             try
             {
                 if (!process.HasExited) process.Kill(entireProcessTree: true);

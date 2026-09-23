@@ -63,7 +63,7 @@ public sealed class CapabilityProbe(IProcessRunner processes, IProbeAdmissionCli
             Directory.CreateDirectory(probeRoot);
             addAttempted = true;
             var add = await processes.RunAsync("git", CapabilityHostGit.Arguments(["worktree", "add", "--detach", worktree, context.BaseCommit]),
-                context.RepositoryRoot, timeout: TimeSpan.FromSeconds(10), ct: lifetime.Token, environment: request.GitEnvironment);
+                context.RepositoryRoot, timeout: CapabilityBudget.Step, ct: lifetime.Token, environment: request.GitEnvironment);
             if (!add.Ok) throw new ProbeRefusal("capability_probe_setup_failed", "Disposable pinned worktree could not be created.");
             if (Directory.EnumerateFileSystemEntries(worktree).Any(path => Path.GetFileName(path).Equals(".muthur-capability", StringComparison.OrdinalIgnoreCase)))
                 throw new ProbeRefusal("capability_probe_reserved_path", "The pinned checkout contains the reserved .muthur-capability entry; no model started.");
@@ -136,7 +136,7 @@ public sealed class CapabilityProbe(IProcessRunner processes, IProbeAdmissionCli
             // An uncertain process may still be using the worktree. Preserve it and its reservation for recovery.
             if (!processCleanupUncertain)
             {
-                using var cleanup = new CancellationTokenSource(TimeSpan.FromSeconds(10));
+                using var cleanup = new CancellationTokenSource(CapabilityBudget.Step * 2);
                 try
                 {
                     if (addAttempted)
@@ -145,7 +145,7 @@ public sealed class CapabilityProbe(IProcessRunner processes, IProbeAdmissionCli
                         // Unlink reparse entries first, without enumerating or deleting their targets.
                         RemoveLinks(worktree, cleanup.Token);
                         var removed = await processes.RunAsync("git", CapabilityHostGit.Arguments(["worktree", "remove", "--force", "--force", worktree]), context.RepositoryRoot,
-                            timeout: TimeSpan.FromSeconds(8), ct: cleanup.Token, environment: request.GitEnvironment);
+                            timeout: CapabilityBudget.Step, ct: cleanup.Token, environment: request.GitEnvironment);
                         if (!removed.Ok || Directory.Exists(worktree)) throw new IOException("Disposable worktree removal was not confirmed.");
                     }
                     if (Directory.Exists(probeRoot))
@@ -168,7 +168,7 @@ public sealed class CapabilityProbe(IProcessRunner processes, IProbeAdmissionCli
         var prefix = new[] { "-c", "core.hooksPath=" + Path.Combine(fixture, "no-hooks"), "-c", "user.name=CapabilityFixture",
             "-c", "user.email=fixture@example.invalid", "-c", "commit.gpgsign=false" };
         async Task<ProcessResult> Git(params string[] args) => await processes.RunAsync("git", CapabilityHostGit.Arguments([.. prefix, .. args]), repository,
-            timeout: TimeSpan.FromSeconds(5), ct: ct, environment: SessionWorkspace.GitEnvironment(repository));
+            timeout: CapabilityBudget.Step, ct: ct, environment: SessionWorkspace.GitEnvironment(repository));
         var init = await Git("init", "--quiet");
         if (!init.Ok)
             throw new ProbeRefusal("capability_probe_setup_failed", $"Isolated commit fixture git init failed with exit code {init.ExitCode}.");
@@ -198,16 +198,16 @@ public sealed class CapabilityProbe(IProcessRunner processes, IProbeAdmissionCli
         if (key == "worktree-base" && !Output("head.txt", basis)) return false;
         var directory = key == "commit" ? Path.Combine(fixture, "commit") : worktree;
         var args = key == "commit" ? new[] { "show", "HEAD:nonce.txt" } : ["rev-parse", "HEAD"];
-        var result = await processes.RunAsync("git", CapabilityHostGit.Arguments(args), directory, timeout: TimeSpan.FromSeconds(5), ct: ct,
+        var result = await processes.RunAsync("git", CapabilityHostGit.Arguments(args), directory, timeout: CapabilityBudget.Step, ct: ct,
             environment: SessionWorkspace.GitEnvironment(directory));
         if (!result.Ok || result.StdOut.Trim() != (key == "commit" ? nonce : basis)) return false;
         if (key != "commit") return true;
         var before = File.ReadAllText(Path.Combine(fixture, "before.txt")).Trim();
-        var after = await processes.RunAsync("git", CapabilityHostGit.Arguments(["rev-parse", "HEAD"]), directory, timeout: TimeSpan.FromSeconds(5), ct: ct,
+        var after = await processes.RunAsync("git", CapabilityHostGit.Arguments(["rev-parse", "HEAD"]), directory, timeout: CapabilityBudget.Step, ct: ct,
             environment: SessionWorkspace.GitEnvironment(directory));
         if (before.Length != 40 || !before.All(char.IsAsciiHexDigit) || !after.Ok || after.StdOut.Trim().Length != 40 || before == after.StdOut.Trim()) return false;
         var ancestor = await processes.RunAsync("git", CapabilityHostGit.Arguments(["merge-base", "--is-ancestor", before, "HEAD"]), directory,
-            timeout: TimeSpan.FromSeconds(5), ct: ct, environment: SessionWorkspace.GitEnvironment(directory));
+            timeout: CapabilityBudget.Step, ct: ct, environment: SessionWorkspace.GitEnvironment(directory));
         return ancestor.Ok;
     }
 
@@ -269,13 +269,21 @@ internal sealed class CapabilityFilterException(string code, string message) : I
     internal string Code { get; } = code;
 }
 
+internal static class CapabilityBudget
+{
+    // Hang detector for one host setup/verification command (git, toolchain --version, kill confirmation), never a
+    // performance expectation: a loaded machine can take several seconds to start git or dotnet. The caller's probe
+    // timeout still bounds the whole experiment.
+    internal static readonly TimeSpan Step = TimeSpan.FromSeconds(30);
+}
+
 internal static class CapabilityHostGit
 {
     internal static async Task<(string Code, string Detail)?> CheckFiltersAsync(IProcessRunner runner,
         string directory, IReadOnlyDictionary<string, string>? environment, CancellationToken ct)
     {
         var filters = await runner.RunAsync("git", ["config", "--null", "--get-regexp", "^filter\\..*\\.(clean|smudge|process)$"],
-            directory, timeout: TimeSpan.FromSeconds(5), ct: ct,
+            directory, timeout: CapabilityBudget.Step, ct: ct,
             scrubEnvironment: ["MUTHUR_AGENT", "MUTHUR_TOKEN"], environment: environment);
         if (filters.StdOut.Length > 1_048_576 || (!filters.Ok && filters.ExitCode != 1) ||
             (filters.ExitCode == 1 && filters.StdOut.Length != 0))
