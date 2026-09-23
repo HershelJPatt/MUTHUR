@@ -11,7 +11,7 @@ public sealed class SpecContainmentTests(ITestOutputHelper output) : IDisposable
     private readonly TestRepo _repo = new();
     private readonly string _scratch = Path.Combine(Path.GetTempPath(), "muthur-tests", "containment-" + Guid.NewGuid().ToString("n"));
     private readonly List<(string Path, bool Directory)> _links = [];
-    private const string Spec = "# T-1 — Build it\n";
+    private const string Spec = "# T-1 — Build it\n" + TestRepo.Verification;
 
     private string Outside
     {

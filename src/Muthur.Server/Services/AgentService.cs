@@ -59,6 +59,22 @@ public sealed partial class AgentService(Ledger ledger, LeasePolicy leases, Time
     internal Task<RegisterAgentResponse> RegisterIntegrationRunnerAsync(RegisterAgentRequest request, CancellationToken ct = default) =>
         RegisterCoreAsync(Caller.System, request, conductorStaffed: true, integrationRunner: true, ct);
 
+    /// <summary>The name and "harness/model" the checks-only verdict is recorded under.</summary>
+    public const string DeterministicValidator = "deterministic-checks";
+    public const string DeterministicValidatorModel = "deterministic/checks";
+
+    /// <summary>
+    /// The one identity every checks-only verdict is recorded under, registered the first time it is needed and
+    /// found by name after that: a runner identity cannot be re-registered, and there is nothing per-run about it.
+    /// </summary>
+    internal async Task<Agent> DeterministicValidatorAsync(CancellationToken ct = default)
+    {
+        if (await ledger.ReadAsync((db, _) => db.Agents.SingleOrDefaultAsync(a => a.Name == DeterministicValidator, ct), ct) is { } existing)
+            return existing;
+        await RegisterIntegrationRunnerAsync(new(DeterministicValidator, "deterministic", "checks", "utility"), ct);
+        return await ledger.ReadAsync((db, _) => db.Agents.SingleAsync(a => a.Name == DeterministicValidator, ct), ct);
+    }
+
     private async Task<RegisterAgentResponse> RegisterCoreAsync(Caller caller, RegisterAgentRequest request, bool conductorStaffed, bool integrationRunner, CancellationToken ct)
     {
         if (caller.IntegrationRunner)

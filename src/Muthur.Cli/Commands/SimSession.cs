@@ -88,7 +88,7 @@ internal sealed partial class SimSession(HubClient hub, IProcessRunner processes
     /// <summary>The frozen spec the scripted orchestrator writes; the sim section is what its scripted implementer reads.</summary>
     internal static string Spec(string id, string title, string content, bool block) =>
         $"# {id} — {title}\n\n## Goal\n\nWrite `{id}.txt` at the repository root containing exactly `{id}`.\n\n## Units\n\n- Unit A: write the file.\n\n" +
-        $"## Verification\n\n`git show <branch>:{id}.txt` prints `{id}`.\n\n## Sim\n\ncontent: {content}\n{(block ? BlockLine + "\n" : "")}";
+        $"## Verification\n\n`git show <branch>:{id}.txt` prints `{id}`.\n\n```\necho {id} verified\n```\n\n## Sim\n\ncontent: {content}\n{(block ? BlockLine + "\n" : "")}";
 
     private async Task<string?> AttachSpecAsync(string id, string branch)
     {

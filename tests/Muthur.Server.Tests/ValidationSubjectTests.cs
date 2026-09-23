@@ -121,6 +121,33 @@ public sealed class ValidationSubjectTests : IDisposable
         await PassAsync(validator, fresh);
     }
 
+    /// <summary>
+    /// The subject pins what the spec wrote under Verification next to the project's build and test, so the
+    /// round is judged by what its own commit said — and says whether a model has to look at all.
+    /// </summary>
+    [Fact]
+    public async Task The_subject_carries_the_specs_commands_and_whether_judgment_is_needed()
+    {
+        var (owner, _, task) = await RoundAsync();
+
+        var checks = task.CurrentSubject!.RequiredChecks;
+        Assert.Equal("dotnet build", checks.Build);
+        Assert.Equal(["echo verified"], checks.Commands);
+        Assert.False(checks.RequiresJudgment);
+
+        // A spec that asks for judgment is pinned that way too, on a new round.
+        (await owner.PostActionAsync(task.Id, "revalidate", new RevalidateRequest("Ask for eyes."))).EnsureSuccessStatusCode();
+        _repo.Git("checkout", "-q", Branch);
+        _repo.WriteSpec(task.Id, "\nvalidation: judgment\n");
+        _repo.Commit("ask for judgment");
+        (await owner.PostActionAsync(task.Id, "spec", new SetSpecRequest($"specs/{task.Id}.md", Branch))).EnsureSuccessStatusCode();
+        var judged = await (await owner.PostActionAsync(task.Id, "implemented", new ImplementedRequest(Branch))).ReadTaskAsync();
+        _repo.Git("checkout", "-q", "main");
+
+        Assert.True(judged.CurrentSubject!.RequiredChecks.RequiresJudgment);
+        Assert.Equal(["echo verified"], judged.CurrentSubject.RequiredChecks.Commands);
+    }
+
     [Fact]
     public async Task Spec_only_changes_require_explicit_reattachment_and_a_new_round()
     {
@@ -130,7 +157,7 @@ public sealed class ValidationSubjectTests : IDisposable
         Assert.Equal(HttpStatusCode.UnprocessableEntity, cannotAttach.StatusCode);
         (await owner.PostActionAsync(task.Id, "revalidate", new RevalidateRequest("Amend the frozen spec."))).EnsureSuccessStatusCode();
         _repo.Git("checkout", "-q", Branch);
-        _repo.Write("specs/T-1.md", "# T-1 — amended spec\nOnly the spec changes.\n");
+        _repo.Write("specs/T-1.md", "# T-1 — amended spec\nOnly the spec changes.\n" + TestRepo.Verification);
         _repo.Commit("amend spec only");
         var mismatch = await owner.PostActionAsync(task.Id, "implemented", new ImplementedRequest(Branch));
         Assert.Equal("spec_changed", (await mismatch.ReadErrorAsync()).Code);
