@@ -14,6 +14,8 @@ public sealed class MetaEntry
     public const string ConductorSessions = "conductor_sessions";
     /// <summary>The owner's working notes on one task, by task id: what a resuming session reads instead of re-deriving.</summary>
     public static string TaskNotes(int taskId) => $"task_notes:{taskId}";
+    /// <summary>The utility tier's guess at one task's work-kind, by task id. Advisory: the spec's own line decides.</summary>
+    public static string TaskWorkKindSuggested(int taskId) => $"task_work_kind_suggested:{taskId}";
     /// <summary>A lower ceiling for the hours nobody is watching, as "22:00-07:00@1" in local time. Absent means none.</summary>
     public const string ConductorUnattended = "conductor_unattended";
     /// <summary>

@@ -15,6 +15,28 @@ public static class RoutingPolicy
         return kinds[0];
     }
 
+    /// <summary>
+    /// How hard a candidate should think about a unit of this kind: mechanical work gets "low", general or
+    /// unclassified work "medium", debugging and interaction "high". The catalog's own <c>reasoningEffort</c> is
+    /// a ceiling, never a floor: a founder who capped a model at medium did so for a reason the work-kind does
+    /// not overrule. A ceiling that is not one of the three known levels is passed through unchanged, because
+    /// only the harness knows what it means.
+    /// </summary>
+    public static string EffortFor(string workKind, HarnessCandidate candidate)
+    {
+        var wanted = workKind switch
+        {
+            "mechanical" => "low",
+            "complex-debugging" or "ui-interaction" => "high",
+            _ => "medium",
+        };
+        if (candidate.ReasoningEffort is not { Length: > 0 } ceiling) return wanted;
+        var cap = Rank(ceiling);
+        return cap is null ? ceiling : Rank(wanted) > cap ? ceiling : wanted;
+    }
+
+    private static int? Rank(string effort) => effort switch { "low" => 0, "medium" => 1, "high" => 2, _ => null };
+
     public static (int? Position, string Reason) Recommend(IReadOnlyList<RoutingCandidate> candidates)
     {
         var actionable = candidates.Where(c => c.Eligible && c.Available).OrderBy(c => c.CatalogPosition).ToList();
@@ -22,8 +44,11 @@ public static class RoutingPolicy
         if (actionable.Any(c => c.ComparableOutcomes < 5 || c.ActualStarts is null or <= 0 || c.FalseApprovalRate is null
             || c.IndependentSuccessRate is null || c.ReworkRate is null || c.EndToEndSeconds is null))
             return (actionable[0].CatalogPosition, "Catalog-order fallback: fewer than five comparable independently observed outcomes or missing ranking dimensions.");
+        // Cost is the last measured tiebreak and an unpriced candidate sorts after a priced one: a harness that
+        // reports nothing is not free, it is unknown.
         var selected = actionable.OrderBy(c => c.FalseApprovalRate).ThenByDescending(c => c.IndependentSuccessRate)
-            .ThenBy(c => c.ReworkRate).ThenBy(c => c.EndToEndSeconds).ThenBy(c => c.CatalogPosition).First();
-        return (selected.CatalogPosition, "Measured quality: false approvals, independent success per actual start, rework, elapsed time, then stable catalog order.");
+            .ThenBy(c => c.ReworkRate).ThenBy(c => c.EndToEndSeconds).ThenBy(c => c.MeanCostUsd is null).ThenBy(c => c.MeanCostUsd)
+            .ThenBy(c => c.CatalogPosition).First();
+        return (selected.CatalogPosition, "Measured quality: false approvals, independent success per actual start, rework, elapsed time, mean cost, then stable catalog order.");
     }
 }
