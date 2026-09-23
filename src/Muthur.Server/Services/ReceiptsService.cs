@@ -80,7 +80,8 @@ public sealed class ReceiptsService(Ledger ledger)
                 costs.Count(c => c is null),
                 sessions,
                 ByHarness(runs, sessions),
-                tokens);
+                tokens,
+                Sum(runs.Select(r => r.CacheReadTokens).Concat(sessions.Select(s => s.CacheReadTokens))));
         }, ct);
 
     /// <summary>
@@ -160,13 +161,13 @@ public sealed class ReceiptsService(Ledger ledger)
     private static List<HarnessReceiptDto> ByHarness(IReadOnlyList<WorkerRunDto> runs, IReadOnlyList<SessionRunDto> sessions)
     {
         var rows = sessions
-            .Select(s => (s.Harness, s.Model, Session: true, Seconds: (double)s.Seconds, s.CostUsd, s.InputTokens, s.OutputTokens, Tokens: Tokens(s)))
+            .Select(s => (s.Harness, s.Model, Session: true, Seconds: (double)s.Seconds, s.CostUsd, s.InputTokens, s.OutputTokens, Tokens: Tokens(s), s.CacheReadTokens))
             .Concat(runs.Select(r =>
             {
                 var slash = r.Worker.IndexOf('/');
                 var harness = slash < 0 ? r.Worker : r.Worker[..slash];
                 var model = slash < 0 ? "" : r.Worker[(slash + 1)..];
-                return (Harness: harness, Model: model, Session: false, Seconds: (double)r.Seconds, r.CostUsd, r.InputTokens, r.OutputTokens, Tokens: Tokens(r));
+                return (Harness: harness, Model: model, Session: false, Seconds: (double)r.Seconds, r.CostUsd, r.InputTokens, r.OutputTokens, Tokens: Tokens(r), r.CacheReadTokens);
             }));
         return rows
             .GroupBy(row => (row.Harness, row.Model))
@@ -177,7 +178,8 @@ public sealed class ReceiptsService(Ledger ledger)
                 Sum(g.Select(row => row.InputTokens)),
                 Sum(g.Select(row => row.OutputTokens)),
                 Sum(g.Select(row => row.Tokens)),
-                g.Sum(row => row.Seconds)))
+                g.Sum(row => row.Seconds),
+                Sum(g.Select(row => row.CacheReadTokens))))
             .OrderByDescending(h => h.Sessions + h.WorkerRuns)
             .ThenBy(h => h.Harness, StringComparer.Ordinal)
             .ThenBy(h => h.Model, StringComparer.Ordinal)
@@ -229,7 +231,8 @@ public sealed class ReceiptsService(Ledger ledger)
                 runs.Where(r => !r.Success).Sum(r => r.Seconds / 60d),
                 runs.Count(r => r.Status == "blocked"),
                 sessions.Count(s => s.FailureKind == "timeout"),
-                Sum(runs.Select(Tokens).Concat(sessions.Select(Tokens)))),
+                Sum(runs.Select(Tokens).Concat(sessions.Select(Tokens))),
+                Sum(runs.Select(r => r.CacheReadTokens).Concat(sessions.Select(s => s.CacheReadTokens)))),
                 intervals, time));
         }
 

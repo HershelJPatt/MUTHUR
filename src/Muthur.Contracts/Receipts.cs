@@ -12,9 +12,11 @@ public sealed record SessionGroupDto(string? Tier, string Harness, string Model,
 /// </param>
 /// <param name="InputTokens">Summed over the rows that reported them, by the same rule as <paramref name="CostUsd"/>.</param>
 /// <param name="Tokens">
-/// What the rows report having used, summed: input plus output where a row has both, its one total where it has
-/// only that. Cache reads are on the rows and never in here — they are the part that was not paid for twice.
+/// The fresh tokens: input plus output where a row has both, its one total where it has only that (an older
+/// Codex row, whose total counts its cache reads). Cache reads are never in here — they are the part that was not
+/// paid for twice, and <paramref name="CacheReadTokens"/> carries them.
 /// </param>
+/// <param name="CacheReadTokens">Input read from the prompt cache, summed over the rows that reported it.</param>
 /// <param name="SessionSeconds">Wall time of the conductor-started sessions that ran for this task.</param>
 /// <param name="FailedWorkerMinutes">Minutes spent in worker runs that failed: the waste, in the unit the plan counts it in.</param>
 /// <param name="BlockedWorkerRuns">Worker runs that ended <c>blocked</c>: the environment stopped them, not the work.</param>
@@ -25,7 +27,7 @@ public sealed record TaskReceiptDto(
     double ValidatingSeconds, double InProgressSeconds, bool Landed,
     decimal? CostUsd = null, int? InputTokens = null, int? OutputTokens = null,
     double SessionSeconds = 0, double FailedWorkerMinutes = 0, int BlockedWorkerRuns = 0, int TimeoutSessions = 0,
-    int? Tokens = null);
+    int? Tokens = null, int? CacheReadTokens = null);
 
 /// <param name="Longest">The single longest stay any one task had in this state, and which task.</param>
 public sealed record StateTimeDto(TaskState State, double Seconds, int Tasks, double Longest, string? LongestTask);
@@ -66,9 +68,10 @@ public sealed record SessionRunDto(
 /// <param name="CostUsd">Summed over the rows that reported one; null when none did.</param>
 /// <param name="Tokens">Input plus output per row where both are known, else the row's one total; summed over the rows that have either.</param>
 /// <param name="Seconds">Wall time of every row, reported or not: time is always known.</param>
+/// <param name="CacheReadTokens">Cache reads, summed apart from <paramref name="Tokens"/> so harnesses compare on fresh tokens.</param>
 public sealed record HarnessReceiptDto(
     string Harness, string Model, int Sessions, int WorkerRuns,
-    decimal? CostUsd, int? InputTokens, int? OutputTokens, int? Tokens, double Seconds);
+    decimal? CostUsd, int? InputTokens, int? OutputTokens, int? Tokens, double Seconds, int? CacheReadTokens = null);
 
 /// <param name="Sessions">Identities taken in the window: <c>agent.registered</c> plus <c>agent.reregistered</c>.</param>
 /// <param name="ConductorSessions">
@@ -85,6 +88,7 @@ public sealed record HarnessReceiptDto(
 /// <param name="SessionRuns">One row per conductor session attempt in the window, newest first.</param>
 /// <param name="ByHarness">The same rows grouped by harness and model, most rows first.</param>
 /// <param name="Tokens">Every row's tokens summed by the rule <see cref="TaskReceiptDto.Tokens"/> states, or null when no row reports any.</param>
+/// <param name="CacheReadTokens">Every row's cache reads summed, or null when no row reports any.</param>
 public sealed record ReceiptsDto(
     DateTimeOffset Since,
     DateTimeOffset At,
@@ -102,4 +106,4 @@ public sealed record ReceiptsDto(
     int CostUnreportedRuns = 0,
     IReadOnlyList<SessionRunDto>? SessionRuns = null,
     IReadOnlyList<HarnessReceiptDto>? ByHarness = null,
-    int? Tokens = null);
+    int? Tokens = null, int? CacheReadTokens = null);

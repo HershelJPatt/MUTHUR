@@ -108,7 +108,8 @@ public sealed class AgentLauncher(IProcessRunner processes, Func<string, (string
             }
             var outcome = adapter.Interpret(request, result);
             attempts.Add(new(candidate, outcome, clock.Elapsed, RunId: runId,
-                FailureKind: SessionWorkspace.FailureKind(result, outcome), ExitCode: result.ExitCode, CapabilityMatch: match));
+                FailureKind: SessionWorkspace.FailureKind(result, outcome), ExitCode: result.ExitCode, CapabilityMatch: match,
+                PromptBytes: result.Started ? System.Text.Encoding.UTF8.GetByteCount(invocation.Stdin) : null));
 
             // A session that ran and gave a verdict is finished, right or wrong. Only an account that could not
             // answer at all is worth trying elsewhere.

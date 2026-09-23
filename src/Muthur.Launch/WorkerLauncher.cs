@@ -11,8 +11,10 @@ public sealed record HarnessCandidate(string Harness, string Model, string? Acco
 /// does not know, or a CLI that is not on PATH. A session that started and then failed, crashed or was reaped is a
 /// different fault from one that never began, and callers must be able to tell them apart.
 /// </param>
+/// <param name="PromptBytes">The prompt handed to a process that started, in UTF-8 bytes: what the model read before its first action.</param>
 public sealed record WorkerAttempt(HarnessCandidate Candidate, WorkerOutcome Outcome, TimeSpan Duration, bool Started = true,
-    string? RunId = null, string? FailureKind = null, int? ExitCode = null, CapabilityMatch? CapabilityMatch = null, string? ReservationId = null, WorkerCleanup? Cleanup = null)
+    string? RunId = null, string? FailureKind = null, int? ExitCode = null, CapabilityMatch? CapabilityMatch = null, string? ReservationId = null, WorkerCleanup? Cleanup = null,
+    int? PromptBytes = null)
 {
     public int FullStarts => Started ? 1 : 0;
     public int FullSessionsAvoided => !Started && FailureKind == "capability_mismatch" ? 1 : 0;
@@ -98,7 +100,7 @@ public sealed class WorkerLauncher(IProcessRunner processes, Func<string, (strin
             var started = false;
             var outcome = new WorkerOutcome(false, "Worker did not execute.", false);
             string? failure = null;
-            int? exitCode = null;
+            int? exitCode = null, promptBytes = null;
             var preparing = false;
             var verification = new WorkerSetupRunner(contained);
             try
@@ -116,6 +118,7 @@ public sealed class WorkerLauncher(IProcessRunner processes, Func<string, (strin
                 }
                 var request = SessionWorkspace.ForAttempt(requested, runId);
                 var invocation = adapter.Build(request);
+                promptBytes = System.Text.Encoding.UTF8.GetByteCount(invocation.Stdin);
                 // Build is intentionally after reservation: adapters may write settings files.
                 cleanup = WorkerCleanup.CleanupUncertain;
                 var environment = new Dictionary<string, string>(request.GitEnvironment ?? new Dictionary<string, string>());
@@ -149,7 +152,8 @@ public sealed class WorkerLauncher(IProcessRunner processes, Func<string, (strin
                 }
             }
             attempts.Add(new(candidate, outcome, clock.Elapsed, Started: started, RunId: runId,
-                FailureKind: failure, ExitCode: exitCode, CapabilityMatch: match, ReservationId: reservation.ReservationId, Cleanup: cleanup));
+                FailureKind: failure, ExitCode: exitCode, CapabilityMatch: match, ReservationId: reservation.ReservationId, Cleanup: cleanup,
+                PromptBytes: started ? promptBytes : null));
             if (!outcome.RateLimited) break;
             try { await onRateLimited(candidate); }
             catch (Exception ex)

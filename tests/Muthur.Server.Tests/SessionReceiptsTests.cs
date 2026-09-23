@@ -26,7 +26,7 @@ public sealed class SessionReceiptsTests : IDisposable
         await SessionReceipts.RecordAsync(ledger, taskId, "#orchestrator",
         [
             new(new("codex", "gpt", "chatgpt"), new(false, "usage limit", RateLimited: true, TotalTokens: 66882), TimeSpan.FromSeconds(4), FailureKind: "quota", ExitCode: 1, RunId: "a"),
-            new(new("claude", "opus", "claude-sub"), new(true, "STATUS: done", false, CostUsd: 0.31m, InputTokens: 1200, OutputTokens: 340, CacheReadTokens: 9000), TimeSpan.FromSeconds(34), RunId: "b"),
+            new(new("claude", "opus", "claude-sub"), new(true, "STATUS: done", false, CostUsd: 0.31m, InputTokens: 1200, OutputTokens: 340, CacheReadTokens: 9000), TimeSpan.FromSeconds(34), RunId: "b", PromptBytes: 6144),
         ], default);
 
         var events = (await _hub.Founder().GetTaskAsync(task.Id)).Events.Where(e => e.Type == "conductor.session_finished").ToList();
@@ -39,6 +39,7 @@ public sealed class SessionReceiptsTests : IDisposable
         Assert.Contains("\"costUsd\":0.31", events[1].Payload.GetRawText());
         Assert.Contains("\"inputTokens\":1200", events[1].Payload.GetRawText());
         Assert.Contains("\"cacheReadTokens\":9000", events[1].Payload.GetRawText());
+        Assert.Contains("\"promptBytes\":6144", events[1].Payload.GetRawText());
         Assert.Contains("\"seconds\":34", events[1].Payload.GetRawText());
         Assert.Contains("\"role\":\"#orchestrator\"", events[1].Payload.GetRawText());
     }

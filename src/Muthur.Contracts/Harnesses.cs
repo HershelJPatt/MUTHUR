@@ -17,6 +17,7 @@ public sealed record AccountLimitRequest(string Account, DateTimeOffset? Until);
 /// The branch of the run whose plan this unit came from, or null for a run an orchestrator started directly.
 /// Last, and defaulted, so callers that report an unplanned run are untouched.
 /// </param>
+/// <param name="PromptBytes">The prompt the worker process was handed, in UTF-8 bytes; null when none started.</param>
 public sealed record WorkerRunReport(
     string? Task,
     string Tier,
@@ -34,7 +35,7 @@ public sealed record WorkerRunReport(
     string? RunId = null, string? Status = null, string? FailureKind = null,
     string? BaseCommit = null, string? HeadCommit = null, string? SpecBlob = null, int? ExitCode = null,
     IReadOnlyList<WorkerAttemptReport>? Attempts = null, string? WorkKind = null, string? PolicyVersion = null, string? ReasoningEffort = null,
-    int? CacheReadTokens = null, int? TotalTokens = null);
+    int? CacheReadTokens = null, int? TotalTokens = null, int? PromptBytes = null);
 
 /// <summary>One validator session the conductor believes it has running.</summary>
 /// <param name="Task">"T-n".</param>

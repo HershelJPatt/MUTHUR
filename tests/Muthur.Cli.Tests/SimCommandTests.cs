@@ -253,10 +253,39 @@ public sealed class SimCommandTests
         runs.Count(Event("worker.failed", """{"worker":"sim/scripted","seconds":1,"status":"blocked"}"""));
 
         Assert.Equal(2, runs.ModelCalls);
-        Assert.Equal(16393 + 9400, runs.ModelTokens);
-        Assert.Equal(0, runs.ModelCacheReadTokens);
+        Assert.Equal(16393 + 9400, runs.FreshTokens);
+        Assert.Equal(0, runs.CacheReadTokens);
         Assert.Equal(110, runs.ModelSeconds);
         Assert.Equal(2, runs.WorkerRuns);
+    }
+
+    /// <summary>
+    /// Fresh tokens and cache reads are reported apart for every harness, and fresh per landed task is the number a
+    /// harness comparison reads first; the prompt and kit bytes of a real session come off the launcher's row, since
+    /// only the scripted agent writes the sessions log.
+    /// </summary>
+    [Fact]
+    public void The_report_splits_fresh_from_cache_reads_and_counts_what_real_sessions_were_handed()
+    {
+        var runs = new SimCommands.Runs(kind => kind switch { "orchestrator" => 5000, "validator" => 700, _ => 0 });
+        static Muthur.Contracts.EventDto Event(string type, string payload) =>
+            new(1, DateTimeOffset.UnixEpoch, "x", null, type, "T-1", System.Text.Json.JsonDocument.Parse(payload).RootElement.Clone());
+
+        runs.Count(Event("conductor.session_finished", """{"role":"#orchestrator","harness":"pi","model":"gemma4:26b","seconds":300,"inputTokens":90000,"outputTokens":2000,"cacheReadTokens":700000,"promptBytes":6000,"started":true}"""));
+        runs.Count(Event("worker.finished", """{"worker":"codex/gpt","seconds":90,"inputTokens":5,"outputTokens":36,"cacheReadTokens":16382,"promptBytes":2048,"status":"done"}"""));
+        runs.Count(Event("conductor.session_finished", """{"role":"win-validator","harness":"sim","model":"scripted","seconds":3,"promptBytes":900,"started":true}"""));
+
+        Assert.Equal((2, 8048L, 5000L), (runs.PromptSessions, runs.PromptBytes, runs.KitBytes));
+
+        using var buffer = new MemoryStream();
+        using (var json = new System.Text.Json.Utf8JsonWriter(buffer)) { json.WriteStartObject(); SimCommands.WriteModel(json, runs, landed: 2); json.WriteEndObject(); }
+        using var report = System.Text.Json.JsonDocument.Parse(buffer.ToArray());
+        var root = report.RootElement;
+        Assert.Equal(92041, root.GetProperty("freshTokens").GetInt64());
+        Assert.Equal(716382, root.GetProperty("cacheReadTokens").GetInt64());
+        Assert.Equal(46020, root.GetProperty("freshTokensPerLanded").GetInt64());
+        Assert.Equal(46020, root.GetProperty("freshTokensPerCall").GetInt64());
+        Assert.False(root.TryGetProperty("modelTokens", out _));
     }
 
     /// <summary>The report's launcher counters come straight off the ledger types and payloads the hub records.</summary>

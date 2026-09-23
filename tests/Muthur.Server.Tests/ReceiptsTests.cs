@@ -499,6 +499,42 @@ public sealed class ReceiptsTests : IDisposable
     }
 
     /// <summary>
+    /// Harnesses are compared on fresh tokens, and a cache read is not one: it is context seen again at a fraction
+    /// of the price. Two harnesses on one task — a pi orchestrator and a Codex worker, each reporting both — sum
+    /// fresh and cache-read apart, for the task, for each harness, and for the window a <c>--task</c> read returns.
+    /// </summary>
+    [Fact]
+    public async Task Fresh_tokens_and_cache_reads_are_summed_apart_per_task_and_per_harness()
+    {
+        await _hub.AddProjectAsync(repoPath: _repo.Path);
+        var owner = await RegisterAsync("owner", "claude", "opus");
+        var task = await owner.AddTaskAsync("Build the feature");
+        var other = await owner.AddTaskAsync("Somebody else's");
+
+        (await owner.PostAsJsonAsync(Routes.WorkerRuns, new WorkerRunReport(
+            task.Id, "implementer", "codex", "gpt", "work@example.com", Branch(task.Id), "unit-a", true, 90, null,
+            InputTokens: 5, OutputTokens: 36, CacheReadTokens: 16382, PromptBytes: 2048))).EnsureSuccessStatusCode();
+        await SessionAsync(task.Id, "#orchestrator", "pi", "ollama/gemma4:26b", 300, inputTokens: 90000, outputTokens: 2000, cacheReadTokens: 700000);
+        await SessionAsync(task.Id, "#orchestrator", "pi", "ollama/gemma4:26b", 200, inputTokens: 60000, outputTokens: 1000, cacheReadTokens: 500000);
+        await SessionAsync(other.Id, "#orchestrator", "pi", "ollama/gemma4:26b", 10, inputTokens: 1, outputTokens: 1, cacheReadTokens: 99);
+
+        var response = await _hub.CreateClient().GetAsync(Routes.Receipts + "?task=" + task.Id);
+        response.EnsureSuccessStatusCode();
+        var receipts = (await response.Content.ReadFromJsonAsync(MuthurJsonContext.Default.ReceiptsDto))!;
+
+        var receipt = receipts.Tasks.Single();
+        Assert.Equal(5 + 36 + 90000 + 2000 + 60000 + 1000, receipt.Tokens);
+        Assert.Equal(16382 + 700000 + 500000, receipt.CacheReadTokens);
+        Assert.Equal((receipt.Tokens, receipt.CacheReadTokens), (receipts.Tokens, receipts.CacheReadTokens));
+
+        var byHarness = Assert.IsAssignableFrom<IReadOnlyList<HarnessReceiptDto>>(receipts.ByHarness);
+        var pi = byHarness.Single(h => h.Harness == "pi");
+        var codex = byHarness.Single(h => h.Harness == "codex");
+        Assert.Equal((2, 90000 + 2000 + 60000 + 1000, 1200000), (pi.Sessions, pi.Tokens, pi.CacheReadTokens));
+        Assert.Equal((1, 5 + 36, 16382), (codex.WorkerRuns, codex.Tokens, codex.CacheReadTokens));
+    }
+
+    /// <summary>
     /// The nulls are load-bearing. A window in which nothing reported a cost has no total, not a total of zero:
     /// zero would say the work was free. And a run that ended <c>blocked</c> is counted as the environment's
     /// failure, which is what the plan's second-largest waste is made of.

@@ -333,7 +333,7 @@ public static class SimCommands
             stderr.WriteLine($"sim: {seeded.Count} tasks seeded ({string.Join(", ", seeded)}); the conductor wakes on ledger events and sweeps every {sweep?.ToString(CultureInfo.InvariantCulture) ?? "?"}s. Ctrl+C stops the run.");
 
             var watch = Stopwatch.StartNew();
-            var report = await WatchAsync(founder, seeded, o, watch, stderr, Path.Combine(home, SessionsLog), ct);
+            var report = await WatchAsync(founder, seeded, o, watch, stderr, Path.Combine(home, SessionsLog), repo, ct);
             return (ExitCodes.Ok, report);
         }
         catch (OperationCanceledException) when (ct.IsCancellationRequested)
@@ -392,11 +392,20 @@ public static class SimCommands
     }
 
     /// <summary>What the launchers recorded across the run, read off the ledger as it streams past.</summary>
-    internal sealed class Runs
+    /// <param name="kitBytes">What a session of a kind ("orchestrator", "validator", "implementer") reads from the kit after its prompt.</param>
+    internal sealed class Runs(Func<string, long>? kitBytes = null)
     {
         public int WorkerRuns, WorkerBlocked, LaunchesIntoLimitedAccount, AccountLimits;
-        /// <summary>Real model processes started (sessions and worker runs on a harness other than sim), the tokens they reported, and their wall time.</summary>
-        public int ModelCalls; public long ModelTokens, ModelCacheReadTokens; public double ModelSeconds;
+        /// <summary>
+        /// Real model processes started (sessions and worker runs on a harness other than sim), the tokens they
+        /// reported — fresh (input plus output) and read from the cache, apart — and their wall time.
+        /// </summary>
+        public int ModelCalls; public long FreshTokens, CacheReadTokens; public double ModelSeconds;
+        /// <summary>
+        /// What those processes were handed, as the launcher recorded it: the sessions log only hears from the
+        /// scripted agent, so a real harness's prompt and kit bytes come from here.
+        /// </summary>
+        public int PromptSessions; public long PromptBytes, KitBytes;
 
         public void Count(EventDto e)
         {
@@ -423,7 +432,10 @@ public static class SimCommands
                 LaunchesIntoLimitedAccount++;
         }
 
-        /// <summary>A model row is one whose harness is not the scripted sim; its tokens are input plus output, or the one total a CLI prints.</summary>
+        /// <summary>
+        /// A model row is one whose harness is not the scripted sim. Its fresh tokens are input plus output, or the
+        /// one total an older Codex row printed (cache reads inside it, and no way to take them out).
+        /// </summary>
         private void CountModel(JsonElement payload, string harnessKey)
         {
             if (payload.ValueKind != JsonValueKind.Object) return;
@@ -433,10 +445,35 @@ public static class SimCommands
             ModelCalls++;
             long Number(string name) => payload.TryGetProperty(name, out var v) && v.ValueKind == JsonValueKind.Number && v.TryGetInt64(out var n) ? n : 0;
             var split = Number("inputTokens") + Number("outputTokens");
-            ModelTokens += split > 0 ? split : Number("totalTokens");
-            ModelCacheReadTokens += Number("cacheReadTokens");
+            FreshTokens += split > 0 ? split : Number("totalTokens");
+            CacheReadTokens += Number("cacheReadTokens");
             ModelSeconds += Number("seconds");
+            if (payload.TryGetProperty("promptBytes", out var prompt) && prompt.ValueKind == JsonValueKind.Number)
+            {
+                PromptSessions++;
+                PromptBytes += Number("promptBytes");
+                var kind = harnessKey == "worker" ? "implementer"
+                    : payload.TryGetProperty("role", out var role) && role.ValueKind == JsonValueKind.String && role.GetString() == "#orchestrator" ? "orchestrator" : "validator";
+                KitBytes += kitBytes?.Invoke(kind) ?? 0;
+            }
         }
+    }
+
+    /// <summary>
+    /// Zero on the scripted harness by construction; on a real one, every process the launchers started, what those
+    /// processes said they used, and how long they ran — the numbers a harness comparison needs. Fresh tokens are
+    /// what every harness pays for in full; cache reads are context seen again at a fraction of the price (or, on a
+    /// local model, at a fraction of the minutes), so the two are reported apart and fresh per landed task is the
+    /// number to compare.
+    /// </summary>
+    internal static void WriteModel(Utf8JsonWriter json, Runs runs, int landed)
+    {
+        json.WriteNumber("modelCalls", runs.ModelCalls);
+        json.WriteNumber("freshTokens", runs.FreshTokens);
+        json.WriteNumber("cacheReadTokens", runs.CacheReadTokens);
+        json.WriteNumber("modelSeconds", Math.Round(runs.ModelSeconds, 1));
+        if (runs.ModelCalls > 0) json.WriteNumber("freshTokensPerCall", runs.FreshTokens / runs.ModelCalls);
+        if (landed > 0) json.WriteNumber("freshTokensPerLanded", runs.FreshTokens / landed);
     }
 
     /// <summary>
@@ -480,11 +517,12 @@ public static class SimCommands
     }
 
     /// <summary>Streams the ledger to stderr until every seeded task is done, answering the founder question if asked to, and returns the friction report.</summary>
-    private static async Task<string> WatchAsync(HubClient founder, IReadOnlyList<string> seeded, RunOptions o, Stopwatch watch, TextWriter stderr, string sessionsLog, CancellationToken ct)
+    private static async Task<string> WatchAsync(HubClient founder, IReadOnlyList<string> seeded, RunOptions o, Stopwatch watch, TextWriter stderr, string sessionsLog, string repo, CancellationToken ct)
     {
         var phases = seeded.ToDictionary(id => id, _ => new Phases());
         var answered = new HashSet<int>();
-        var runs = new Runs();
+        var kit = KitCommands.LocateKit();
+        var runs = new Runs(kind => KitBytes(kind, repo, kit));
         long since = 0;
         var done = false;
         while (!ct.IsCancellationRequested && watch.Elapsed < TimeSpan.FromMinutes(o.Minutes) && !done)
@@ -536,19 +574,12 @@ public static class SimCommands
             json.WriteStartObject();
             var landed = phases.Values.Count(p => p.Landed is not null);
             var coldStarts = phases.Values.Sum(p => p.ColdStarts);
-            var (promptSessions, promptBytes, kitBytes) = PromptBytes(sessionsLog);
+            var logged = PromptBytes(sessionsLog);
+            var (promptSessions, promptBytes, kitBytes) = (logged.Sessions + runs.PromptSessions, logged.Bytes + runs.PromptBytes, logged.KitBytes + runs.KitBytes);
             var waits = phases.Values.Where(p => p.Wait is not null).Select(p => p.Wait!.Value).ToList();
             json.WriteBoolean("complete", done);
             if (o.RealHarness) json.WriteString("harness", $"{o.Harness}/{o.Model}");
-            // Zero on the scripted harness by construction; on a real one, every process the launchers started, what
-            // those processes said they used, and how long they ran — the three numbers a harness comparison needs.
-            json.WriteNumber("modelCalls", runs.ModelCalls);
-            json.WriteNumber("modelTokens", runs.ModelTokens);
-            // Cache reads are context the model saw again without paying for it in full; a harness that reports
-            // only one total (Codex) has them inside modelTokens, so the two rows are read side by side, not summed.
-            json.WriteNumber("modelCacheReadTokens", runs.ModelCacheReadTokens);
-            json.WriteNumber("modelSeconds", Math.Round(runs.ModelSeconds, 1));
-            if (runs.ModelCalls > 0) json.WriteNumber("modelTokensPerCall", runs.ModelTokens / runs.ModelCalls);
+            WriteModel(json, runs, landed);
             json.WriteNumber("landed", landed);
             json.WriteNumber("seconds", Math.Round(watch.Elapsed.TotalSeconds, 1));
             // The numbers tuning is judged on: what a task costs in cold starts (each one a full context load for a

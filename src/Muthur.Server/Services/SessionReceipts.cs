@@ -42,6 +42,7 @@ internal static class SessionReceipts
                         exitCode = attempt.ExitCode,
                         started = attempt.Started,
                         runId = attempt.RunId,
+                        promptBytes = attempt.PromptBytes,
                     });
                 return Task.CompletedTask;
             }, ct);

@@ -311,7 +311,7 @@ public sealed class HarnessTests : IDisposable
         Assert.Equal(expected, CodexAdapter.TokensUsed(text));
 
     [Fact]
-    public void Codex_outcome_carries_the_total_tokens_whether_it_succeeded_or_not()
+    public void Without_json_events_codex_falls_back_to_the_total_on_its_tokens_used_line()
     {
         var adapter = Harnesses.Find("codex")!;
         var request = Request();
@@ -324,6 +324,71 @@ public sealed class HarnessTests : IDisposable
         Assert.True(ok.Success);
         Assert.Equal(12345, ok.TotalTokens);
         Assert.Null(ok.InputTokens);
+    }
+
+    [Fact]
+    public void Codex_runs_with_json_events_on_stdout()
+    {
+        Assert.Contains("--json", Harnesses.Find("codex")!.Build(Request()).Arguments);
+        Assert.Contains("--json", Harnesses.Find("codex-oss")!.Build(Request(model: "gemma4:26b")).Arguments);
+    }
+
+    /// <summary>
+    /// Codex's input count includes what it read from the cache (16,387 of which 16,382 cached, on a real local
+    /// rollout); the outcome's input is the part that was not, as Claude and pi report it, so fresh tokens compare.
+    /// </summary>
+    [Fact]
+    public void Codex_json_events_split_fresh_input_from_cache_reads_and_sum_the_turns()
+    {
+        var stdout = """
+            {"type":"thread.started","thread_id":"0199a213-81c0-7800-8aa1-bbab2a035a53"}
+            {"type":"turn.started"}
+            {"type":"item.completed","item":{"id":"item_0","type":"command_execution","command":"git status","exit_code":0,"status":"completed"}}
+            {"type":"turn.completed","usage":{"input_tokens":16387,"cached_input_tokens":16382,"output_tokens":36}}
+            {"type":"turn.started"}
+            {"type":"item.completed","item":{"id":"item_1","type":"agent_message","text":"STATUS: done"}}
+            {"type":"turn.completed","usage":{"input_tokens":20000,"cached_input_tokens":16000,"output_tokens":400}}
+            """;
+        File.WriteAllText(Path.Combine(_scratch, "codex-last-message.txt"), "STATUS: done\n");
+
+        var outcome = Harnesses.Find("codex")!.Interpret(Request(), new ProcessResult(0, stdout, ""));
+
+        Assert.True(outcome.Success);
+        Assert.Equal((5 + 4000, 36 + 400, 16382 + 16000), (outcome.InputTokens, outcome.OutputTokens, outcome.CacheReadTokens));
+        Assert.Null(outcome.TotalTokens);
+    }
+
+    [Fact]
+    public void Codex_token_count_events_are_read_as_a_running_total_when_no_turn_completed()
+    {
+        var stdout = """
+            {"timestamp":"2026-09-22T22:02:40Z","type":"event_msg","payload":{"type":"token_count","info":{"total_token_usage":{"input_tokens":8000,"cached_input_tokens":6000,"output_tokens":20,"reasoning_output_tokens":0,"total_tokens":8020},"last_token_usage":{"input_tokens":8000,"cached_input_tokens":6000,"output_tokens":20,"reasoning_output_tokens":0,"total_tokens":8020},"model_context_window":258400}}}
+            {"timestamp":"2026-09-22T22:02:44Z","type":"event_msg","payload":{"type":"token_count","info":{"total_token_usage":{"input_tokens":16387,"cached_input_tokens":16382,"output_tokens":36,"reasoning_output_tokens":0,"total_tokens":16423},"last_token_usage":{"input_tokens":8387,"cached_input_tokens":8382,"output_tokens":16,"reasoning_output_tokens":0,"total_tokens":8403},"model_context_window":258400}}}
+            """;
+        File.WriteAllText(Path.Combine(_scratch, "codex-last-message.txt"), "STATUS: done\n");
+
+        var outcome = Harnesses.Find("codex-oss")!.Interpret(Request(), new ProcessResult(0, stdout, ""));
+
+        Assert.Equal((5, 36, 16382), (outcome.InputTokens, outcome.OutputTokens, outcome.CacheReadTokens));
+    }
+
+    [Fact]
+    public void A_failed_codex_turn_reports_its_error_and_the_usage_it_spent()
+    {
+        var stdout = """
+            {"type":"thread.started","thread_id":"t"}
+            {"type":"turn.started"}
+            {"type":"error","message":"stream disconnected"}
+            {"type":"turn.failed","error":{"message":"You've hit your usage limit. Try again at 6pm."}}
+            """;
+
+        var outcome = Harnesses.Find("codex")!.Interpret(Request(), new ProcessResult(1, stdout, ""));
+
+        Assert.False(outcome.Success);
+        Assert.True(outcome.RateLimited);
+        Assert.Equal("Process exited with code 1: You've hit your usage limit. Try again at 6pm.", outcome.Report);
+        Assert.Null(outcome.InputTokens);
+        Assert.Null(outcome.TotalTokens);
     }
 
     [Theory]
@@ -426,6 +491,8 @@ public sealed class WorkerLauncherTests : IDisposable
 
         Assert.Contains("not installed", attempts[0].Outcome.Report);
         Assert.True(attempts[1].Outcome.Success);
+        Assert.Null(attempts[0].PromptBytes);
+        Assert.Equal("prompt".Length, attempts[1].PromptBytes);
         var started = Assert.Single(processes.Started);
         Assert.Contains("MUTHUR_AGENT", started.Scrubbed!);
         Assert.Contains("MUTHUR_TOKEN", started.Scrubbed!);
@@ -500,6 +567,7 @@ public sealed class AgentLauncherTests : IDisposable
         Assert.Equal("codex", attempts[1].Candidate.Harness);
         Assert.True(attempts[1].Outcome.Success);
         Assert.Equal(2, attempts.Count);
+        Assert.Equal("prompt".Length, attempts[1].PromptBytes);
     }
 
     [Fact]

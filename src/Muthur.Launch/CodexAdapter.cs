@@ -62,6 +62,7 @@ public sealed partial class CodexAdapter(string name, string? openSourceProvider
             "--sandbox", Sandbox(request),
             "--output-last-message", LastMessageFile(request),
             "--color", "never",
+            "--json",
             "-c", "service_tier=\"default\"",
             "-c", "features.fast_mode=false",
         };
@@ -123,17 +124,78 @@ public sealed partial class CodexAdapter(string name, string? openSourceProvider
     {
         var file = LastMessageFile(request);
         var report = File.Exists(file) ? File.ReadAllText(file).Trim() : "";
-        var tokens = TokensUsed(result.StdOut) ?? TokensUsed(result.StdErr);
-        if (result.Ok && report.Length > 0) return new WorkerOutcome(true, report, RateLimited: false, TotalTokens: tokens);
+        var usage = ParseEvents(result.StdOut);
+        var total = usage.Input is null ? TokensUsed(result.StdOut) ?? TokensUsed(result.StdErr) : null;
+        if (result.Ok && report.Length > 0)
+            return new WorkerOutcome(true, report, RateLimited: false, InputTokens: usage.Input, OutputTokens: usage.Output,
+                CacheReadTokens: usage.CachedInput, TotalTokens: total);
 
-        var text = result.Ok ? result.Message : $"Process exited with code {result.ExitCode}: {result.Message}";
+        var said = usage.Error ?? result.Message;
+        var text = result.Ok ? said : $"Process exited with code {result.ExitCode}: {said}";
         if (report.Length > 0) text += "\n\nFinal report from this attempt:\n" + report;
-        return new WorkerOutcome(false, text, Harnesses.LooksRateLimited(result.StdErr + result.StdOut), TotalTokens: tokens);
+        return new WorkerOutcome(false, text, Harnesses.LooksRateLimited(result.StdErr + result.StdOut), InputTokens: usage.Input,
+            OutputTokens: usage.Output, CacheReadTokens: usage.CachedInput, TotalTokens: total);
     }
 
+    /// <param name="Input">Input that was not read from the cache; null, like the other counts, when the stream reported no usage.</param>
+    internal sealed record Usage(int? Input, int? CachedInput, int? Output, string? Error);
+
     /// <summary>
-    /// Codex prints "tokens used" and the count on exit, on one line or the next; it is the only usage figure the CLI
-    /// gives a headless caller, so it is the one the ledger gets. The last occurrence wins: a resumed session prints one per turn.
+    /// Reads the <c>--json</c> event stream: every <c>turn.completed</c>'s usage summed, or when there is none (an
+    /// older CLI, a rollout replayed) the last <c>token_count</c>'s running total. Codex counts cached input inside
+    /// <c>input_tokens</c>; the ledger's input is the part that was not cached, as the other harnesses report it.
+    /// The error is the last <c>turn.failed</c> or <c>error</c> message, since stdout is no longer prose to quote.
+    /// </summary>
+    internal static Usage ParseEvents(string stdout)
+    {
+        int input = 0, cached = 0, output = 0; var turns = false;
+        (int Input, int Cached, int Output)? running = null;
+        string? error = null;
+        foreach (var line in stdout.Split('\n'))
+        {
+            var trimmed = line.Trim();
+            if (trimmed.Length == 0 || trimmed[0] != '{') continue;
+            JsonDocument doc;
+            try { doc = JsonDocument.Parse(trimmed); }
+            catch (JsonException) { continue; }
+            using (doc)
+            {
+                var root = doc.RootElement;
+                if (root.ValueKind != JsonValueKind.Object) continue;
+                // A rollout wraps its events in a payload; the exec stream does not.
+                var body = root.TryGetProperty("payload", out var payload) && payload.ValueKind == JsonValueKind.Object ? payload : root;
+                switch (body.TryGetProperty("type", out var type) ? type.GetString() : null)
+                {
+                    case "turn.completed" when body.TryGetProperty("usage", out var usage) && usage.ValueKind == JsonValueKind.Object:
+                        turns = true;
+                        input += Count(usage, "input_tokens"); cached += Count(usage, "cached_input_tokens"); output += Count(usage, "output_tokens");
+                        break;
+                    case "token_count" when body.TryGetProperty("info", out var info) && info.ValueKind == JsonValueKind.Object &&
+                        info.TryGetProperty("total_token_usage", out var total) && total.ValueKind == JsonValueKind.Object:
+                        running = (Count(total, "input_tokens"), Count(total, "cached_input_tokens"), Count(total, "output_tokens"));
+                        break;
+                    case "turn.failed" when body.TryGetProperty("error", out var failure) && failure.ValueKind == JsonValueKind.Object &&
+                        failure.TryGetProperty("message", out var said) && said.ValueKind == JsonValueKind.String:
+                        error = said.GetString();
+                        break;
+                    case "error" when body.TryGetProperty("message", out var said) && said.ValueKind == JsonValueKind.String:
+                        error = said.GetString();
+                        break;
+                }
+            }
+        }
+        if (turns) return new(input - Math.Min(cached, input), cached, output, error);
+        if (running is { } r) return new(r.Input - Math.Min(r.Cached, r.Input), r.Cached, r.Output, error);
+        return new(null, null, null, error);
+    }
+
+    private static int Count(JsonElement usage, string name) =>
+        usage.TryGetProperty(name, out var v) && v.ValueKind == JsonValueKind.Number && v.TryGetInt32(out var n) ? n : 0;
+
+    /// <summary>
+    /// Codex without <c>--json</c> prints "tokens used" and the count on exit, on one line or the next: one number,
+    /// cached input included. Read only when the event stream carried no usage. The last occurrence wins: a resumed
+    /// session prints one per turn.
     /// </summary>
     public static int? TokensUsed(string text)
     {
