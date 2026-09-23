@@ -55,7 +55,7 @@ public static class RoutingCommands
                     {
                         var candidate = new HarnessCandidate(c.Harness, c.Model, c.Account, c.ReasoningEffort);
                         var request = WorkerCommands.RequestFor(candidate, repo, "", Path.GetFullPath(Path.Combine(repo, common.StdOut.Trim())),
-                            [.. WorkerCommands.DefaultAllowed, .. project.Allowed], Path.Combine(MuthurEnvironment.Home, "capability-scratch")) with
+                            [.. WorkerCommands.DefaultAllowed, .. project.Allowed], Path.Combine(MuthurEnvironment.Home, "capability-scratch"), kind) with
                         {
                             GitEnvironment = SessionWorkspace.GitEnvironment(repo),
                             Capabilities = new(requirements, "worker-run", Path.Combine(MuthurEnvironment.Home, "capabilities"), assignment.BaseCommit, repo),

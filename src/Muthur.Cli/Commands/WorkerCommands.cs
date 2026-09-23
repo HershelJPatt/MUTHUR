@@ -40,11 +40,14 @@ public static class WorkerCommands
         var parent = new Option<string?>("--parent")
             { Description = "The worker run whose plan this unit came from. Recorded so a two-level fan-out is readable in the ledger." };
         var timeout = new Option<int>("--timeout-minutes") { DefaultValueFactory = _ => 60 };
+        var effort = new Option<string?>("--effort")
+            { Description = "low | medium | high. Overrides the effort the spec's work-kind would choose and the catalog's ceiling." };
         var run = new Command("run", "Run one worker in its own worktree and print its report. The worker gets no hub identity.")
-            { tier, spec, unit, task, harness, baseRef, defaultBranch, branch, note, parent, timeout };
+            { tier, spec, unit, task, harness, baseRef, defaultBranch, branch, note, parent, timeout, effort };
         run.SetAction((parse, ct) => RunAsync(parse, new RunOptions(
             parse.GetValue(tier)!, parse.GetValue(spec)!, parse.GetValue(unit), parse.GetValue(task), parse.GetValue(harness),
-            parse.GetValue(baseRef), parse.GetValue(branch), parse.GetValue(note), parse.GetValue(timeout), parse.GetValue(parent), parse.GetValue(defaultBranch)), processes, ct));
+            parse.GetValue(baseRef), parse.GetValue(branch), parse.GetValue(note), parse.GetValue(timeout), parse.GetValue(parent), parse.GetValue(defaultBranch),
+            parse.GetValue(effort)), processes, ct));
         worker.Subcommands.Add(run);
         var reservations = new Command("reservations", "List active full-worker reservations owned by this caller.");
         reservations.SetAction(async (parse, ct) => Output.Emit(parse, await HubClient.For(parse).GetAsync(Routes.WorkerReservations, ct)));
@@ -152,7 +155,11 @@ public static class WorkerCommands
     public static ConductorSessionsRequest UnattendedRequest(string? from, string? to, int? sessions, bool clear) =>
         new(null, from, to, sessions, clear);
 
-    private sealed record RunOptions(string Tier, string Spec, string? Unit, string? Task, string? Harness, string? Base, string? Branch, string? Note, int TimeoutMinutes, string? Parent = null, string? DefaultBranch = null);
+    private sealed record RunOptions(string Tier, string Spec, string? Unit, string? Task, string? Harness, string? Base, string? Branch, string? Note, int TimeoutMinutes,
+        string? Parent = null, string? DefaultBranch = null, string? Effort = null);
+
+    /// <summary>An explicit --effort is one of the three levels or a refusal; the harness never sees a typo.</summary>
+    internal static bool ValidEffort(string? effort) => effort is null or "low" or "medium" or "high";
 
     /// <summary>
     /// The contract this tier is handed. A mastermind is given a problem area, not a frozen unit, so handing it
@@ -179,6 +186,8 @@ public static class WorkerCommands
     {
         if (string.IsNullOrWhiteSpace(o.Task))
             return Output.Error("worker_request_invalid", "Full-worker dispatch requires --task, including legacy specs.", ExitCodes.RuleViolation);
+        if (!ValidEffort(o.Effort))
+            return Output.Error("worker_effort_invalid", "--effort must be low, medium or high.", ExitCodes.RuleViolation);
         var reporting = false;
         async Task<string?> Git(string directory, params string[] arguments)
         {
@@ -282,7 +291,7 @@ public static class WorkerCommands
             admission: new(new WorkerAdmissionClient(hub), o.Task!, o.Tier, repo, assignment.BaseCommit, assignment.SpecBlob,
                 assignment.SpecPath, o.Unit, o.Parent, branchName), prepare: Prepare, setupCleanupConfirmed: () => setup.CleanupConfirmed).RunAsync(
             usable,
-            c => RequestFor(c, worktree, PromptFor(c), gitCommon, [.. DefaultAllowed, .. extraAllowed], scratch) with
+            c => RequestFor(c, worktree, PromptFor(c), gitCommon, [.. DefaultAllowed, .. extraAllowed], scratch, workKind, o.Effort) with
             {
                 Capabilities = new(requirements, "worker-run", Path.Combine(MuthurEnvironment.Home, "capabilities"), assignment.BaseCommit, repo),
             },
@@ -330,7 +339,7 @@ public static class WorkerCommands
             InputTokens: final.Outcome.InputTokens, OutputTokens: final.Outcome.OutputTokens,
             CacheReadTokens: final.Outcome.CacheReadTokens, TotalTokens: final.Outcome.TotalTokens,
             RunId: final.RunId, Status: status, FailureKind: failureKind, BaseCommit: assignment.BaseCommit, HeadCommit: headCommit,
-            SpecBlob: assignment.SpecBlob, ExitCode: final.ExitCode, WorkKind: workKind, PolicyVersion: "catalog-order-v1", ReasoningEffort: final.Candidate.ReasoningEffort,
+            SpecBlob: assignment.SpecBlob, ExitCode: final.ExitCode, WorkKind: workKind, PolicyVersion: "catalog-order-v1", ReasoningEffort: EffortFor(final.Candidate, workKind, o.Effort),
             Attempts: attempts.Select(a => new WorkerAttemptReport(a.Candidate.Harness, a.Candidate.Model, a.Candidate.Account,
                 a.RunId, a.ReservationId, a.Started, a.FailureKind, a.Cleanup?.ToString())).ToArray()), MuthurJsonContext.Default.WorkerRunReport, ct);
             if (!reported.IsSuccess) reportError = reported.Body;
@@ -401,10 +410,17 @@ public static class WorkerCommands
             .Where(c => !c.Limited && (harness is null || string.Equals(c.Harness, harness, StringComparison.OrdinalIgnoreCase)))
             .Select(c => new HarnessCandidate(c.Harness, c.Model, c.Account, c.ReasoningEffort))];
 
-    /// <summary>What one candidate is asked to do. The deny list is this command's own policy, never the project's.</summary>
+    /// <summary>
+    /// What one candidate is asked to do. The deny list is this command's own policy, never the project's. The
+    /// effort is the work-kind's, capped by the catalog, unless the caller said otherwise with --effort.
+    /// </summary>
     internal static WorkerRequest RequestFor(HarnessCandidate candidate, string worktree, string prompt,
-        string? gitCommon, IReadOnlyList<string> allowed, string scratch) =>
-        new(worktree, prompt, candidate.Model, gitCommon, allowed, Denied, scratch, candidate.ReasoningEffort);
+        string? gitCommon, IReadOnlyList<string> allowed, string scratch, string workKind = "unknown", string? effort = null) =>
+        new(worktree, prompt, candidate.Model, gitCommon, allowed, Denied, scratch, EffortFor(candidate, workKind, effort));
+
+    /// <summary>What is actually sent, so the run report records the effort the harness was given and not the catalog's.</summary>
+    internal static string EffortFor(HarnessCandidate candidate, string workKind, string? effort) =>
+        effort ?? RoutingPolicy.EffortFor(workKind, candidate);
 
     /// <summary>Build/test commands and extra allowed shell commands from muthur.project.json.</summary>
     internal static (List<string> Verify, List<string> Allowed) ReadProject(string repo)

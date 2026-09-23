@@ -32,6 +32,19 @@ public sealed class RoutingPolicyTests
     }
 
     [Theory]
+    [InlineData("mechanical", null, "low")]
+    [InlineData("general", null, "medium")]
+    [InlineData("unknown", null, "medium")]
+    [InlineData("complex-debugging", null, "high")]
+    [InlineData("ui-interaction", null, "high")]
+    [InlineData("ui-interaction", "medium", "medium")]
+    [InlineData("complex-debugging", "low", "low")]
+    [InlineData("mechanical", "high", "low")]
+    [InlineData("general", "xhigh", "xhigh")]
+    public void Effort_follows_the_work_kind_under_the_catalog_ceiling(string kind, string? ceiling, string expected) =>
+        Assert.Equal(expected, RoutingPolicy.EffortFor(kind, new HarnessCandidate("fixture", "model", "account", ceiling)));
+
+    [Theory]
     [InlineData("# old spec", "unknown")]
     [InlineData("work-kind: mechanical", "mechanical")]
     [InlineData("work-kind: ui-interaction\nwork-kind: ui-interaction", "ui-interaction")]
