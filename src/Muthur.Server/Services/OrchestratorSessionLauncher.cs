@@ -214,9 +214,10 @@ public sealed class OrchestratorSessionLauncher(
         - You own this task and no other. Do not claim a second one.
         - Write a frozen spec before you delegate, and delegate the building; you do not write product code yourself.
         - Never push, never merge into the default branch. `muthur task land` is how work lands.
-        - If the task needs a decision only the founder can make, `muthur ask`, then wait for the answer in this
-          session: `muthur msg inbox --wait 900` costs nothing while it waits and the answer arrives there. Only if
-          the wait expires, write what you have learned with `muthur task notes {assignment.TaskKey} --file <notes.md>`
+        - If the task needs a decision only the founder can make, ask and wait in one command:
+          `muthur ask "<question>" --task {assignment.TaskKey} --option ... --wait 900` costs nothing while it waits and
+          prints the request answered or still open. Only if it comes back still open, write what you have learned
+          with `muthur task notes {assignment.TaskKey} --file <notes.md>`
           (what the task needs, what you decided and why, what is left) and exit; the session that resumes the task
           starts from your notes instead of from the codebase. Never guess at a product decision, and never answer a
           founder request yourself.

@@ -73,7 +73,7 @@ public sealed class KitInstallTests : IDisposable
 
         var procedureText = File.ReadAllText(installed);
         foreach (var phrase in new[] { "before implementation submission", "is a defect in the spec",
-            "Verification a conductor-started session can run", "muthur msg inbox --wait 900", "muthur task notes T-n --file" })
+            "Verification a conductor-started session can run", "--wait 900", "muthur task notes T-n --file" })
             Assert.Contains(phrase, procedureText, StringComparison.Ordinal);
         Assert.DoesNotContain("checkpoint your task evidence", procedureText, StringComparison.Ordinal);
 

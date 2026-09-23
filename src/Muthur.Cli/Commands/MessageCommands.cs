@@ -1,4 +1,5 @@
 using System.CommandLine;
+using System.Text.Json;
 using Muthur.Cli.Infrastructure;
 using Muthur.Contracts;
 
@@ -42,15 +43,56 @@ public static class MessageCommands
         AddAsk(root);
     }
 
+    /// <summary>The hub's cap on one inbox long-poll; a longer --wait is several of them back to back.</summary>
+    internal const int InboxWaitMax = 900;
+
+    /// <summary>How a wait of <paramref name="seconds"/> splits into inbox long-polls the hub accepts.</summary>
+    internal static IEnumerable<int> WaitSlices(int seconds)
+    {
+        for (var left = seconds; left > 0; left -= InboxWaitMax) yield return Math.Min(left, InboxWaitMax);
+    }
+
+    /// <summary>
+    /// Waits for the request to be answered by sleeping on the inbox — the hub messages the asker when a founder
+    /// answers, so the poll wakes on the answer rather than on a timer — and re-reads the request after each wake.
+    /// Returns the request as last seen, answered or not, or null when the hub could not be read.
+    /// </summary>
+    private static async Task<ApiResult?> AwaitAnswerAsync(HubClient hub, FounderRequestDto request, int seconds, CancellationToken ct)
+    {
+        ApiResult? latest = null;
+        foreach (var slice in WaitSlices(seconds))
+        {
+            await hub.GetAsync(Routes.Inbox + $"?wait={slice}", ct);
+            var listed = await hub.GetAsync(Routes.Requests + "?open=false", ct);
+            if (!listed.IsSuccess) return latest;
+            var current = JsonSerializer.Deserialize(listed.Body, MuthurJsonContext.Default.IReadOnlyListFounderRequestDto)?
+                .FirstOrDefault(r => r.Id == request.Id);
+            if (current is null) return latest;
+            latest = new ApiResult(200, JsonSerializer.Serialize(current, MuthurJsonContext.Default.FounderRequestDto));
+            if (!string.Equals(current.Status, "open", StringComparison.OrdinalIgnoreCase)) return latest;
+        }
+        return latest;
+    }
+
     private static void AddAsk(RootCommand root)
     {
         var question = new Argument<string>("question") { Description = "A concrete decision for overseer triage or an explicitly reserved founder question." };
         var task = new Option<string?>("--task") { Description = "The task this blocks; it moves to 'blocked' until answered." };
         var option = new Option<string[]>("--option") { Description = "An answer you propose (repeatable). Offer options whenever you can.", AllowMultipleArgumentsPerToken = true };
         var kind = new Option<string>("--kind") { DefaultValueFactory = _ => "triage", Description = "triage (default): overseer classifies and directs engineering work; technical: delegated engineering judgment; human: explicit founder-only product, spending, permission, account, secret or outbound decision." };
-        var ask = new Command("ask", "Ask for a decision; human requests remain founder-only.") { question, task, option, kind };
-        ask.SetAction(async (parse, ct) => Output.Emit(parse, await HubClient.For(parse).PostAsync(Routes.Requests,
-            new AskRequest(parse.GetValue(question)!, parse.GetValue(task), parse.GetValue(option), parse.GetValue(kind)!), MuthurJsonContext.Default.AskRequest, ct)));
+        var wait = new Option<int>("--wait") { Description = "After asking, stay in this session up to this many seconds for the answer (a long-poll on your inbox; costs nothing while it waits). Prints the request with its status, answered or still open, and exits 0 either way." };
+        var ask = new Command("ask", "Ask for a decision; human requests remain founder-only.") { question, task, option, kind, wait };
+        ask.SetAction(async (parse, ct) =>
+        {
+            var seconds = Math.Max(0, parse.GetValue(wait));
+            var hub = HubClient.For(parse, TimeSpan.FromSeconds(Math.Min(seconds, InboxWaitMax) + 30));
+            var asked = await hub.PostAsync(Routes.Requests,
+                new AskRequest(parse.GetValue(question)!, parse.GetValue(task), parse.GetValue(option), parse.GetValue(kind)!), MuthurJsonContext.Default.AskRequest, ct);
+            if (!asked.IsSuccess || seconds == 0) return Output.Emit(parse, asked);
+            var request = JsonSerializer.Deserialize(asked.Body, MuthurJsonContext.Default.FounderRequestDto);
+            if (request is null) return Output.Emit(parse, asked);
+            return Output.Emit(parse, await AwaitAnswerAsync(hub, request, seconds, ct) ?? asked);
+        });
         root.Subcommands.Add(ask);
 
         var requests = new Command("requests", "Founder requests.");

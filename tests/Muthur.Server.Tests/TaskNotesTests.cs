@@ -148,8 +148,8 @@ public sealed class TaskNotesTests : IDisposable
 
         var prompt = OrchestratorSessionLauncher.Prompt(Assert.Single(await Conductor.PlanOrchestratorsAsync()), new Muthur.Launch.HarnessCandidate("codex", "gpt", "acct"));
 
-        Assert.Contains("`muthur ask`, then wait for the answer in this", prompt, StringComparison.Ordinal);
-        Assert.Contains("muthur msg inbox --wait 900", prompt, StringComparison.Ordinal);
+        Assert.Contains("ask and wait in one command", prompt, StringComparison.Ordinal);
+        Assert.Contains("--wait 900", prompt, StringComparison.Ordinal);
         Assert.Contains($"muthur task notes {id} --file", prompt, StringComparison.Ordinal);
         Assert.DoesNotContain("`muthur ask` and stop", prompt, StringComparison.Ordinal);
     }

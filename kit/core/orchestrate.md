@@ -28,9 +28,10 @@ session silent for longer than the claim lease looks dead: the hub returns its t
 2. **Become the expert.** Read the task (`muthur task show T-n`), the code it touches, the project's
    CLAUDE.md/AGENTS.md and `muthur.project.json`. Know the problem space, the existing patterns, and how
    the change will be verified before you write a word of spec. If the task is ambiguous in a way only a
-   founder can settle, ask (`muthur ask "<question>" --task T-n --option ... --option ...`) and wait for the
-   answer in this session: `muthur msg inbox --wait 900` costs nothing while it waits and is not polling.
-   Only when the wait expires, write your working notes with `muthur task notes T-n --file <notes.md>`
+   founder can settle, ask and wait for the answer in this session in one command:
+   `muthur ask "<question>" --task T-n --option ... --option ... --wait 900`. It costs nothing while it waits,
+   is not polling, and prints the request answered or still open.
+   Only when it comes back still open, write your working notes with `muthur task notes T-n --file <notes.md>`
    (what the task needs, what you decided and why, what is left) and exit; the session that resumes the task
    starts from your notes instead of from the codebase. Do not guess at product decisions (`--kind`
    routing: reference, **Decision routing**).

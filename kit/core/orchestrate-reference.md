@@ -42,8 +42,8 @@ policy or compatibility alone do not make them founder preferences. The overseer
 Product commitments/preferences, new spending/concurrency, permission expansion, account access,
 secrets and outbound approvals must explicitly use `--kind human`. Mixed human questions remain open.
 Never relabel a human decision to bypass a gate. Legacy/missing-category records remain human-only.
-After asking a blocking question, wait for the answer in this session with `muthur msg inbox --wait 900`;
-it costs nothing while it waits and is not polling. Only when the wait expires, write your working notes
+Ask a blocking question with `--wait 900` so the same command waits for the answer in this session; it costs
+nothing while it waits and is not polling. Only when it comes back still open, write your working notes
 with `muthur task notes T-n --file <notes.md>` (what the task needs, what you decided and why, what is
 left) and exit, so the session that resumes the task starts from your notes.
 
