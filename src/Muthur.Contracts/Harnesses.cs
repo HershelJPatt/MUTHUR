@@ -33,7 +33,8 @@ public sealed record WorkerRunReport(
     int? OutputTokens = null,
     string? RunId = null, string? Status = null, string? FailureKind = null,
     string? BaseCommit = null, string? HeadCommit = null, string? SpecBlob = null, int? ExitCode = null,
-    IReadOnlyList<WorkerAttemptReport>? Attempts = null, string? WorkKind = null, string? PolicyVersion = null, string? ReasoningEffort = null);
+    IReadOnlyList<WorkerAttemptReport>? Attempts = null, string? WorkKind = null, string? PolicyVersion = null, string? ReasoningEffort = null,
+    int? CacheReadTokens = null, int? TotalTokens = null);
 
 /// <summary>One validator session the conductor believes it has running.</summary>
 /// <param name="Task">"T-n".</param>

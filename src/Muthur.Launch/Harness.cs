@@ -20,7 +20,10 @@ public sealed record WorkerRequest(
 /// <summary>A process to start: executable, arguments, and the prompt on stdin.</summary>
 public sealed record HarnessInvocation(string FileName, IReadOnlyList<string> Arguments, string Stdin);
 
-public sealed record WorkerOutcome(bool Success, string Report, bool RateLimited, decimal? CostUsd = null, string? SessionId = null);
+/// <param name="CostUsd">What the harness reported for the run, or null when it reports none.</param>
+/// <param name="TotalTokens">For harnesses that print only one number (Codex prints "tokens used"), the total; null when input and output are known separately.</param>
+public sealed record WorkerOutcome(bool Success, string Report, bool RateLimited, decimal? CostUsd = null, string? SessionId = null,
+    int? InputTokens = null, int? OutputTokens = null, int? CacheReadTokens = null, int? TotalTokens = null);
 
 /// <summary>Everything MUTHUR knows about one agent harness. The only place vendor CLIs are named.</summary>
 public interface IHarnessAdapter

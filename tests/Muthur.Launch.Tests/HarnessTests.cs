@@ -192,6 +192,45 @@ public sealed class HarnessTests : IDisposable
         Assert.StartsWith("STATUS: done", outcome.Report);
     }
 
+    [Fact]
+    public void Claude_usage_is_read_from_the_result()
+    {
+        var adapter = Harnesses.Find("claude")!;
+        var outcome = adapter.Interpret(Request(), new ProcessResult(0,
+            """{"result":"STATUS: done","is_error":false,"total_cost_usd":0.31,"usage":{"input_tokens":1200,"output_tokens":340,"cache_read_input_tokens":9000,"cache_creation_input_tokens":10}}""", ""));
+        Assert.Equal(1200, outcome.InputTokens);
+        Assert.Equal(340, outcome.OutputTokens);
+        Assert.Equal(9000, outcome.CacheReadTokens);
+        Assert.Null(outcome.TotalTokens);
+
+        var without = adapter.Interpret(Request(), new ProcessResult(0, """{"result":"STATUS: done","is_error":false}""", ""));
+        Assert.Null(without.InputTokens);
+    }
+
+    [Theory]
+    [InlineData("tokens used\n66,882\n", 66882)]
+    [InlineData("tokens used: 171201", 171201)]
+    [InlineData("[turn 1]\ntokens used\n1,000\n[turn 2]\ntokens used\n2,500\n", 2500)]
+    [InlineData("no usage here", null)]
+    public void Codex_tokens_used_is_read_from_its_output(string text, int? expected) =>
+        Assert.Equal(expected, CodexAdapter.TokensUsed(text));
+
+    [Fact]
+    public void Codex_outcome_carries_the_total_tokens_whether_it_succeeded_or_not()
+    {
+        var adapter = Harnesses.Find("codex")!;
+        var request = Request();
+        var failed = adapter.Interpret(request, new ProcessResult(1, "ERROR: You've hit your usage limit.\ntokens used\n66,882", ""));
+        Assert.True(failed.RateLimited);
+        Assert.Equal(66882, failed.TotalTokens);
+
+        File.WriteAllText(Path.Combine(_scratch, "codex-last-message.txt"), "STATUS: done\n");
+        var ok = adapter.Interpret(request, new ProcessResult(0, "tokens used\n12,345\n", ""));
+        Assert.True(ok.Success);
+        Assert.Equal(12345, ok.TotalTokens);
+        Assert.Null(ok.InputTokens);
+    }
+
     [Theory]
     [InlineData("Error: 429 Too Many Requests", true)]
     [InlineData("You've hit your usage limit. Try again at 6pm.", true)]

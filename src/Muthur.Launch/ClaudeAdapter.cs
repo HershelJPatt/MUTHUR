@@ -52,13 +52,18 @@ public sealed class ClaudeAdapter : IHarnessAdapter
             decimal? cost = root.TryGetProperty("total_cost_usd", out var c) && c.ValueKind == JsonValueKind.Number ? c.GetDecimal() : null;
             var session = root.TryGetProperty("session_id", out var s) ? s.GetString() : null;
             var failed = isError || !result.Ok;
-            return new WorkerOutcome(!failed, text, failed && Harnesses.LooksRateLimited(text + result.StdErr), cost, session);
+            var usage = root.TryGetProperty("usage", out var u) && u.ValueKind == JsonValueKind.Object ? u : (JsonElement?)null;
+            return new WorkerOutcome(!failed, text, failed && Harnesses.LooksRateLimited(text + result.StdErr), cost, session,
+                Count(usage, "input_tokens"), Count(usage, "output_tokens"), Count(usage, "cache_read_input_tokens"));
         }
         catch (JsonException)
         {
             return new WorkerOutcome(false, result.Message, Harnesses.LooksRateLimited(result.StdOut + result.StdErr));
         }
     }
+
+    private static int? Count(JsonElement? usage, string name) =>
+        usage is { } u && u.TryGetProperty(name, out var n) && n.ValueKind == JsonValueKind.Number && n.TryGetInt32(out var count) ? count : null;
 
     private static string SettingsJson(WorkerRequest request)
     {

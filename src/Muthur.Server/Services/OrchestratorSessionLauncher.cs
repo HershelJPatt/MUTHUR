@@ -68,7 +68,7 @@ public sealed class OrchestratorSessionLauncher(
         // The same classifier, not a second one that says the same thing: "nothing ever reached a process" and
         // "something ran and produced nothing" send the founder to different places, and one fork is easier to keep
         // honest than two.
-
+        await SessionReceipts.RecordAsync(ledger, assignment.TaskId, "#orchestrator", attempts, CancellationToken.None);
         if (knowledge is not null)
             foreach (var attempt in attempts.Where(a => a.Started))
                 if (lessons.GetValueOrDefault(attempt.Candidate) is { Lessons.Count: > 0 } received)

@@ -115,7 +115,7 @@ public sealed class ValidatorSessionLauncher(
             candidate => MarkLimitedAsync(candidate.Account, ct),
             ct);
 
-
+        await SessionReceipts.RecordAsync(ledger, assignment.TaskId, assignment.RoleKey, attempts, CancellationToken.None);
         if (knowledge is not null)
             foreach (var attempt in attempts.Where(a => a.Started))
                 if (lessons.GetValueOrDefault(attempt.Candidate) is { Lessons.Count: > 0 } received)

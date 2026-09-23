@@ -325,6 +325,8 @@ public static class WorkerCommands
         {
             var reported = await hub.PostAsync(Routes.WorkerRuns, new WorkerRunReport(o.Task, o.Tier, final.Candidate.Harness, final.Candidate.Model, final.Candidate.Account,
             branchName, o.Unit, success, (int)final.Duration.TotalSeconds, final.Outcome.CostUsd, o.Parent,
+            InputTokens: final.Outcome.InputTokens, OutputTokens: final.Outcome.OutputTokens,
+            CacheReadTokens: final.Outcome.CacheReadTokens, TotalTokens: final.Outcome.TotalTokens,
             RunId: final.RunId, Status: status, FailureKind: failureKind, BaseCommit: assignment.BaseCommit, HeadCommit: headCommit,
             SpecBlob: assignment.SpecBlob, ExitCode: final.ExitCode, WorkKind: workKind, PolicyVersion: "catalog-order-v1", ReasoningEffort: final.Candidate.ReasoningEffort,
             Attempts: attempts.Select(a => new WorkerAttemptReport(a.Candidate.Harness, a.Candidate.Model, a.Candidate.Account,

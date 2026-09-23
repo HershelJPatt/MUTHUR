@@ -1,4 +1,6 @@
+using System.Globalization;
 using System.Text.Json;
+using System.Text.RegularExpressions;
 
 namespace Muthur.Launch;
 
@@ -6,7 +8,7 @@ namespace Muthur.Launch;
 /// Codex CLI in exec mode; with an open-source provider it drives a local model (Ollama) through the same harness.
 /// Codex has no per-command allow list: its boundary is the workspace-write sandbox, so command lists are not used here.
 /// </summary>
-public sealed class CodexAdapter(string name, string? openSourceProvider) : IHarnessAdapter
+public sealed partial class CodexAdapter(string name, string? openSourceProvider) : IHarnessAdapter
 {
     public string Name => name;
 
@@ -94,10 +96,27 @@ public sealed class CodexAdapter(string name, string? openSourceProvider) : IHar
     {
         var file = LastMessageFile(request);
         var report = File.Exists(file) ? File.ReadAllText(file).Trim() : "";
-        if (result.Ok && report.Length > 0) return new WorkerOutcome(true, report, RateLimited: false);
+        var tokens = TokensUsed(result.StdOut) ?? TokensUsed(result.StdErr);
+        if (result.Ok && report.Length > 0) return new WorkerOutcome(true, report, RateLimited: false, TotalTokens: tokens);
 
         var text = result.Ok ? result.Message : $"Process exited with code {result.ExitCode}: {result.Message}";
         if (report.Length > 0) text += "\n\nFinal report from this attempt:\n" + report;
-        return new WorkerOutcome(false, text, Harnesses.LooksRateLimited(result.StdErr + result.StdOut));
+        return new WorkerOutcome(false, text, Harnesses.LooksRateLimited(result.StdErr + result.StdOut), TotalTokens: tokens);
     }
+
+    /// <summary>
+    /// Codex prints "tokens used" and the count on exit, on one line or the next; it is the only usage figure the CLI
+    /// gives a headless caller, so it is the one the ledger gets. The last occurrence wins: a resumed session prints one per turn.
+    /// </summary>
+    public static int? TokensUsed(string text)
+    {
+        int? found = null;
+        foreach (Match m in TokensUsedLine().Matches(text))
+            if (int.TryParse(m.Groups[1].Value.Replace(",", ""), NumberStyles.Integer, CultureInfo.InvariantCulture, out var n))
+                found = n;
+        return found;
+    }
+
+    [GeneratedRegex(@"tokens used[:\s]*\r?\n?\s*([\d,]+)", RegexOptions.IgnoreCase)]
+    private static partial Regex TokensUsedLine();
 }
