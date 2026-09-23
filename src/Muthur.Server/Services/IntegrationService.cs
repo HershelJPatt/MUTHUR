@@ -176,7 +176,7 @@ public sealed class IntegrationService(Ledger ledger, ITaskLander lander, Muthur
             var eligible = new List<WorkTask>();
             foreach (var task in tasks)
             {
-                if (budgetBlocked.Contains(Wire.TaskId(task.Id) + "/#integration")) continue;
+                if (budgetBlocked.Contains(Wire.TaskId(task.Id) + "/#integration") || budgetBlocked.Contains(Wire.TaskId(task.Id))) continue;
                 try { await RequireEligibleAsync(m, task, ct); await RequireRetryAsync(m, task, ct); eligible.Add(task); }
                 catch (MuthurException) { }
             }

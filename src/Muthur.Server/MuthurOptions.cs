@@ -75,6 +75,12 @@ public sealed class MuthurOptions
     public int ConductorStallProbeMinutes { get; set; } = 30;
     /// <summary>Persistent daily staffing budget per task/role without new work. Zero disables this additional cap.</summary>
     public int ConductorSessionsPerTaskDay { get; set; } = 3;
+    /// <summary>
+    /// A ceiling in dollars on what one task may spend in one UTC calendar day, summed from every recorded
+    /// <c>conductor.session_finished</c> and <c>worker.finished</c>/<c>worker.failed</c> <c>costUsd</c>. Unset (the
+    /// default) turns the cap off: a founder who has never recorded a cost has no basis for one.
+    /// </summary>
+    public decimal? ConductorCostPerTaskDay { get; set; }
 
     /// <summary>
     /// The ceiling on one `doctor` run, whatever its checks do. Under the CLI's 180s client timeout, so a

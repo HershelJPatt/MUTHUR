@@ -1,3 +1,4 @@
+using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.DependencyInjection;
 using Muthur.Server.Auth;
 using Muthur.Server.Services;
@@ -89,6 +90,57 @@ public sealed class ConductorBudgetTests : IDisposable
             return Task.CompletedTask;
         });
         Assert.Empty(await conductor.PlanOrchestratorsAsync());
+    }
+
+    [Fact]
+    public async Task An_unset_cost_cap_changes_nothing()
+    {
+        _hub.Settings["Muthur:ConductorEnabled"] = "true";
+        _hub.Settings["Muthur:ConductorSessionsPerTaskDay"] = "0";
+        await _hub.AddProjectAsync(repoPath: _repo.Path);
+        var client = await _hub.RegisterAgentAsync("owner");
+        var task = await client.AddTaskAsync("Costly task");
+        var id = int.Parse(task.Id.AsSpan(2));
+        var ledger = _hub.Services.GetRequiredService<Ledger>();
+        await ledger.MutateAsync(Caller.Founder, m =>
+        {
+            m.Record("worker.finished", id, new { costUsd = 100m });
+            return Task.CompletedTask;
+        });
+        var conductor = _hub.Services.GetRequiredService<ConductorService>();
+        await conductor.SetOrchestratorsAsync(Caller.Founder, true);
+
+        Assert.Single(await conductor.PlanOrchestratorsAsync());
+        Assert.Equal(0, await ledger.ReadAsync((db, _) => db.Events.CountAsync(e => e.Type == "conductor.budget_blocked")));
+    }
+
+    [Fact]
+    public async Task A_task_over_its_daily_cost_cap_is_not_staffed_and_the_block_is_recorded_once()
+    {
+        _hub.Settings["Muthur:ConductorEnabled"] = "true";
+        _hub.Settings["Muthur:ConductorSessionsPerTaskDay"] = "0";
+        _hub.Settings["Muthur:ConductorCostPerTaskDay"] = "1.00";
+        await _hub.AddProjectAsync(repoPath: _repo.Path);
+        var client = await _hub.RegisterAgentAsync("owner");
+        var task = await client.AddTaskAsync("Costly task");
+        var id = int.Parse(task.Id.AsSpan(2));
+        var ledger = _hub.Services.GetRequiredService<Ledger>();
+        await ledger.MutateAsync(Caller.Founder, m =>
+        {
+            m.Record("worker.finished", id, new { costUsd = 0.70m });
+            m.Record("worker.failed", id, new { costUsd = 0.50m });
+            return Task.CompletedTask;
+        });
+        var conductor = _hub.Services.GetRequiredService<ConductorService>();
+        await conductor.SetOrchestratorsAsync(Caller.Founder, true);
+
+        for (var i = 0; i < 200; i++) Assert.Equal(0, await conductor.RunPassAsync());
+        Assert.Empty(await conductor.PlanOrchestratorsAsync());
+        Assert.Equal(1, await ledger.ReadAsync((db, _) => db.Events.CountAsync(e => e.Type == "conductor.budget_blocked")));
+
+        // A new UTC day leaves yesterday's spending behind: nothing to sum, nothing to block.
+        _hub.Clock.Advance(TimeSpan.FromDays(1));
+        Assert.Single(await conductor.PlanOrchestratorsAsync());
     }
 
     [Theory]

@@ -318,6 +318,31 @@ public sealed partial class ConductorService(
         var activeIds = await db.Tasks.Where(t => t.State == TaskState.Backlog || t.State == TaskState.InProgress ||
             t.State == TaskState.Validating || t.State == TaskState.Validated || t.State == TaskState.Blocked).Select(t => t.Id).ToListAsync(ct);
         var active = activeIds.Select(Wire.TaskId).ToHashSet(StringComparer.Ordinal);
+
+        // A cap in dollars, not sessions: one task spending five accounts' full share on one day is its own kind of
+        // runaway, invisible to the session count above. Scoped to the UTC calendar day rather than a rolling
+        // window, so it clears itself at midnight without any state to expire.
+        var dayStart = new DateTimeOffset(now.UtcDateTime.Date, TimeSpan.Zero);
+        var overCap = new List<(string Task, decimal Spent)>();
+        if (options.ConductorCostPerTaskDay is { } cap)
+        {
+            var costEvents = await db.Events.Where(e => e.At >= dayStart && e.TaskId != null &&
+                (e.Type == "conductor.session_finished" || e.Type == "worker.finished" || e.Type == "worker.failed")).ToListAsync(ct);
+            var spent = new Dictionary<int, decimal>();
+            foreach (var e in costEvents)
+            {
+                using var payload = JsonDocument.Parse(e.PayloadJson);
+                if (!payload.RootElement.TryGetProperty("costUsd", out var cost) || cost.ValueKind != JsonValueKind.Number) continue;
+                spent[e.TaskId!.Value] = spent.GetValueOrDefault(e.TaskId!.Value) + cost.GetDecimal();
+            }
+            foreach (var (id, total) in spent)
+            {
+                var task = Wire.TaskId(id);
+                if (total > cap && active.Contains(task)) overCap.Add((task, total));
+            }
+        }
+
+        HashSet<string> blocked;
         lock (_budgetBlocks)
         {
             _budgetBlocks.Clear();
@@ -329,8 +354,34 @@ public sealed partial class ConductorService(
                     _budgetBlocks[key] = new(task, role, "daily session budget exhausted; waiting for new work", times.Count,
                         times[times.Count - options.ConductorSessionsPerTaskDay].AddDays(1));
                 }
-            return [.. _budgetBlocks.Keys];
+            foreach (var (task, spent) in overCap)
+                _budgetBlocks[task] = new(task, "", $"daily cost budget exceeded (${spent} of ${options.ConductorCostPerTaskDay})", 0, dayStart.AddDays(1));
+            blocked = [.. _budgetBlocks.Keys];
         }
+        foreach (var (task, spent) in overCap)
+            await AnnounceCostBlockAsync(task, dayStart, spent, options.ConductorCostPerTaskDay!.Value, ct);
+        return blocked;
+    }
+
+    private readonly Dictionary<string, DateOnly> _announcedCostBlocks = new(StringComparer.Ordinal);
+
+    /// <summary>
+    /// One <c>conductor.budget_blocked</c> per task per UTC day, not one per pass: <see cref="BudgetBlockedAsync"/>
+    /// runs several times in one pass, and a pass runs every fifteen seconds or more.
+    /// </summary>
+    private async Task AnnounceCostBlockAsync(string task, DateTimeOffset dayStart, decimal spent, decimal cap, CancellationToken ct)
+    {
+        var day = DateOnly.FromDateTime(dayStart.UtcDateTime);
+        lock (_announcedCostBlocks)
+        {
+            if (_announcedCostBlocks.TryGetValue(task, out var announced) && announced == day) return;
+            _announcedCostBlocks[task] = day;
+        }
+        await ledger.MutateAsync(Caller.Founder, m =>
+        {
+            m.Record("conductor.budget_blocked", int.Parse(task.AsSpan(2)), new { reason = "cost", task, spent, cap });
+            return Task.CompletedTask;
+        }, ct);
     }
 
     /// <summary>
@@ -836,7 +887,7 @@ public sealed partial class ConductorService(
                     // A session that cannot take the role is a session that does nothing.
                     if (liveHolders.GetValueOrDefault(validation.ValidatorKey) >= capacity) continue;
                     var key = $"{Wire.TaskId(task.Id)}/{validation.ValidatorKey}";
-                    if (budgetBlocked.Contains(key)) continue;
+                    if (budgetBlocked.Contains(key) || budgetBlocked.Contains(Wire.TaskId(task.Id))) continue;
                     lock (_running)
                         if (_running.Contains(key)) continue;
                     lock (_stalls)
@@ -945,7 +996,7 @@ public sealed partial class ConductorService(
                 var key = OrchestratorKey(Wire.TaskId(task.Id));
                 if (incidentSuppressions.Any(s => s.TaskId == Wire.TaskId(task.Id) && s.Assignment == OrchestratorRole)) continue;
                 if (task.DependsOn.Any(d => !completed.Contains(d))) continue;
-                if (budgetBlocked.Contains(key)) continue;
+                if (budgetBlocked.Contains(key) || budgetBlocked.Contains(Wire.TaskId(task.Id))) continue;
                 lock (_running)
                     if (_running.Contains(key)) continue;
                 lock (_stalls)
