@@ -271,7 +271,7 @@ public sealed class IntegrationServiceTests : IDisposable
         options.ConductorMaxAttempts = 2;
         await ErrorAsync("integration_not_next", await PostAsync(next, "claim", new IntegrationClaimRequest()));
         var first = (await ClaimAsync(task)).Candidate;
-        _hub.Clock.Advance(TimeSpan.FromMinutes(options.ConductorSessionMinutes + 2));
+        _hub.Clock.Advance(TimeSpan.FromMinutes(options.ConductorOrchestratorMinutes + 2));
         var renewedService = new IntegrationService(Ledger, _hub.Services.GetRequiredService<ITaskLander>(), options, _hub.Services.GetRequiredService<LeasePolicy>());
         await renewedService.SweepAsync();
         Assert.Equal("interrupted", (await renewedService.ShowAsync(Caller.Founder, task.Id)).Current!.State);
@@ -283,7 +283,7 @@ public sealed class IntegrationServiceTests : IDisposable
         Assert.Equal(2, second.Attempt);
         Assert.NotEqual(first.Id, second.Id);
         await ErrorAsync("stale_integration_candidate", await PostAsync(task, "failure", new IntegrationFailureRequest(first.AssignmentId, first.SubjectId, "launch", "runner_failed", "Late failure.")));
-        _hub.Clock.Advance(TimeSpan.FromMinutes(options.ConductorSessionMinutes + 2));
+        _hub.Clock.Advance(TimeSpan.FromMinutes(options.ConductorOrchestratorMinutes + 2));
         await renewedService.SweepAsync();
         Assert.Equal(TaskState.InProgress, (await _owner.GetTaskAsync(task.Id)).Task.State);
         Assert.Equal(2, (await renewedService.ShowAsync(Caller.Founder, task.Id)).History.Count);
@@ -417,7 +417,7 @@ public sealed class IntegrationServiceTests : IDisposable
         options.ConductorMaxAttempts = 1;
         var c = await RegisterAsync(task, (await ClaimAsync(task)).Candidate);
         var report = Evidence(c);
-        _hub.Clock.Advance(TimeSpan.FromMinutes(options.ConductorSessionMinutes + 2));
+        _hub.Clock.Advance(TimeSpan.FromMinutes(options.ConductorOrchestratorMinutes + 2));
         await ErrorAsync("stale_integration_candidate", await PostAsync(task, "verdict", report));
         Assert.Equal("interrupted", (await Service.ShowAsync(Caller.Founder, task.Id)).Current!.State);
         await ErrorAsync("integration_retry_exhausted", await PostAsync(task, "claim", new IntegrationClaimRequest(), _hub.Founder()));

@@ -41,13 +41,23 @@ public sealed class MuthurOptions
     /// <summary>How many validator sessions the conductor may have running at once.</summary>
     public int ConductorMaxSessions { get; set; } = 2;
     /// <summary>An orchestrator session that has not finished by then is killed; the task's claim then lapses on its own.</summary>
-    public int ConductorSessionMinutes { get; set; } = 45;
+    public int ConductorOrchestratorMinutes { get; set; } = 45;
     /// <summary>
     /// A validator session that has not finished by then is killed; the role's lease then lapses on its own. Shorter
     /// than an orchestrator's: a validator checks out one commit and runs the spec's verification, and the ledger's
     /// timeouts were sessions that had nothing to show at 45 minutes, not ones that needed a 46th.
     /// </summary>
-    public int ConductorValidatorSessionMinutes { get; set; } = 30;
+    public int ConductorValidatorMinutes { get; set; } = 30;
+    /// <summary>
+    /// Obsolete: superseded by the orchestrator/validator split, <see cref="ConductorOrchestratorMinutes"/> and
+    /// <see cref="ConductorValidatorMinutes"/>. Setting it sets both, so an appsettings.json written before the
+    /// split still binds to something.
+    /// </summary>
+    [Obsolete("Use ConductorOrchestratorMinutes and ConductorValidatorMinutes.")]
+    public int ConductorSessionMinutes
+    {
+        set { ConductorOrchestratorMinutes = value; ConductorValidatorMinutes = value; }
+    }
     /// <summary>Failed verdicts on one task before the conductor stops restaffing it and asks the founder.</summary>
     public int ConductorMaxAttempts { get; set; } = 3;
     /// <summary>

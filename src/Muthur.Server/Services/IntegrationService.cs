@@ -15,7 +15,7 @@ public sealed class IntegrationService(Ledger ledger, ITaskLander lander, Muthur
     private static MuthurException Forbidden() => Fail.Rule("integration_runner_forbidden", "Only the assigned caller may act on this integration assignment.");
     private static MuthurException Invalid() => Fail.Rule("integration_candidate_invalid", "Candidate identity, tree and ordered parents must match the immutable assignment.");
     private static MuthurException Incomplete() => Fail.Rule("integration_evidence_incomplete", "Provide the exact build/test commands, outcomes, timestamps, checkout and artifact digests for this assignment.");
-    private TimeSpan Lease => TimeSpan.FromMinutes(options.ConductorSessionMinutes + 1);
+    private TimeSpan Lease => TimeSpan.FromMinutes(options.ConductorOrchestratorMinutes + 1);
 
     // A refusal may follow a durable invalidation or owner recovery. Throw only after the mutation commits.
     private async Task<T> MutateAsync<T>(Caller caller, Func<Mutation, Task<T>> action, CancellationToken ct)
@@ -124,7 +124,7 @@ public sealed class IntegrationService(Ledger ledger, ITaskLander lander, Muthur
             return Assignment(candidate);
         }, ct);
 
-    private IntegrationAssignmentDto Assignment(IntegrationCandidate c) => new(c.ToDto(), checked(options.ConductorSessionMinutes * 60));
+    private IntegrationAssignmentDto Assignment(IntegrationCandidate c) => new(c.ToDto(), checked(options.ConductorOrchestratorMinutes * 60));
     private static bool Owns(Caller caller, IntegrationCandidate c) => c.AssignedAgentId is { } id
         ? caller.IsAgent && caller.AgentId == id : caller.IsFounder && !caller.IntegrationRunner;
 

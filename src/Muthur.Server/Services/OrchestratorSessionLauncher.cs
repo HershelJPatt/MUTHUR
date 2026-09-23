@@ -66,7 +66,7 @@ public sealed class OrchestratorSessionLauncher(
                 Role: SessionRoles.Orchestrator,
                 ContextWindow: candidate.ContextWindow),
             candidate => IdentityFor(assignment, candidate, ct),
-            TimeSpan.FromMinutes(options.ConductorSessionMinutes),
+            TimeSpan.FromMinutes(options.ConductorOrchestratorMinutes),
             candidate => MarkLimitedAsync(candidate.Account, ct),
             ct);
 

@@ -438,7 +438,7 @@ public sealed partial class ConductorService(
             await EnabledAsync(ct),
             sessions.Count - nestedWorkers,
             options.ConductorMaxSessions,
-            options.ConductorSessionMinutes,
+            options.ConductorOrchestratorMinutes,
             options.ConductorMaxAttempts,
             options.EffectiveConductorIntervalSeconds,   // what it runs at, not what was asked for
             options.ConductorStallProbeMinutes,
@@ -971,7 +971,7 @@ public sealed partial class ConductorService(
     /// and <see cref="PlanOrchestratorsAsync"/> plans only <see cref="TaskState.Backlog"/>, so a task that passed
     /// validation after its owner's session had ended was in a state nothing swept and nothing planned, and sat
     /// there for ever. That is the ordinary ending rather than an edge: a session is capped at
-    /// <c>ConductorSessionMinutes</c> and must otherwise survive claim, spec, delegation, review and a validator
+    /// <c>ConductorOrchestratorMinutes</c> and must otherwise survive claim, spec, delegation, review and a validator
     /// that takes ten to thirty minutes.
     /// </para>
     /// <para>
@@ -1343,7 +1343,7 @@ public sealed partial class ConductorService(
         var identity = await agents.DeterministicValidatorAsync(ct);
         var caller = new Caller(CallerKind.Founder, null, identity.Name, AgentService.DeterministicValidatorModel);
         var run = await new ChecksRunner(processes).RunAsync(verdict.RepositoryPath, verdict.ImplementationSha, verdict.SubjectId,
-            verdict.Commands, TimeSpan.FromMinutes(options.ConductorSessionMinutes), ct);
+            verdict.Commands, TimeSpan.FromMinutes(options.ConductorOrchestratorMinutes), ct);
         await ledger.MutateAsync(caller, m =>
         {
             m.Record("validation.checks_run", verdict.TaskId, new

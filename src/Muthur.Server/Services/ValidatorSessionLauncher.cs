@@ -115,7 +115,7 @@ public sealed class ValidatorSessionLauncher(
                 Role: SessionRoles.Validator,
                 ContextWindow: candidate.ContextWindow),
             candidate => IdentityFor(assignment, candidate, ct, tier),
-            TimeSpan.FromMinutes(options.ConductorValidatorSessionMinutes),
+            TimeSpan.FromMinutes(options.ConductorValidatorMinutes),
             candidate => MarkLimitedAsync(candidate.Account, ct),
             ct);
 
