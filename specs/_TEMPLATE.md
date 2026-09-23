@@ -33,18 +33,21 @@ Independent pieces that can be built in parallel worktrees. For each:
 
 ## Verification
 
-Opt in to demonstrated launch requirements only when the assignment needs them. Put a standalone line
-in the frozen spec, for example `capabilities: shell, build, test, worktree-base, commit`. Multiple lines
-union. Other keys: `headless-interaction`, `connector-interaction`, `platform:<name>`, `native-agent-tools`.
-Each requires recent evidence for the exact machine/harness/configuration/base/launch path; unknown or
-stale evidence refuses launch. Specs without this line retain current routing. See `docs/capabilities.md`.
-Explicit `capability probe --task T-n` uses shared catalog/account/budget/capacity admission; do not invent evidence.
+Most specs need no launch requirements: leave them out, and dispatch works as it always has. Only an
+assignment that must prove a harness can do something unusual (drive a browser, run a native agent tool) opts
+in, with a standalone line that starts with the word capabilities, a colon, and the keys it needs, as
+`docs/capabilities.md` describes. Do not write that line as a matter of course: every key on it demands recent
+recorded evidence for the exact machine and harness, and a spec that names capabilities nobody has probed
+refuses to dispatch at all. Evidence comes from `capability probe --task T-n`, never from writing it down.
 
-Exact commands for the whole task, and what passing looks like:
+Exact commands for the whole task, and what passing looks like. Each fenced line is run as one command, through
+PowerShell on Windows and sh elsewhere, so write commands that work in both (tool invocations such as `git`,
+`dotnet` or `npm`, not shell syntax such as `test -f`, `[ ... ]` or `&&`):
 
 ```
 dotnet build
 dotnet test
+git grep -q -e '^expected$' HEAD -- path/to/file.txt
 ```
 
 Plus anything a validator should exercise end to end (the user-visible behavior, not the unit tests).
