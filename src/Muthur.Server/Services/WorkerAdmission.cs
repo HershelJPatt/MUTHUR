@@ -139,6 +139,17 @@ public sealed partial class ConductorService
         finally { _pass.Release(); }
     }
 
+    /// <summary>
+    /// A conductor-started session that exits takes its child process tree with it, so a worker it admitted and never
+    /// released is gone too; the reservation would otherwise hold a seat until someone noticed. Released with the
+    /// reason on the row, in the same transaction as the exit.
+    /// </summary>
+    internal static async Task ReleaseWorkerReservationsOfAsync(Mutation m, Guid agentId, string reason, CancellationToken ct)
+    {
+        foreach (var reservation in (await WorkerReservationsAsync(m.Db, ct)).Where(r => !r.Released && r.OwnerId == agentId))
+            m.Record("worker.released", payload: new { reservationId = reservation.Id, reason });
+    }
+
     public Task<IReadOnlyList<WorkerReservationDto>> WorkerReservationsAsync(Caller caller, CancellationToken ct = default)
     {
         caller.RequireIdentified();

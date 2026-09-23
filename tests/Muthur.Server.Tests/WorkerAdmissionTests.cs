@@ -323,6 +323,7 @@ public sealed class WorkerAdmissionTests : IDisposable
         var founder = _hub.Founder();
         var agents = _hub.Services.GetRequiredService<AgentService>();
         var orchestrators = new Dictionary<string, HttpClient>();
+        var tokens = new Dictionary<string, string>();
         _hub.Orchestrators.Block = true;
         // The fake session claims as the identity the real launcher registers, so the hub can tell it from a standing agent.
         _hub.Orchestrators.Claim = async a =>
@@ -330,7 +331,7 @@ public sealed class WorkerAdmissionTests : IDisposable
             var registration = await agents.RegisterConductorSessionAsync(new(OrchestratorSessionLauncher.IdentityName(a.TaskKey), "fixture", "model", "mastermind", "account"));
             var session = _hub.CreateClient(registration.Token);
             (await session.ClaimAsync(a.TaskKey)).EnsureSuccessStatusCode();
-            lock (orchestrators) orchestrators[a.TaskKey] = session;
+            lock (orchestrators) { orchestrators[a.TaskKey] = session; tokens[a.TaskKey] = registration.Token; }
         };
         var first = await founder.AddTaskAsync("First");
         await founder.AddTaskAsync("Second");
@@ -351,8 +352,17 @@ public sealed class WorkerAdmissionTests : IDisposable
             Assert.True(granted.MayExecute);
             await Code(await Admit(session, Request()), "worker_capacity_exhausted");   // a second one in parallel does
             (await Release(session, granted.ReservationId)).EnsureSuccessStatusCode();
-            Assert.True((await Granted(session, Request())).MayExecute);           // and the seat comes back with it
+            var again = await Granted(session, Request());                         // and the seat comes back with it
+            Assert.True(again.MayExecute);
             Assert.Equal(2, (await Conductor.StatusAsync()).Running);
+            Assert.Contains((await Conductor.StatusAsync()).Sessions, s => s.Role == "#nested-worker:" + again.ReservationId);
+
+            // The session exits with its child tree: the reservation it never released goes with it.
+            await agents.ReleaseChildAsync(new(OrchestratorSessionLauncher.IdentityName(first.Id), tokens[first.Id]), default);
+            Assert.DoesNotContain((await Conductor.StatusAsync()).Sessions, s => s.Role.Contains("worker:", StringComparison.Ordinal));
+            var released = (await _hub.Founder().GetFromJsonAsync(Routes.Events, MuthurJsonContext.Default.IReadOnlyListEventDto))!
+                .Where(e => e.Type == "worker.released" && e.Payload.TryGetProperty("reason", out _)).ToList();
+            Assert.Equal("owner session exited", Assert.Single(released).Payload.GetProperty("reason").GetString());
         }
         finally { await Conductor.StopSessionsAsync(); }
     }

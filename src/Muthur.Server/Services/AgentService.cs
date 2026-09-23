@@ -35,6 +35,7 @@ public sealed partial class AgentService(Ledger ledger, LeasePolicy leases, Time
             }
             var claims = await m.Db.TaskValidations.Where(v => v.ClaimedByAgentId == agent.Id).ToListAsync(ct);
             foreach (var claim in claims) { claim.ClaimedByAgentId = null; claim.ClaimExpires = null; }
+            await ConductorService.ReleaseWorkerReservationsOfAsync(m, agent.Id, "owner session exited", ct);
             var owned = await m.Db.Tasks.Where(t => t.OwnerAgentId == agent.Id &&
                 (t.State == TaskState.InProgress || t.State == TaskState.Blocked || t.State == TaskState.Validating || t.State == TaskState.Validated)).ToListAsync(ct);
             foreach (var task in owned)
