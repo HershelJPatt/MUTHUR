@@ -37,12 +37,13 @@ public static class SimCommands
         var cd = new Option<string>("--cd") { Required = true, Description = "The project repository the session works in." };
         var pace = new Option<int?>("--pace") { Description = $"Milliseconds between steps (default ${PaceVariable}, else 1500) so the board can be watched." };
         var askWait = new Option<int?>("--ask-wait") { Description = $"Seconds an orchestrator waits in-session for the founder's answer before leaving notes and exiting (default ${AskWaitVariable}, else 60)." };
+        var model = new Option<string?>("--model") { Description = "The catalog model this session runs as; `limited` fails the way a rate-limited CLI does." };
         var agent = new Command("agent", "One scripted session, run by the sim harness with the prompt on stdin. Refuses a home or URL that could be a real hub.")
-            { report, cd, pace, askWait };
-        agent.SetAction((parse, ct) => AgentAsync(parse, parse.GetValue(report)!, parse.GetValue(cd)!, Pace(parse.GetValue(pace)), AskWait(parse.GetValue(askWait)), processes, ct));
+            { report, cd, pace, askWait, model };
+        agent.SetAction((parse, ct) => AgentAsync(parse, parse.GetValue(report)!, parse.GetValue(cd)!, Pace(parse.GetValue(pace)), AskWait(parse.GetValue(askWait)), parse.GetValue(model), processes, ct));
         sim.Subcommands.Add(agent);
 
-        var tasks = new Option<int>("--tasks") { DefaultValueFactory = _ => 6, Description = "Tasks to seed. The second asks the founder a question first; the third is built wrong once." };
+        var tasks = new Option<int>("--tasks") { DefaultValueFactory = _ => 6, Description = "Tasks to seed. The second asks the founder a question first; the third is built wrong once; the fourth's assignment check fails once." };
         var runPace = new Option<int>("--pace") { DefaultValueFactory = _ => 1500, Description = "Milliseconds between a session's steps." };
         var answer = new Option<int>("--auto-answer") { DefaultValueFactory = _ => 20, Description = "Seconds before the founder question is answered for you; 0 leaves it on Needs you for a person." };
         var runAskWait = new Option<int>("--ask-wait") { DefaultValueFactory = _ => 60, Description = "Seconds an orchestrator waits in-session for the answer before leaving notes and exiting. Below --auto-answer exercises the resume-from-notes path." };
@@ -62,21 +63,35 @@ public static class SimCommands
     internal static int AskWait(int? explicitWait) =>
         explicitWait ?? (int.TryParse(Environment.GetEnvironmentVariable(AskWaitVariable), NumberStyles.Integer, CultureInfo.InvariantCulture, out var fromEnv) ? fromEnv : 60);
 
-    private static async Task<int> AgentAsync(ParseResult parse, string reportFile, string repo, int pace, int askWait, IProcessRunner processes, CancellationToken ct)
+    private static async Task<int> AgentAsync(ParseResult parse, string reportFile, string repo, int pace, int askWait, string? model, IProcessRunner processes, CancellationToken ct)
     {
         var home = Environment.GetEnvironmentVariable(MuthurEnvironment.HomeVariable);
         if (SimSession.Refusal(home, MuthurEnvironment.Url) is { } why)
             return Output.Error("sim_refused", why, ExitCodes.RuleViolation);
         var prompt = await Console.In.ReadToEndAsync(ct);
+        // An account out of quota answers nothing at all: the launcher's rate-limit detection is what gets exercised.
+        if (SimSession.IsLimited(model))
+        {
+            Console.Error.WriteLine(SimSession.UsageLimitMessage);
+            return ExitCodes.Error;
+        }
         if (SimSession.Parse(prompt) is not { } brief)
-            return Output.Error("sim_prompt_unrecognized", "The prompt names no task, or neither an orchestrator nor a validator session.", ExitCodes.RuleViolation);
-        // What a model would have read before its first action, in bytes: the closest thing to a token count the sim has.
-        try { await File.AppendAllTextAsync(Path.Combine(home!, SessionsLog), $"{brief.Kind}\t{brief.Task}\t{Encoding.UTF8.GetByteCount(prompt)}\n", ct); }
+            return Output.Error("sim_prompt_unrecognized", "The prompt names no task, or none of an orchestrator, implementer or validator session.", ExitCodes.RuleViolation);
+        // What a model would have read before its first action, in bytes: the launcher's prompt, then the kit files
+        // the role's procedure sends it to. The closest thing to a token count the sim has.
+        var kitBytes = KitBytes(brief.Kind, repo, KitCommands.LocateKit());
+        try { await File.AppendAllTextAsync(Path.Combine(home!, SessionsLog), $"{brief.Kind}\t{brief.Task}\t{Encoding.UTF8.GetByteCount(prompt)}\t{kitBytes}\n", ct); }
         catch (IOException) { }
 
-        // The inbox wait blocks server-side for up to --ask-wait seconds; the client must outlast it.
+        // The inbox wait blocks server-side for up to --ask-wait seconds; the client must outlast it. An implementer
+        // has no hub identity (the launcher scrubs it) and needs none: its whole world is the worktree.
         var session = new SimSession(HubClient.For(parse, TimeSpan.FromSeconds(askWait + 30)), processes, repo, pace, askWait, ct);
-        var status = brief.Kind == "validator" ? await session.ValidateAsync(brief.Task, brief.Role!) : await session.OrchestrateAsync(brief.Task);
+        var status = brief.Kind switch
+        {
+            "validator" => await session.ValidateAsync(brief.Task, brief.Role!),
+            "implementer" => await session.ImplementAsync(brief.Task, prompt),
+            _ => await session.OrchestrateAsync(brief.Task),
+        };
         Directory.CreateDirectory(Path.GetDirectoryName(Path.GetFullPath(reportFile))!);
         await File.WriteAllTextAsync(reportFile, status, ct);
         Console.Out.WriteLine(status);
@@ -85,12 +100,19 @@ public static class SimCommands
 
     internal sealed record RunOptions(int Tasks, int Pace, int AutoAnswerSeconds, int Minutes, int Port, bool Keep, int AskWaitSeconds = 60);
 
-    /// <summary>Every tier staffed by the sim harness; the local models are absent rather than disabled, since there is nothing to toggle back.</summary>
+    /// <summary>
+    /// Every tier staffed by the sim harness; the local models are absent rather than disabled, since there is
+    /// nothing to toggle back. The implementer tier leads with an account out of quota, the way the live catalog
+    /// did for six hours: what the launchers do about it is the thing the run measures.
+    /// </summary>
     internal const string Catalog = """
         {
           "tiers": {
             "mastermind": [ { "harness": "sim", "model": "scripted", "account": "sim" } ],
-            "implementer": [ { "harness": "sim", "model": "scripted", "account": "sim" } ],
+            "implementer": [
+              { "harness": "sim", "model": "limited", "account": "sim-limited" },
+              { "harness": "sim", "model": "scripted", "account": "sim" }
+            ],
             "utility": []
           }
         }
@@ -167,9 +189,10 @@ public static class SimCommands
                 {
                     2 => ("ask", "Export invoices (needs a founder decision)"),
                     3 => ("bounce", "Rename the report column (built wrong the first time)"),
+                    4 => ("block", "Unit whose assignment check fails (blocked once)"),
                     _ => ("plain", $"Ship feature {i}"),
                 };
-                var body = $"sim: {mode}\n\nSeeded by muthur sim run. The orchestrator writes {{id}}.txt; the validator reads it back.";
+                var body = $"sim: {mode}\n\nSeeded by muthur sim run. The orchestrator specs it, an implementer writes {{id}}.txt, the validator reads it back.";
                 var added = await Must(founder.PostAsync(Routes.Tasks, new AddTaskRequest(title, Project, body, i <= 2 ? 1 : 0), MuthurJsonContext.Default.AddTaskRequest, ct), "task");
                 seeded.Add(JsonSerializer.Deserialize(added.Body, MuthurJsonContext.Default.TaskDto)!.Id);
             }
@@ -243,17 +266,71 @@ public static class SimCommands
             ? (c - a + (v - i) + (l - v)).TotalSeconds : null;
     }
 
-    /// <summary>Reads the sessions log the agents wrote: prompt bytes by session kind.</summary>
-    internal static (int Sessions, long Bytes) PromptBytes(string path)
+    /// <summary>What the launchers recorded across the run, read off the ledger as it streams past.</summary>
+    internal sealed class Runs
     {
-        if (!File.Exists(path)) return (0, 0);
-        var sessions = 0; long bytes = 0;
+        public int WorkerRuns, WorkerBlocked, LaunchesIntoLimitedAccount, AccountLimits;
+
+        public void Count(EventDto e)
+        {
+            var payload = e.Payload.ValueKind is JsonValueKind.Undefined or JsonValueKind.Null ? "" : e.Payload.GetRawText();
+            switch (e.Type)
+            {
+                case "worker.finished" or "worker.failed":
+                    WorkerRuns++;
+                    if (e.Payload.ValueKind == JsonValueKind.Object && e.Payload.TryGetProperty("status", out var status) && status.ValueKind == JsonValueKind.String && status.GetString() == "blocked")
+                        WorkerBlocked++;
+                    break;
+                case "account.limited":
+                    AccountLimits++;
+                    break;
+            }
+            // A start that hit the limit shows either as the failed session's error text or, when the launcher fell
+            // through to the next candidate, as a "quota" attempt inside the run it eventually reported.
+            if (e.Type is "conductor.session_failed" or "worker.failed" or "worker.finished" &&
+                (payload.Contains("usage limit", StringComparison.OrdinalIgnoreCase) || payload.Contains("\"quota\"", StringComparison.Ordinal)))
+                LaunchesIntoLimitedAccount++;
+        }
+    }
+
+    /// <summary>
+    /// Reads the sessions log the agents wrote: prompt bytes and kit bytes by session. A three-column line from an
+    /// older agent still counts, with no kit bytes; a malformed one is skipped, never a crash at the end of a run.
+    /// </summary>
+    internal static (int Sessions, long Bytes, long KitBytes) PromptBytes(string path)
+    {
+        if (!File.Exists(path)) return (0, 0, 0);
+        var sessions = 0; long bytes = 0, kit = 0;
         foreach (var line in File.ReadAllLines(path))
         {
             var parts = line.Split('\t');
-            if (parts.Length == 3 && long.TryParse(parts[2], NumberStyles.Integer, CultureInfo.InvariantCulture, out var n)) { sessions++; bytes += n; }
+            if (parts.Length is not (3 or 4) || !long.TryParse(parts[2], NumberStyles.Integer, CultureInfo.InvariantCulture, out var n)) continue;
+            sessions++;
+            bytes += n;
+            if (parts.Length == 4 && long.TryParse(parts[3], NumberStyles.Integer, CultureInfo.InvariantCulture, out var k)) kit += k;
         }
-        return (sessions, bytes);
+        return (sessions, bytes, kit);
+    }
+
+    /// <summary>
+    /// The bytes of the kit files a role's procedure sends it to read after the prompt: from the kit installed in
+    /// the repository when there is one (the skill has the core procedure expanded into it), else from the source
+    /// kit. An implementer's prompt inlines its whole contract, so it reads nothing more. No kit at all counts 0.
+    /// </summary>
+    internal static long KitBytes(string kind, string repo, string? kit)
+    {
+        var skills = Path.Combine(repo, ".claude", "skills");
+        var installed = File.Exists(Path.Combine(skills, "muthur-orchestrate", "SKILL.md"));
+        string[] files = (kind, installed) switch
+        {
+            ("orchestrator", true) => [Path.Combine(skills, "muthur-orchestrate", "SKILL.md"), Path.Combine(skills, "muthur-orchestrate", "reference.md"), Path.Combine(repo, "specs", "_TEMPLATE.md")],
+            ("validator", true) => [Path.Combine(skills, "muthur-validate", "SKILL.md"), Path.Combine(repo, "briefs", "validator.md")],
+            ("orchestrator", false) when kit is not null => [Path.Combine(kit, "core", "orchestrate.md"), Path.Combine(kit, "core", "orchestrate-reference.md"),
+                Path.Combine(kit, "core", "spec-template.md"), Path.Combine(kit, "claude", "skills", "muthur-orchestrate.md")],
+            ("validator", false) when kit is not null => [Path.Combine(kit, "core", "validate.md"), Path.Combine(kit, "briefs", "validator.md"), Path.Combine(kit, "claude", "skills", "muthur-validate.md")],
+            _ => [],
+        };
+        return files.Where(File.Exists).Sum(f => new FileInfo(f).Length);
     }
 
     /// <summary>Streams the ledger to stderr until every seeded task is done, answering the founder question if asked to, and returns the friction report.</summary>
@@ -261,6 +338,7 @@ public static class SimCommands
     {
         var phases = seeded.ToDictionary(id => id, _ => new Phases());
         var answered = new HashSet<int>();
+        var runs = new Runs();
         long since = 0;
         var done = false;
         while (!ct.IsCancellationRequested && watch.Elapsed < TimeSpan.FromMinutes(o.Minutes) && !done)
@@ -272,6 +350,7 @@ public static class SimCommands
                 {
                     since = e.Seq;
                     stderr.WriteLine($"{e.At.ToLocalTime():HH:mm:ss}  {e.Type,-30} {e.TaskId,-6} {e.Actor}");
+                    runs.Count(e);
                     if (e.TaskId is null || !phases.TryGetValue(e.TaskId, out var p)) continue;
                     switch (e.Type)
                     {
@@ -311,19 +390,28 @@ public static class SimCommands
             json.WriteStartObject();
             var landed = phases.Values.Count(p => p.Landed is not null);
             var coldStarts = phases.Values.Sum(p => p.ColdStarts);
-            var (promptSessions, promptBytes) = PromptBytes(sessionsLog);
+            var (promptSessions, promptBytes, kitBytes) = PromptBytes(sessionsLog);
             var waits = phases.Values.Where(p => p.Wait is not null).Select(p => p.Wait!.Value).ToList();
             json.WriteBoolean("complete", done);
             json.WriteNumber("modelCalls", 0);
             json.WriteNumber("landed", landed);
             json.WriteNumber("seconds", Math.Round(watch.Elapsed.TotalSeconds, 1));
-            // The two numbers tuning is judged on: what a task costs in cold starts (each one a full context load
-            // for a model) and in seconds spent waiting on the schedule rather than on work.
+            // The numbers tuning is judged on: what a task costs in cold starts (each one a full context load for a
+            // model), what each cold start reads before its first action, and seconds spent waiting on the schedule
+            // rather than on work.
             json.WriteNumber("coldStarts", coldStarts);
             if (landed > 0) json.WriteNumber("coldStartsPerLanded", Math.Round((double)coldStarts / landed, 2));
             json.WriteNumber("promptBytes", promptBytes);
+            json.WriteNumber("kitBytes", kitBytes);
             if (promptSessions > 0) json.WriteNumber("promptBytesPerColdStart", promptBytes / promptSessions);
+            if (promptSessions > 0) json.WriteNumber("contextBytesPerColdStart", (promptBytes + kitBytes) / promptSessions);
             if (waits.Count > 0) json.WriteNumber("waitSecondsPerLanded", Math.Round(waits.Average(), 1));
+            // What the launchers did: how often a worker ran, how often it came back blocked, and how many starts
+            // went into an account that was out of quota before anything noticed.
+            json.WriteNumber("workerRuns", runs.WorkerRuns);
+            json.WriteNumber("workerBlocked", runs.WorkerBlocked);
+            json.WriteNumber("launchesIntoLimitedAccount", runs.LaunchesIntoLimitedAccount);
+            json.WriteNumber("accountLimits", runs.AccountLimits);
             json.WriteStartArray("tasks");
             foreach (var (id, p) in phases)
             {
